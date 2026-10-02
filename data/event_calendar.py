@@ -1,6 +1,9 @@
 """Event calendar — the T5 hard veto (Phase 1b).
 
 Brief, T5: "no earnings/FOMC day entries — event calendar checked daily, hard veto."
+Superseded in part 2026-10-02 (operator): the earnings half is dropped for SPY — see
+``checklist.t5_options_chain.event_calendar.earnings_veto``, which records the ruling.
+FOMC and CPI remain hard vetoes.
 The brief's data-requirements list names the events: "(FOMC, CPI, OPEX): free sources,
 static file refreshed weekly." This module is the checker for that static file.
 
@@ -63,7 +66,12 @@ class CalendarEvent(BaseModel):
         # The brief's T5 names earnings and FOMC as hard-veto days; CPI is a macro
         # release with the same IV-crush/rerating effect and is listed in the same
         # calendar. OPEX is listed for awareness, not as a veto.
-        return kind in {"fomc", "cpi", "earnings"}
+        #
+        # RULED 2026-10-02 (operator): earnings dropped for SPY — a single component's
+        # print does not move index IV regime. The kind stays in the Literal because a
+        # calendar may still record one for awareness; it just no longer vetoes by
+        # default, and the rulebook's veto_kinds say so independently of this default.
+        return kind in {"fomc", "cpi"}
 
     def is_veto(self) -> bool:
         return self.veto if self.veto is not None else self._default_veto(self.kind)

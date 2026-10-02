@@ -18,6 +18,7 @@ Python 3.12+, pydantic v2 + pyyaml.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 from pathlib import Path
 from typing import Literal
@@ -45,6 +46,9 @@ FROZEN = {
     "relvol_min": 1.5,
     "relvol_lookback_days": 20,
     "iv_rank_max": 50,
+    "arm_c_iv_rank_max": 50,
+    "window_months": 3,
+    "window_target_sessions": 60,
     "t6_baseline_lookback_days": 20,
     "arm_entry_open_et": "09:45",
     "arm_entry_close_et": "14:00",
@@ -111,6 +115,33 @@ class Strategy(FrozenModel):
     symbol: str = "SPY"
     timezone: str = "America/New_York"
     brief: str = "docs/brief.md"
+
+
+class Window(FrozenModel):
+    """How long the experiment runs.
+
+    RULED 2026-10-02 (operator): 3 months, ~60 sessions, extendable only at the
+    monthly review. Both numbers are stored because the review needs a session
+    count to look at, and because "3 months" and "60 sessions" only agree until a
+    holiday week and a window that stops short would otherwise be indistinguishable
+    from one that ran long.
+    """
+
+    months: int = Field(gt=0)
+    target_sessions: int = Field(gt=0)
+    extension: Literal["monthly_review_only"]
+    start: dt.date | None = None
+
+    @model_validator(mode="after")
+    def _length_is_sane(self) -> Window:
+        # ~21 sessions/month is the US equity calendar; a target further than double
+        # that per month is not a window, it is a typo. Cheap guard, loud failure.
+        if self.target_sessions > self.months * 30:
+            raise ValueError(
+                f"target_sessions {self.target_sessions} is implausible for "
+                f"{self.months} months"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -390,22 +421,66 @@ class T5ArmB(FrozenModel):
 
 
 class T5ArmC(FrozenModel):
+    """Arm C's IV gate.
+
+    RULED 2026-10-02 (operator, delegated): a ceiling of 50 — the same number arm B
+    carries, because both arms buy premium and a rulebook that treats the two
+    differently needs a reason that is about IV rather than about which arm it is.
+
+    The field is typed to accept a number now (it used to be ``None``, which made
+    arm C inert rather than merely uncalibrated) while keeping the pending
+    contract: a ceiling written while ``calibration_pending`` is still true is an
+    invented threshold and is rejected exactly as ``Pending`` rejects it.
+    """
+
     requirement: str
-    iv_rank_max: None = None
-    calibration_pending: Literal[True]
+    iv_rank_max: float | None = Field(default=None, ge=0, le=100)
+    calibration_pending: bool = False
+
+    @model_validator(mode="after")
+    def _pending_is_honest(self) -> T5ArmC:
+        if self.calibration_pending and self.iv_rank_max is not None:
+            raise ValueError(
+                "arm_c.calibration_pending: true must carry iv_rank_max: null — a pending "
+                "IV ceiling with a number in it is an invented threshold"
+            )
+        if not self.calibration_pending and self.iv_rank_max is None:
+            raise ValueError("arm_c.iv_rank_max is null but not marked calibration_pending")
+        return self
 
 
 class EarningsVeto(FrozenModel):
-    required: bool
-    implemented: bool
-    calibration_pending: bool
+    """The earnings half of the event veto — DISABLED BY RULING, permanently typed.
+
+    RULED 2026-10-02 (operator): dropped for SPY ("ignore any particular ticker's
+    earnings for SPY" — a component's print does not move index IV regime). FOMC
+    and CPI stay hard vetoes; OPEX stays listed and non-veto.
+
+    Every field is ``Literal``-pinned to the disabled value. The brief *did* ask for
+    an earnings veto, so leaving it out of the file would hide a decision; leaving
+    it in as a boolean would let a later edit flip it silently. Pinning it means
+    re-enabling it is a loader change AND a rulebook change AND a version bump,
+    which is the price the operator's ruling should cost.
+    """
+
+    enabled: Literal[False]
+    required: Literal[False]
+    implemented: Literal[False]
+    calibration_pending: Literal[False]
+    disabled_by: str
+    reason: str
 
 
 class EventCalendar(FrozenModel):
     checked: Literal["daily"]
     hard_veto: Literal[True]
     calendar_dir: str
-    veto_kinds: list[str]
+    # RULED 2026-10-02 (operator): hard vetoes are FOMC and CPI only. The kinds are
+    # Literal-pinned for the same reason ``EarningsVeto`` is: the earnings veto was
+    # dropped by ruling, so quietly typing "earnings" back into this list must not be
+    # a one-line YAML edit. OPEX is deliberately absent — it is expiry mechanics, not
+    # an IV event. Widening this list is a loader change + a strategy-version bump.
+    veto_kinds: list[Literal["fomc", "cpi"]]
     earnings_veto: EarningsVeto
 
 
@@ -532,6 +607,7 @@ class Rulebook(FrozenModel):
     """The whole frozen rulebook. ``config_sha256``/``strategy_version`` are derived."""
 
     strategy: Strategy
+    window: Window
     arms: Arms
     checklist: Checklist
     cadence: list[CadenceStep]
@@ -587,8 +663,6 @@ class Rulebook(FrozenModel):
                 pending.append(f"checklist.t6_flow.deep_otm.{side}")
         if self.checklist.t5_options_chain.arm_c.calibration_pending:
             pending.append("checklist.t5_options_chain.arm_c.iv_rank_max")
-        if self.checklist.t5_options_chain.event_calendar.earnings_veto.calibration_pending:
-            pending.append("checklist.t5_options_chain.event_calendar.earnings_veto")
         return pending
 
 

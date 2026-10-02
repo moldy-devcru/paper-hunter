@@ -2,12 +2,12 @@
 
 Two rulebooks are used deliberately:
 
-* ``load_example()`` — the shipped DRAFT rulebook, where **both** active arms are
-  inert: arm B on ``t6_flow.multiplier`` (``calibration_pending: true``) and arm C on
-  ``t5_options_chain.arm_c`` (the Phase-1b model types ``iv_rank_max`` as ``None``,
-  so an arm-C IV band cannot even be written). Those two facts are pinned below,
-  because "pending gate treated as a pass" is the single most likely thing to get
-  quietly "fixed" later.
+* ``load_example()`` — the shipped DRAFT rulebook. After the operator rulings of
+  2026-10-02 arm C's IV ceiling is no longer a dead end: it carries the same
+  ``iv_rank_max: 50`` arm B has, so on this snapshot every arm-C condition passes
+  and arm C can fire. Arm B remains inert on ``t6_flow.multiplier``
+  (``calibration_pending: true``). Both facts are pinned below, because "a gate
+  that stops gating" is as much a failure mode as "pending treated as a pass".
 * a **calibrated** fixture rulebook (T6 multiplier filled in) — this is what the
   all-pass and per-condition blocking tables run against, so each row is an isolated
   block rather than one more failure riding on top of an uncalibrated gate.
@@ -40,7 +40,7 @@ from executor.checklist import (
 
 @pytest.fixture(scope="module")
 def rules():
-    """The shipped DRAFT rulebook (T6 uncalibrated, arm-C IV band uncalibrable)."""
+    """The shipped DRAFT rulebook (T6 uncalibrated; arm C's IV ceiling ruled 2026-10-02)."""
     return load_example()
 
 
@@ -224,38 +224,54 @@ def test_t6_pending_flow_data_does_not_pass(calibrated):
     assert result.fire is False
 
 
-def test_arm_c_t5_iv_band_is_pending_not_pass(rules):
-    # Arm C carries T1/T2/T2b/T3a/T3b/T4/T5 only. With the arm-C IV band
-    # uncalibrated, T5 evaluates to PENDING and blocks arm C.
+def test_arm_c_t5_is_an_iv_rank_ceiling_not_a_pending_band(rules):
+    # Operator ruling 2026-10-02: arm C carries the same rank ceiling as arm B (< 50).
+    # It is a real gate now, so it must still read high IV rank as FAIL — the ruling
+    # set a number, it did not remove the gate.
     result = evaluate(_snapshot(), rules, direction="call", arm="C")
-    assert result.status("T5") == "PENDING"
-    assert "calibration_pending" in result.conditions["T5"].detail
+    assert result.status("T5") == "PASS"          # snapshot ships iv_rank=40
+
+    hot = evaluate(_snapshot(iv_rank=60.0), rules, direction="call", arm="C")
+    assert hot.status("T5") == "FAIL"
+    assert hot.fire is False
+
+    unknown = evaluate(_snapshot(iv_rank=None), rules, direction="call", arm="C")
+    assert unknown.status("T5") == "PENDING"      # no IV history yet, still not a pass
+
     assert result.status("T6") == "SKIPPED"  # T6 is arm-B-only
     assert not any(r.startswith("T6") for r in result.veto_reasons)
-    assert result.fire is False
 
 
-def test_arm_c_cannot_fire_at_all_under_the_shipped_loader(rules):
-    """Records a real constraint found while building this phase.
+def test_arm_c_can_fire_under_the_shipped_loader(rules):
+    """The inverse of the Phase-1b constraint, and it is deliberate.
 
-    ``config.loader.T5ArmC`` types ``iv_rank_max: None = None``, so an arm-C IV
-    threshold cannot be expressed in the rulebook at all: the loader rejects it.
-    Consequence: arm C is inert — not merely uncalibrated — until that model is
-    widened (a rulebook/loader change, i.e. an operator decision, deliberately NOT
-    made in this phase). Every arm-C condition other than T5 passes on this
-    snapshot, which isolates T5 as the sole blocker.
+    ``config.loader.T5ArmC`` used to type ``iv_rank_max: None``, so an arm-C IV
+    threshold could not be expressed at all and arm C was *inert* rather than merely
+    uncalibrated. The 2026-10-02 ruling widened the field (same ceiling as arm B), so
+    on this snapshot every arm-C condition passes and arm C is T5-satisfiable.
     """
     result = evaluate(_snapshot(), rules, direction="call", arm="C")
     non_pass = [cid for cid, c in result.conditions.items()
                 if c.blocking and c.status != "PASS"]
-    assert non_pass == ["T5"]
+    assert non_pass == []
+    assert result.fire is True
 
+
+def test_arm_c_iv_ceiling_still_rejects_a_smuggled_number_while_pending():
+    """Pending stays honest: a number written under ``calibration_pending: true`` is
+    still an invented threshold, and the loader still says so."""
     tampered = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     tampered["checklist"]["t5_options_chain"]["arm_c"] = {
         "requirement": "iv_on_chosen_strike_within_normal_band",
         "iv_rank_max": 60.0,
-        "calibration_pending": False,
+        "calibration_pending": True,
     }
+    with pytest.raises(RulesError):
+        load_rules_text(yaml.safe_dump(tampered))
+
+    # ...and null without the pending flag is rejected too.
+    tampered["checklist"]["t5_options_chain"]["arm_c"]["iv_rank_max"] = None
+    tampered["checklist"]["t5_options_chain"]["arm_c"]["calibration_pending"] = False
     with pytest.raises(RulesError):
         load_rules_text(yaml.safe_dump(tampered))
 

@@ -19,7 +19,7 @@ events:
     kind: fomc                # fomc | cpi | opex | earnings
     label: "FOMC decision"    # journal-ready text
     release_time_et: "14:00"  # optional
-    veto: true                # optional; defaults per kind (fomc/cpi/earnings = true, opex = false)
+    veto: true                # optional; defaults per kind (fomc/cpi = true, opex = false)
     verified: true            # false = NOT confirmed against the issuing authority
     source: https://...       # where the date came from
     note: "..."               # optional
@@ -69,11 +69,12 @@ A calendar file with **zero** events raises `EventError` rather than loading emp
 
 ## Open items (deliberately not invented here)
 
-- **Component earnings.** SPY has no earnings; the brief still says "no earnings ... day
-  entries". `checklist.t5_options_chain.event_calendar.earnings_veto` records this as
-  `required: true, implemented: false, calibration_pending: true`. Until an
-  earnings calendar exists, the earnings half of the T5 veto is a stated gap, not a
-  satisfied rule.
+- **Component earnings — CLOSED by operator ruling 2026-10-02.** SPY has no earnings, and
+  the operator ruled that any particular ticker's earnings are irrelevant to an index
+  IV-regime decision, so the earnings veto is dropped rather than merely unbuilt:
+  `checklist.t5_options_chain.event_calendar.earnings_veto` now reads
+  `enabled: false, disabled_by: operator_ruling_2026-10-02`. FOMC and CPI remain hard
+  vetoes. Re-opening this is a rulebook + loader change, not a calendar edit.
 - **FOMC day 1 vs day 2.** Both days are vetoed here. The brief says "FOMC day";
   two-day meetings with a mid-week decision day make day 1 equally hostile to IV.
   Narrow this to day 2 only if the operator says so — it is a rulebook change

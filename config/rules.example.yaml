@@ -20,6 +20,26 @@ strategy:
   brief: docs/brief.md
 
 # ---------------------------------------------------------------------------
+# window — how long the experiment runs (brief: "Open decisions for the operator")
+#
+# RULED 2026-10-02 (operator): 3 months, ~60 sessions. The session count is the
+# calendar's own arithmetic (3 months of sessions), not a second decision: arm B
+# needs the sample. The window may only be EXTENDED at the monthly review —
+# extending it after seeing results is the failure mode this whole document exists
+# to prevent, so `extension` is not a free-form knob.
+#
+# `start` is stamped when the window actually opens and is mirrored into the
+# journal's `meta.window_start`, which is what the scorecard reads. It stays null
+# in this file until then: a rulebook that claims a start date it has not reached
+# is a claim, not a record.
+# ---------------------------------------------------------------------------
+window:
+  months: 3
+  target_sessions: 60
+  extension: monthly_review_only
+  start: null
+
+# ---------------------------------------------------------------------------
 # arms — 3 x $10k paper, same window (brief: "Arms")
 # ---------------------------------------------------------------------------
 arms:
@@ -169,17 +189,36 @@ checklist:
       iv_rank_lookback: "1y"
     arm_c:
       requirement: iv_on_chosen_strike_within_normal_band
-      iv_rank_max: null                    # brief specifies a band, not a number — calibration_pending below
-      calibration_pending: true
+      # RULED 2026-10-02 (operator, delegated to lead's recommendation): arm C buys
+      # premium with long-dated deep-ITM calls, so it gets the SAME rank ceiling as
+      # arm B — < 50. The brief only said "within normal band"; the number is the
+      # operator's call now, recorded here so a later reader can see it was chosen
+      # and not inherited.
+      iv_rank_max: 50
+      calibration_pending: false
     event_calendar:
       checked: daily
       hard_veto: true
       calendar_dir: data/events
-      veto_kinds: [fomc, cpi]
+      veto_kinds: [fomc, cpi]              # RULED 2026-10-02: earnings removed (see earnings_veto)
       earnings_veto:
-        required: true                     # "no earnings/FOMC day entries — event calendar checked daily"
-        implemented: false                 # SPY has no earnings; component calendar not built yet (see data/events/README.md)
-        calibration_pending: true
+        # RULED 2026-10-02 (operator): the earnings veto is DROPPED for SPY —
+        # "ignore any particular ticker's earnings for SPY". A single component's
+        # print does not move index IV regime, so vetoing the index because one
+        # name reported would be vetoing on noise. FOMC and CPI remain hard vetoes;
+        # OPEX remains listed and explicitly non-veto.
+        #
+        # This is recorded as DISABLED BY RULING rather than deleted: the brief did
+        # ask for it, so its absence needs a reason on the page. The loader pins
+        # every field below to its disabled value — re-enabling it is a code +
+        # rulebook change (new strategy version), which is what "explicitly
+        # disabled" is supposed to cost.
+        enabled: false
+        required: false
+        implemented: false
+        calibration_pending: false
+        disabled_by: operator_ruling_2026-10-02
+        reason: component earnings do not move index IV regime for SPY
     notes:
       - "IV rank needs ~1y of history for the chosen strike — open data question in the brief."
 
@@ -191,23 +230,29 @@ checklist:
     baseline_lookback_days: 20
     multiplier:
       value: null                      # "N to be calibrated from historical SPY flow data during implementation"
-      calibration_pending: true             # ...and frozen before first trade
-      reason: historical SPY deep-OTM 0DTE flow study during implementation
+      calibration_pending: true             # ...and frozen at the first monthly review (operator ruling 2026-10-02)
+      reason: N = P90 of the soak's 20-session ratio distribution, frozen at the first monthly review with the numbers shown (operator ruling 2026-10-02, delegated to the algo)
     # What "deep OTM" means numerically. The brief does not define it; the research
     # note illustrates it (">=3% OTM", 2026-10-02-flow-data-market.md §5.3). Separate
-    # thresholds per side, both pending until the operator freezes them at
-    # ratification — an "e.g." in a research note is an illustration, not a
-    # measurement, and a silent 3% default would be an invented threshold.
+    # thresholds per side.
+    #
+    # RULED 2026-10-02 (operator, delegated to the algo): BOTH this threshold and the
+    # N multiplier below are CALIBRATED BY THE ALGO from the soak's 20-session
+    # distribution and frozen at the first monthly review, with the numbers shown.
+    # Until that review they stay exactly here — null, calibration_pending, visibly
+    # unfrozen. The working 3% the soak runs at is the *input to* the calibration,
+    # not the frozen value: an "e.g." in a research note is an illustration, and a
+    # silent 3% default would be an invented threshold.
     deep_otm:
       measure: pct_distance_from_spot
       calls:
         value: null
         calibration_pending: true
-        reason: research note §5.3 suggests >=3%; freeze at ratification
+        reason: working 3% from research note §5.3; operator ruled 2026-10-02 that the algo calibrates it from the 20-session distribution and freezes it at the first monthly review
       puts:
         value: null
         calibration_pending: true
-        reason: research note §5.3 suggests >=3%; freeze at ratification
+        reason: working 3% from research note §5.3; operator ruled 2026-10-02 that the algo calibrates it from the 20-session distribution and freezes it at the first monthly review
       bucket_size_pct: 1.0                 # histogram bucket width; integer thresholds re-derive exactly
       applies_to_expiry: zero_dte
       volume_source: daily_bar_volume      # the snapshot's dailyBar.v, not quote size
@@ -240,6 +285,14 @@ cadence:
 execution:
   mode: paper_only
   executor: deterministic_script_no_llm        # "a script does boolean perfectly"
+  # RULED 2026-10-02 (operator): AUTONOMOUS within the frozen rules — "autonomous,
+  # yes, that's the whole point". The rulebook is the pre-registration; per-trade
+  # approval would reintroduce exactly the discretion the experiment excludes.
+  # There is deliberately no approval flag here: the executor has no per-trade
+  # approval gate to switch off (it is dry-run by default, `--live` places paper
+  # orders unattended), so encoding "autonomous: true" as config would be a knob
+  # that only ever reads true. The ruling lives in executor/main.py's module
+  # docstring, where the actual behaviour is.
   total_bankroll_usd: 30000
   arms_bankroll_usd_each: 10000
 

@@ -374,8 +374,8 @@ def _t5(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
     # INTERPRETATION: an event day is checked FIRST and short-circuits T5. The brief
     # calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it
     # outranks a healthy IV rank rather than being one AND-condition among several.
-    # Earnings veto is not yet implemented (earnings_veto.implemented: false), so
-    # is_event_day is expected to carry only fomc/cpi kinds until that is built.
+    # RULED 2026-10-02: the earnings half of that veto is dropped for SPY (component
+    # earnings do not move index IV regime), so veto_kinds is fomc/cpi only.
     if snap.is_event_day:
         kinds = ",".join(snap.event_kinds) or "unspecified"
         return ConditionResult("T5", "FAIL",
@@ -401,8 +401,22 @@ def _t5(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
                               f"arm C IV band not calibrated ({arm_c.requirement}); "
                               f"calibration_pending=true, value=null — a pending gate "
                               f"cannot pass")
-    return ConditionResult("T5", "PENDING",
-                          "arm C calibrated band present but no strike-IV evaluation supplied")
+    # RULED 2026-10-02: arm C carries the same rank ceiling as arm B (< 50), so the
+    # read is the same read. It is evaluated as an IV RANK ceiling, not as the brief's
+    # literal "within normal band": a two-sided band has no frozen number, and the
+    # operator ruled a number.
+    if snap.iv_rank is None:
+        return ConditionResult("T5", "PENDING",
+                              f"iv_rank unavailable (needs {cfg.arm_b.iv_rank_lookback} "
+                              f"of IV history for the chosen strike)")
+    ok = snap.iv_rank < arm_c.iv_rank_max
+    return ConditionResult(
+        "T5",
+        "PASS" if ok else "FAIL",
+        f"iv_rank {snap.iv_rank:.2f} "
+        f"{'<' if ok else '>='} {arm_c.iv_rank_max} "
+        f"(arm C ceiling, ruled 2026-10-02; {arm_c.requirement}); no event day",
+    )
 
 
 def _t6(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:

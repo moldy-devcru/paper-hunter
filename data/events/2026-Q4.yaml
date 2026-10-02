@@ -15,8 +15,9 @@ notes:
   - "OPEX dates are the 3rd Friday of each month (standard monthly equity/index expiry)."
   - "CPI release dates below are marked unverified: BLS moves releases off federal holidays and
      this file was started from a secondary summary, not from bls.gov itself. Confirm each date."
-  - "Earnings are not listed: SPY has none, and a component-earnings calendar is an open item
-     (checklist.t5_options_chain.event_calendar.earnings_veto.implemented = false)."
+  - "Earnings are not listed, by ruling not by omission: operator ruling 2026-10-02 drops the
+     component-earnings veto for SPY (a single name's print does not move index IV regime). See
+     checklist.t5_options_chain.event_calendar.earnings_veto."
 
 events:
   # -- FOMC (federalreserve.gov/monetarypolicy/fomccalendars.htm) ----------------

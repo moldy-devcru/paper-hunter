@@ -1,6 +1,19 @@
 # Ratification — one sitting, then the window opens
 
-**Status:** DRAFT — unsigned. **Date:** _(fill in when signed)_ **Operator:** _(mads)_
+**Status:** DRAFT — unsigned by the operator. Sections (b) and the delegation note in
+(a) carry operator rulings dated **2026-10-02**. **Date:** _(fill in when signed)_
+**Operator:** _(mads)_
+
+> **Delegation note — 2026-10-02.** The operator explicitly delegated the *technical
+> interpretations* in section (a): he was told there are 55 judgment calls the code had
+> to make, was told the two that genuinely needed a human (T6's calibration and the
+> earnings veto) were being escalated, and answered "autonomous, yes, that's the whole
+> point" on execution and delegated the rest. So section (a) is **lead-ratified under
+> operator delegation** — every row below is a decision *I* made and *I* stand behind,
+> not a row the operator read line by line. The boxes are therefore deliberately left
+> unticked rather than faked: a checked box on this document must mean a human read it.
+> Any row he wants overruled gets edited in the referenced code and the strategy version
+> bumped, before the first trade.
 
 This is the document that turns "the code exists" into "the experiment is pre-registered".
 Nothing below is a status update; everything below is either a decision that needs your
@@ -12,6 +25,8 @@ Each is a real ambiguity in the frozen spec, resolved one way, in code, with the
 written next to it. Approving the section means: *I have read these, I accept the
 resolution, and I am not going to relitigate them mid-window.* Overruling any of them means
 editing the referenced line and bumping the strategy version, before the first trade.
+As of 2026-10-02 these are **lead-ratified under operator delegation** — see the note at
+the top; they have not been individually ticked, because they have not been individually read.
 
 **How long this should take.** Section (a) is 55 rows; most are one line and many are
 obviously right. The two that genuinely need your attention are called out in (c) — they
@@ -61,7 +76,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/alpaca_client.py:1182`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1182))
 - [ ] **`executor/iv_rank.py:180`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L180))
 - [ ] **`executor/iv_rank.py:216`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L216))
-- [ ] **`config/loader.py:450`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L450))
+- [ ] **`config/loader.py:525`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L525))
 
 ### trading (17)
 
@@ -107,9 +122,9 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### CLI / plumbing (3)
 
-- [ ] **`executor/main.py:27`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L27))
-- [ ] **`executor/main.py:31`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L31))
-- [ ] **`executor/main.py:504`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L504))
+- [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
+- [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
+- [ ] **`executor/main.py:513`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L513))
 
 <!-- END GENERATED: INTERPRETATION INVENTORY -->
 
@@ -123,10 +138,30 @@ each one actually stands now.
 | # | Decision | Status |
 |---|---|---|
 | 1 | Repo home: `moldy-devcru/paper-hunter` | **Done.** This repo, public, owned by Moldy; operator is contributor. ~700 commits of history carry `Moldy <moldy@devcru.org>` after the 2026-09-28 attribution rewrite. |
-| 2 | Window length | **Needs a signature.** The build currently supports any window. Recommendation: 3 months minimum, as the brief says, because the 0DTE arm needs the sample and 3 months ≈ 60 sessions. |
-| 3 | Checklist thresholds are a draft — ratify or edit each | **This is section (a).** Every threshold, and every way of computing it, is listed there with a checkbox. Signing (a) is signing this. |
-| 4 | Arm C roll rule delta/DTE numbers | **Needs your number.** The rulebook carries the entry criteria (90–180 DTE, delta ≥ 0.80, premium ≤ 50% of bankroll) and the roll parameters, but the roll *trigger* is still the brief's wording. Confirm or replace before the window. |
-| 5 | Who pulls the trigger: autonomous executor vs per-trade human approval | **Recommended: autonomous**, as the brief already argues — the rules are the pre-registration, and per-trade approval reintroduces exactly the discretion the experiment is designed to exclude. Needs your explicit sign-off, because it is the one item here that changes what "oversight" means. |
+| 2 | Window length | **RULED 2026-10-02: 3 months, ~60 sessions.** Extension only at the monthly review. Encoded at `window:` in the rulebook (`months: 3`, `target_sessions: 60`, `extension: monthly_review_only`). |
+| 3 | Checklist thresholds are a draft — ratify or edit each | **This is section (a).** Every threshold, and every way of computing it, is listed there. **Lead-ratified under operator delegation, 2026-10-02** — see the delegation note at the top of this document. |
+| 4 | Arm C roll rule delta/DTE numbers | **RULED 2026-10-02: confirmed as drafted.** Roll when `delta < 0.70` **or** `dte < 45`, whichever comes first; mechanical, not discretionary. Already encoded at `arms.C.exits.roll.trigger`. |
+| 5 | Who pulls the trigger: autonomous executor vs per-trade human approval | **RULED 2026-10-02: autonomous within the frozen rules.** Operator: "autonomous, yes, that's the whole point." There is deliberately no approval flag to set — the CLI has no per-trade approval gate; dry-run is the default and `--live` runs unattended behind the kill switch. Documented at the top of `executor/main.py`. |
+| 6 | *(not in the brief's list — added 2026-10-02)* Arm C IV rank ceiling | **RULED 2026-10-02: `< 50`, same as arm B** (delegated to the lead's recommendation). No longer pending; `pending_calibrations` no longer lists it. |
+| 7 | *(not in the brief's list — added 2026-10-02)* Earnings veto | **RULED 2026-10-02: DROPPED for SPY.** "Ignore any particular ticker's earnings for SPY" — a component's print does not move index IV regime. FOMC and CPI remain hard vetoes; OPEX remains non-veto. See below. |
+| 8 | *(not in the brief's list — added 2026-10-02)* T6 threshold + N | **RULED 2026-10-02: calibrated BY THE ALGO** from the soak's 20-session distribution, frozen at the first monthly review with the numbers shown. Both stay `calibration_pending` until then — that is the ruling, not a gap. See (c). |
+
+### The earnings veto — CLOSED 2026-10-02, by ruling
+
+The brief asked for "no earnings/FOMC day entries". **RULED 2026-10-02: the earnings
+half is dropped for SPY** — "ignore any particular ticker's earnings for SPY". A single
+component's print does not move index IV regime, so vetoing an index trade because one
+name reported would be vetoing on noise, and the rulebook would carry a veto that can
+never be evaluated honestly (there is no component calendar, and building one would be
+work for a rule the operator does not want).
+
+It is recorded as **disabled by ruling**, not deleted: `earnings_veto` now reads
+`enabled: false, required: false, implemented: false, calibration_pending: false,
+disabled_by: operator_ruling_2026-10-02`, plus the reason. The loader pins every one of
+those fields to its disabled value and pins `veto_kinds` to `["fomc", "cpi"]`, so
+re-enabling it is a loader change *and* a rulebook change *and* a version bump — which is
+what "explicitly disabled by ruling" should cost. `earnings` remains a valid `EventKind`
+so a calendar can still record one for awareness; it simply no longer vetoes by default.
 
 ### Still pending in the rulebook (loader refuses to start with these silently open)
 
@@ -134,18 +169,20 @@ each one actually stands now.
 non-empty today:
 
 - [ ] `checklist.t6_flow.multiplier` — **N**. Cannot be calibrated until the soak has
-      accumulated its baseline. See (c).
+      accumulated its baseline. **Ruled 2026-10-02: the algo calibrates it from the
+      20-session distribution and it is frozen at the first monthly review, with the
+      numbers shown.** See (c).
 - [ ] `checklist.t6_flow.deep_otm.calls` / `.puts` — **what "deep" means**. Currently
-      `calibration_pending: true` with a null value. The soak runs at a *working* 3% so
-      history accumulates, but that number is not ratified. See (c).
-- [ ] `checklist.t5_options_chain.arm_c.iv_rank_max` — arm C's IV ceiling.
-- [ ] `checklist.t5_options_chain.event_calendar.earnings_veto` — whether earnings days
-      hard-veto or merely gate T5. `event_calendar.py` already treats them as a veto; the
-      rulebook has not been told yet.
+      `calibration_pending: true` with a null value; the soak runs at a *working* 3% so
+      history accumulates, and **ruled 2026-10-02** that the algo calibrates the frozen
+      number from the same distribution at the same review. See (c).
 
-Each of these is a `Pending` value: null, with a reason, and the loader raises if you try
-to write a number without clearing `calibration_pending`. That is intentional — a
-threshold that looks frozen when it is not is worse than one that visibly is not.
+Closed since the draft: `checklist.t5_options_chain.arm_c.iv_rank_max` (now `< 50`,
+ruled) and `...event_calendar.earnings_veto` (dropped by ruling). The only two remaining
+are the T6 pair, which the operator deliberately left to the algo, and both are `Pending`
+values: null, with a reason, and the loader raises if you try to write a number without
+clearing `calibration_pending`. That is intentional — a threshold that looks frozen when
+it is not is worse than one that visibly is not.
 
 ---
 
@@ -178,6 +215,13 @@ remembered.
 
 ### When N can be frozen
 
+**RULED 2026-10-02: the algo calibrates it, from this distribution, and it is frozen at
+the FIRST MONTHLY REVIEW with the numbers shown** — i.e. once ≥20 rows exist at a single
+`deep_otm_threshold_pct`. Until that review both N and the deep-OTM thresholds stay
+`calibration_pending: true` with null values, which is the ruling being honoured, not a
+gap. The reasoning below is why this is the defensible choice; it is written down now so
+the choice cannot be re-litigated once the data exists.
+
 **PROPOSAL — 20 recorded sessions, i.e. the first 20 trading days of soak operation.**
 The reasoning: the rulebook says the baseline *is* 20 sessions, so calibrating N on fewer
 than 20 sessions means calibrating against a different distribution than the one the gate
@@ -189,13 +233,14 @@ different thresholds are never mixed), so if you revise the deep-OTM thresholds 
 ratification, the clock restarts from that day. **Ratify the thresholds before the soak
 starts collecting, not after.**
 
-### The formula — PROPOSAL, not decided
+### The formula — RULED 2026-10-02 as drafted, frozen at the first monthly review
 
 Given `r_1 … r_20`, the daily ratios of trade-side deep-OTM volume to the trailing 20-day
 baseline mean:
 
-> **PROPOSAL: `N = P90(r_1 … r_20)`** — the 90th percentile of the observed ratio
-> distribution, i.e. 90% of historical days pass the gate.
+> **RULED 2026-10-02: `N = P90(r_1 … r_20)`** — the 90th percentile of the observed
+> ratio distribution, i.e. 90% of historical days pass the gate. Adopted as drafted and
+> delegated to the algo, with the numbers shown at the freeze.
 
 Why 90th percentile, honestly assessed:
 
@@ -209,7 +254,8 @@ Why 90th percentile, honestly assessed:
   distribution exists, so the definition cannot be chosen to fit whatever the data turns
   out to be.
 
-**Alternatives, if you overrule:**
+**Alternatives, overruled 2026-10-02** (recorded so a later reader does not have to
+re-derive why they are not in the rulebook):
 
 - **Fixed multiple** (N = 1.5, 2.0). Simpler and stable, but the number is a guess, and
   this whole exercise exists so the number is not a guess.
@@ -218,9 +264,11 @@ Why 90th percentile, honestly assessed:
 - **N = P95.** Strictly rarer; with 20 samples it is the single largest observation, which
   makes it one bad data day away from being unpassable.
 
-Marked **PROPOSAL** deliberately. This formula has never seen the data and is not claimed
-to be right — it is claimed to be *decided in advance*, which is the property that makes
-the eventual result mean something.
+Marked settled deliberately. This formula has not seen the data and is not claimed to be
+right — it is claimed to be *decided in advance*, which is the property that makes the
+eventual result mean something. The operator's 2026-10-02 ruling settled it before the
+distribution existed, which is the whole point; the freeze at the monthly review is when
+the number gets written down, with the distribution shown beside it.
 
 ### How the calibration is read off the store
 
@@ -247,20 +295,33 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
 ### Ratification and calibration
 
 - [ ] **Section (a) signed** — all 55 interpretations approved or overruled in writing.
-- [ ] **Section (b) items 2, 4, 5 answered** — window length, arm C roll numbers, trigger
-      mode. (Item 1 is done; item 3 *is* section (a).)
+      *Status 2026-10-02: lead-ratified under operator delegation (see the delegation note
+      at the top). Left unticked on purpose: the operator has not read these row by row,
+      and a ticked box here must mean a human did. Overrule anything in it at any time
+      before the first trade — the fix is the referenced code line plus a version bump.*
+- [x] **Section (b) items 2, 4, 5 answered** — window length, arm C roll numbers, trigger
+      mode. (Item 1 is done; item 3 *is* section (a).) **Ruled 2026-10-02:** 3 months /
+      ~60 sessions extending only at monthly review; roll at delta < 0.70 or DTE < 45,
+      whichever first; autonomous execution within the frozen rules.
 - [ ] **Strategy version bumped and frozen.** `config/rules.example.yaml` is edited, the
       content hash changes, and `1.0.0-draft` becomes `1.0.0`. A draft rulebook running a
       "pre-registered" experiment is a contradiction, and `strategy_version` is stamped on
       every journal row so the experiment can always answer which rules produced a trade.
 - [ ] **T6 deep-OTM thresholds frozen** (calls/puts, percent from spot). Do this **before**
       the soak accumulates its baseline — changing it restarts the 20-session count.
-- [ ] **T6 N frozen** from the ≥20-session baseline, per the formula signed in (c).
-- [ ] **T5 `iv_rank_max` and the earnings-veto ruling** resolved in the rulebook, not left
-      as `Pending`.
+      *Ruled 2026-10-02: calibrated by the algo from the 20-session distribution, frozen at
+      the first monthly review with the numbers shown. The working 3% the soak runs at is
+      the input to that calibration, not the frozen value.*
+- [ ] **T6 N frozen** from the ≥20-session baseline, per the formula ruled in (c). Same
+      review as the line above.
+- [x] **T5 `iv_rank_max` and the earnings-veto ruling** resolved in the rulebook, not left
+      as `Pending`. **Ruled 2026-10-02:** arm C's ceiling is `< 50` (same as arm B) and the
+      earnings veto is dropped for SPY, `disabled_by: operator_ruling_2026-10-02`. Both are
+      load-bearing in the loader, not just in the file.
 - [ ] **`pending_calibrations` is empty.** Loadable assertion:
       `.venv/bin/python -c "import config.loader as c; r=c.load_rules(); print(r.pending_calibrations)"`
-      must print `[]`.
+      must print `[]`. **Today it prints the three T6 items and nothing else** — which is
+      correct until the monthly-review freeze, and the last item on this list.
 
 ### Data and feeds
 
@@ -274,11 +335,14 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
       whether to open the window in that state (honest, T5 simply cannot pass) or to wait.
 - [ ] **Which tenor T5 reads** — the expiry-keyed `tenor_key` or the rolling
       `dte_tenor_key`. Both are being stored; only one is read. See `executor/iv_rank.py`.
+      *This now matters for arm C as well as arm B: arm C reads an IV rank too (ruled
+      2026-10-02), so the choice is no longer arm-B-only.*
 - [ ] **CPI/FOMC dates verified.** [`data/events/`](../data/events/README.md) covers
       scheduled dates, but the last few weeks before the window must be confirmed against
       the actual published calendar, and the calendar refreshed. An unverified event date
       is a hard veto that never fires, or one that fires on a day it should not — both
-      corrupt the veto's meaning.
+      corrupt the veto's meaning. *(This is the whole veto now: earnings are out by ruling,
+      so these two kinds are the entire hard-veto surface.)*
 - [ ] **Event-calendar coverage checked** — `EventCalendar.coverage()` spans the whole
       window with no gaps. `unverified()` is empty.
 
@@ -295,7 +359,8 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
       behaving.
 - [ ] **Paper account confirmed paper.** `account.paper is True` or a `PA`-prefixed account
       id, before the first order. This is the single check that separates "we simulated"
-      from "we traded".
+      from "we traded" — and under the 2026-10-02 autonomy ruling it is the last human
+      gate before the executor trades unattended.
 - [ ] **Dry run of the full executor end-to-end**, writing to a scratch DB, with the
       resulting journal inspected by hand.
 - [ ] **Kill switch tested.** The emergency flatten path (`alpaca_trading.py`) exercised at

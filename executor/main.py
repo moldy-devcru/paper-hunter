@@ -24,6 +24,15 @@ This is the third layer of the kill switch described in
 :mod:`executor.alpaca_trading` — URL allowlist, no live env var, account proof — and
 the only one a human actually touches, so it is also the one that prints its work.
 
+# RULED 2026-10-02 (operator): **autonomous execution within the frozen rules.** "That
+is the whole point" — the rulebook is the pre-registration, and a per-trade approval
+step would reintroduce exactly the discretion the experiment is built to exclude. So
+there is deliberately no approval flag anywhere in this CLI: once ``--live`` is passed
+(after the paper-account proof), ``watch`` places entry orders unattended and ``eod``
+closes positions unattended, governed only by the rulebook plus the kill switch. The
+oversight that remains is the kill switch, the journal, and the monthly review — not a
+human in the loop per trade.
+
 # INTERPRETATION: no command writes to the journal unless ``--db`` is passed. A
 pre-market plan that journals rows into a database nobody named is a surprise, and the
 ledger is the experiment's primary artifact.

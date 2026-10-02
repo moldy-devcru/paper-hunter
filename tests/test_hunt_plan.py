@@ -499,8 +499,13 @@ def test_iv_rank_warmup_surfaces_its_own_reason(tmp_path, series, rules, session
     store.close()
 
 
-def test_no_iv_rank_is_evaluated_for_arm_c(series, rules, session_day, spot):
-    """Arm C's T5 band is calibration_pending, so scoring a rank would imply a rule."""
+def test_arm_c_t5_is_evaluated_against_the_ruled_iv_ceiling(series, rules, session_day, spot):
+    """Arm C got a real IV ceiling on 2026-10-02, so its T5 is now evaluated.
+
+    Previously the plan skipped the IV read for arm C entirely (a rank would have
+    implied a threshold that did not exist) and T5 sat PENDING. The ceiling exists,
+    so the rank is read and T5 grades against it.
+    """
     chain = deep_itm_chain(day=session_day, spot=spot)
     plan = build_hunt_plan(
         data=StaticMarketData(series=series, chain=chain),
@@ -509,9 +514,11 @@ def test_no_iv_rank_is_evaluated_for_arm_c(series, rules, session_day, spot):
         spot=spot,
     )
     cell = plan.cell("C", "call")
+    # no store injected -> no rank -> still PENDING, and honestly labelled
     assert cell.snapshot_dict["indicators"]["iv_rank"] is None
+    assert cell.snapshot_dict["iv_rank_provenance"]["status"] == "no_source"
     assert cell.checklist.status("T5") == "PENDING"
-    assert "calibration_pending" in cell.checklist.conditions["T5"].detail
+    assert not cell.checklist.fire
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ tests are negative tests on purpose.
 from __future__ import annotations
 
 import copy
+import datetime as dt
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,13 @@ from config.loader import (
     load_rules,
     load_rules_text,
 )
-from data.event_calendar import EVENTS_DIR, EventCalendar, EventError, load_calendar_file
+from data.event_calendar import (
+    EVENTS_DIR,
+    CalendarEvent,
+    EventCalendar,
+    EventError,
+    load_calendar_file,
+)
 
 EXAMPLE_TEXT = DEFAULT_RULES_PATH.read_text(encoding="utf-8")
 CALENDAR_FILE = EVENTS_DIR / "2026-Q4.yaml"
@@ -122,6 +129,119 @@ def test_t6_is_pending_not_invented():
     assert t6.multiplier.calibration_pending is True
     assert t6.evaluation == "EOD_only"
     assert any("t6" in p for p in load_rules().pending_calibrations)
+
+
+# ---------------------------------------------------------------------------
+# operator rulings, 2026-10-02
+# ---------------------------------------------------------------------------
+
+
+def test_window_is_three_months_sixty_sessions_renewable_only_at_review():
+    w = load_rules().window
+    assert w.months == FROZEN["window_months"] == 3
+    assert w.target_sessions == FROZEN["window_target_sessions"] == 60
+    assert w.extension == "monthly_review_only"
+    assert w.start is None  # stamped when the window opens, not claimed in advance
+
+
+def test_window_length_must_be_plausible():
+    bad = _tamper(lambda d: _set(d, "window.target_sessions", 400))
+    with pytest.raises(RulesError):
+        load_rules_text(bad)
+
+
+def test_window_start_can_be_stamped_when_the_window_opens():
+    stamped = load_rules_text(_tamper(lambda d: _set(d, "window.start", "2026-10-05")))
+    assert stamped.window.start == dt.date(2026, 10, 5)
+
+
+def test_arm_c_iv_ceiling_is_configurable_at_50():
+    """Ruled 2026-10-02: same ceiling as arm B. The loader no longer refuses a number."""
+    t5 = load_rules().checklist.t5_options_chain
+    assert t5.arm_c.iv_rank_max == FROZEN["arm_c_iv_rank_max"] == 50
+    assert t5.arm_c.calibration_pending is False
+    assert not any("arm_c" in p for p in load_rules().pending_calibrations)
+
+    # the field is genuinely configurable now, within the same 0-100 domain
+    moved = load_rules_text(
+        _tamper(lambda d: _set(d, "checklist.t5_options_chain.arm_c.iv_rank_max", 35.0))
+    )
+    assert moved.checklist.t5_options_chain.arm_c.iv_rank_max == 35.0
+    with pytest.raises(RulesError):
+        load_rules_text(
+            _tamper(lambda d: _set(d, "checklist.t5_options_chain.arm_c.iv_rank_max", 120.0))
+        )
+
+
+def test_arm_c_ceiling_cannot_be_smuggled_in_while_pending():
+    bad = _tamper(
+        lambda d: (
+            _set(d, "checklist.t5_options_chain.arm_c.calibration_pending", True),
+            _set(d, "checklist.t5_options_chain.arm_c.iv_rank_max", 60.0),
+        )
+    )
+    with pytest.raises(RulesError):
+        load_rules_text(bad)
+
+
+def test_earnings_veto_is_disabled_by_ruling_and_cannot_be_silently_re_enabled():
+    ev = load_rules().checklist.t5_options_chain.event_calendar
+    assert ev.veto_kinds == ["fomc", "cpi"]
+    veto = ev.earnings_veto
+    assert (veto.enabled, veto.required, veto.implemented) == (False, False, False)
+    assert veto.calibration_pending is False
+    assert "2026-10-02" in veto.disabled_by
+    assert veto.reason  # the brief asked for it; the file says why it is not there
+    assert not any("earnings" in p for p in load_rules().pending_calibrations)
+
+    # flipping it back on is not a YAML edit — the model refuses it
+    with pytest.raises(RulesError):
+        load_rules_text(
+            _tamper(
+                lambda d: _set(
+                    d,
+                    "checklist.t5_options_chain.event_calendar.earnings_veto.enabled",
+                    True,
+                )
+            )
+        )
+    with pytest.raises(RulesError):
+        load_rules_text(
+            _tamper(
+                lambda d: _set(
+                    d,
+                    "checklist.t5_options_chain.event_calendar.earnings_veto.calibration_pending",
+                    True,
+                )
+            )
+        )
+    # ...nor by quietly adding earnings back to the veto kinds
+    with pytest.raises(RulesError):
+        load_rules_text(
+            _tamper(
+                lambda d: _set(
+                    d, "checklist.t5_options_chain.event_calendar.veto_kinds",
+                    ["fomc", "cpi", "earnings"],
+                )
+            )
+        )
+
+
+def test_earnings_kind_no_longer_vetoes_by_default():
+    ev = EventCalendar.load(CALENDAR_FILE)
+    day = dt.date(2026, 10, 7)
+    earnings = CalendarEvent(
+        date=day, kind="earnings", label="a component reports", verified=True
+    )
+    assert earnings.is_veto() is False  # ruled 2026-10-02: index IV regime does not care
+    assert ev.is_event_day(day, veto_kinds=["fomc", "cpi"]) is False
+
+
+def test_only_the_t6_calibrations_remain_pending():
+    """After the 2026-10-02 rulings the only open items are the algo-calibrated T6 pair."""
+    pending = load_rules().pending_calibrations
+    assert all("t6_flow" in p for p in pending), pending
+    assert len(pending) == 3
 
 
 def test_strategy_version_is_version_plus_content_hash():

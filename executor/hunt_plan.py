@@ -839,19 +839,15 @@ def build_hunt_plan(
                     f"unknown direction {direction!r}; directions are {DIRECTIONS}"
                 )
 
-            iv_rank, iv_provenance = (None, {})
             extra_notes: list[str] = []
-            if arm == "B":
-                iv_rank, iv_provenance = _iv_rank_for_direction(
-                    chain, iv_store, spot, direction, day
-                )
-                extra_notes.append(f"IV-rank source: {iv_provenance}")
-            else:
-                extra_notes.append(
-                    "arm C T5 is calibration_pending in the frozen rulebook — no IV rank "
-                    "evaluated, because scoring one would imply a threshold that does not "
-                    "exist yet"
-                )
+            # Both arms now read an IV rank. Arm C used to be skipped here because its
+            # T5 gate was calibration_pending and scoring a rank would imply a threshold
+            # that did not exist; the 2026-10-02 ruling gave it a real ceiling (< 50, same
+            # as arm B), so not scoring it would leave the gate unevaluable.
+            iv_rank, iv_provenance = _iv_rank_for_direction(
+                chain, iv_store, spot, direction, day
+            )
+            extra_notes.append(f"IV-rank source: {iv_provenance}")
 
             snapshot_result = build_snapshot(
                 daily=series,
