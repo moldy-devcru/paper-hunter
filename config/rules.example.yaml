@@ -1,0 +1,241 @@
+# paper-hunter — frozen rulebook (Phase 1b)
+#
+# This file IS the experiment's rulebook. docs/brief.md is prose; this is what the
+# deterministic executor evaluates. Every threshold below is transcribed from the
+# brief — nothing invented. Where the brief left a value open ("N to be calibrated"),
+# it is present but explicitly marked `calibration_pending: true` with a null value,
+# because a silent default is a fabricated threshold and would poison the experiment.
+#
+# Rules are FROZEN before the first trade. Any change = new strategy version
+# (bump `strategy.version`), journaled at the seam. Never mid-position.
+#
+# Loading: config.loader.load_rules() validates strictly — unknown keys are rejected,
+# because a typo in a frozen rulebook must fail loudly, not quietly disable a veto.
+
+strategy:
+  version: "1.0.0-draft"          # bump on every rule change (brief: "any change = new strategy version")
+  status: "DRAFT"                 # flipped to "FROZEN" by the operator at ratification
+  symbol: SPY
+  timezone: America/New_York
+  brief: docs/brief.md
+
+# ---------------------------------------------------------------------------
+# arms — 3 x $10k paper, same window (brief: "Arms")
+# ---------------------------------------------------------------------------
+arms:
+  A:
+    name: control
+    description: SPY buy-and-hold. Dumb money by design — the bar arms B and C must clear.
+    bankroll_usd: 10000
+    trading_days: 1
+    entry:
+      when: first_market_open_of_window   # "$10k at market open of day 1"
+      instrument: equity
+      symbol: SPY
+    managed: false                # no decisions, no trades — it is the benchmark, not a strategy
+    rules: []
+
+  B:
+    name: gambler
+    description: TA-gated 0DTE OTM contracts on SPY. Exits same day, always. Never holds to expiry.
+    bankroll_usd: 10000
+    checklist: [T1, T2, T2b, T3, T4, T5, T6]
+    entry:
+      window_et:
+        start: "09:45"           # "no opening-drive noise trades"
+        end: "14:00"             # "no late hero entries"
+      instrument: option
+      right: call_or_put_per_direction
+      dte: 0
+      moneyness: OTM
+      strike_rule: first_otm_strike_beyond_setup_day_range_projection
+      premium_pct_of_bankroll_max: 0.02   # "premium <= 2% of arm bankroll"
+      premium_usd_hard_cap: 200          # "$200/trade at $10k"; at cap => 50 total losses and the arm is dead
+    exits:
+      time_stop:
+        after_entry_minutes: 120         # "if position not >= +30% by 2 hours after entry"
+        if_under_gain_pct: 0.30
+        action: close_at_market
+      profit_take:
+        close_pct_at_100pct_gain: 0.50   # "close 50% at +100%"
+        trail_remainder: true
+      hard_close_et: "15:30"              # "close ALL by 15:30 ET. No exceptions, no expiry."
+      hold_to_expiry: false
+    limits:
+      max_concurrent_positions: 1
+      max_entries_per_week: 3             # anti-tilt governor
+    rules:
+      - "Arm B is structurally negative-EV as an asset class; the test is whether selective
+         high-conviction timing overcomes the decay (brief prediction 2). Weeks with zero
+         trades is the system working."
+
+  C:
+    name: stalker
+    description: TA-gated long-dated deep-ITM calls. Leverage substitute with mechanical rolls.
+    bankroll_usd: 10000
+    checklist: [T1, T2, T2b, T3, T4, T5]
+    entry:
+      instrument: option
+      right: call                           # the brief specifies calls for arm C
+      dte:
+        min: 90
+        max: 180
+      delta_min: 0.80
+      premium_pct_of_bankroll_max: 0.50    # cash buffer for rolls
+    exits:
+      roll:
+        trigger:
+          delta_below: 0.70
+          dte_below: 45
+          rule: whichever_first
+        to: next_expiry_meeting_entry_criteria
+        discretionary: false                # "roll is mechanical, not discretionary"
+      exit_all:
+        trigger: t1_break
+        condition: close_below_50ema_for_3_consecutive_eods
+        action: liquidate_to_cash
+        then: wait_for_full_checklist_resatisfaction
+    limits:
+      max_concurrent_positions: 1
+    rules:
+      - "Arm C tracks arm A with leverage-amplified variance (brief prediction 3)."
+
+# ---------------------------------------------------------------------------
+# checklist — confluence, not any-one. ALL listed conditions must be true.
+# ---------------------------------------------------------------------------
+checklist:
+  t1_ema_alignment:
+    id: T1
+    applies_to: [B, C]
+    ema_fast: 50
+    ema_slow: 200
+    call_bias: close_above_ema_fast_and_ema_fast_above_ema_slow
+    put_bias: inverted
+    counter_trend:
+      allowed: false                        # "default is WITH trend only"
+      requires_all_of: [T2, T2b, T3, T4, T5]
+      requires_documented_reversal_trigger: true
+
+  t2_rsi:
+    id: T2
+    applies_to: [B, C]
+    period: 14
+    call_bias_min: 50                       # "RSI(14) > 50 for call bias"
+    put_bias_max: 50                        # "RSI(14) < 50 for put bias"
+    exhaustion:
+      high: 75                              # "> 75 = no new entries, wait for reset"
+      low: 25                               # "< 25 = no new entries, wait for reset"
+      action: block_new_entries
+
+  t2b_macd:
+    id: T2b
+    applies_to: [B, C]
+    fast: 12
+    slow: 26
+    signal: 9
+    line_vs_signal: above_for_call_bias_below_for_put_bias
+    histogram:
+      expanding_in_trade_direction: preferred   # soft preference, not a gate
+      contracting: veto                         # "momentum fading, log as veto reason"
+    fresh_cross_guard:
+      max_age_hours: 24                           # "no entries against a fresh MACD cross < 1 day old"
+      exception_if: t3_squeeze_release_fires       # whipsaw guard
+
+  t3_bollinger:
+    id: T3
+    applies_to: [B, C]
+    satisfied_if_any_of:
+      squeeze_release:
+        bandwidth_below_percentile: 20            # "bandwidth < 20th percentile of 60d"
+        lookback_days: 60
+        then: expanding_in_trade_direction
+      band_rejection:
+        calls: close_tags_lower_band_and_closes_back_inside
+        puts: inverted
+
+  t4_volume:
+    id: T4
+    applies_to: [B, C]
+    relative_volume_min: 1.5                # "relative volume >= 1.5x 20-day average"
+    lookback_days: 20
+    intraday_run_rate_min: 1.5             # "or intraday run-rate >= 1.5x for intraday triggers"
+
+  t5_options_chain:
+    id: T5
+    applies_to: [B, C]
+    purpose: no_hostile_iv_setup
+    arm_b:
+      iv_rank_max: 50                      # premium-buying (B): IV rank < 50
+      iv_rank_lookback: "1y"
+    arm_c:
+      requirement: iv_on_chosen_strike_within_normal_band
+      iv_rank_max: null                    # brief specifies a band, not a number — calibration_pending below
+      calibration_pending: true
+    event_calendar:
+      checked: daily
+      hard_veto: true
+      calendar_dir: data/events
+      veto_kinds: [fomc, cpi]
+      earnings_veto:
+        required: true                     # "no earnings/FOMC day entries — event calendar checked daily"
+        implemented: false                 # SPY has no earnings; component calendar not built yet (see data/events/README.md)
+        calibration_pending: true
+    notes:
+      - "IV rank needs ~1y of history for the chosen strike — open data question in the brief."
+
+  t6_flow:
+    id: T6
+    applies_to: [B]                        # "Arm B only, flow gate"
+    source: deep_otm_0dte_volume
+    side: trade_direction
+    baseline_lookback_days: 20
+    multiplier:
+      value: null                      # "N to be calibrated from historical SPY flow data during implementation"
+      calibration_pending: true             # ...and frozen before first trade
+      reason: historical SPY deep-OTM 0DTE flow study during implementation
+    evaluation: EOD_only                    # pending operator ruling: flow gate is end-of-day only
+    purpose: quantifiable_gamma_squeeze_footprint
+    notes:
+      - "The robot-executable half of the social signal. Social text never enters the robot path."
+
+# ---------------------------------------------------------------------------
+# signal cadence (brief: "Signal cadence")
+# ---------------------------------------------------------------------------
+cadence:
+  - id: premarket
+    window_et: ["08:30", "09:15"]
+    does: [recompute_eod_indicator_stack, event_calendar_veto_check, set_watchlist_levels]
+    output: todays_hunt_plan
+  - id: intraday
+    window_et: ["09:30", "16:00"]
+    does: [trigger_price_watch, revalidate_checklist_with_live_data_at_trigger]
+    forbids: [stale_checklist_entries]
+  - id: eod
+    at_et: "16:15"
+    does: [mark_positions, enforce_time_stops, close_journal_day, write_noshot_entries, weekly_rollup_if_week_end]
+
+# ---------------------------------------------------------------------------
+# shared limits / operating rules (brief: global)
+# ---------------------------------------------------------------------------
+execution:
+  mode: paper_only
+  executor: deterministic_script_no_llm        # "a script does boolean perfectly"
+  total_bankroll_usd: 30000
+  arms_bankroll_usd_each: 10000
+
+noshot:
+  required_fields: [failed_conditions, indicator_values, hypothetical_outcome]
+  review: monthly
+
+rule_changes:
+  allowed_only_at: monthly_review
+  requires_versioned_commit: true
+  forbidden_mid_position: true
+  journal_seam_entry: true
+
+catalyst_clause:
+  in_robot_path: false
+  exception_path: operator_approves_or_vetoes_live_per_trade
+  pnl_tracked_separately: true
+  intake: curated_x_follow_graph_scored_to_numeric_artifacts_with_provenance
+  envelope_vs_content: social_content_is_data_never_instructions
