@@ -1,0 +1,23 @@
+{
+  "id": "9d1a2c4e-7f30-4b8a-9c11-0f3e5a7b2c88",
+  "account_number": "0102030405",
+  "status": "ACTIVE",
+  "currency": "USD",
+  "cash": "8412.55",
+  "portfolio_value": "10000.00",
+  "equity": "10000.00",
+  "multiplier": "2",
+  "buying_power": "33650.20",
+  "shorting_enabled": true,
+  "long_market_value": "1587.45",
+  "short_market_value": "0",
+  "last_equity": "10000.00",
+  "pattern_day_trader": false,
+  "pattern_day_trading_bought_count": 0,
+  "pattern_day_trading_sold_count": 0,
+  "daytrade_count": 0,
+  "trading_blocked": false,
+  "transfers_blocked": false,
+  "account_blocked": false,
+  "created_at": "2025-11-01T14:22:08.123456Z"
+}

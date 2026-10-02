@@ -1,0 +1,40 @@
+[
+  {
+    "asset_id": "b0b6dd9d-f8f9-4f4a-b5ee-e0dc4d6ec7ba",
+    "symbol": "SPY260117C00700000",
+    "exchange": "",
+    "asset_class": "us_equity_option",
+    "asset_marginable": true,
+    "qty": "1",
+    "qty_available": "1",
+    "side": "long",
+    "market_value": "355.00",
+    "cost_basis": "352.10",
+    "avg_entry_price": "352.10",
+    "unrealized_pl": "2.90",
+    "current_price": "355.00",
+    "lastday_price": "342.00",
+    "change_today": "3.80",
+    "qty_pending_exercise": "0",
+    "side_pending_exercise": null
+  },
+  {
+    "asset_id": "c1c7eeae-faf0-505b-a6ff-f1ed5e7fd8cb",
+    "symbol": "SPY",
+    "exchange": "NYSE",
+    "asset_class": "us_equity",
+    "asset_marginable": true,
+    "qty": "2",
+    "qty_available": "2",
+    "side": "long",
+    "market_value": "1356.88",
+    "cost_basis": "1340.00",
+    "avg_entry_price": "670.00",
+    "unrealized_pl": "16.88",
+    "current_price": "678.44",
+    "lastday_price": "681.95",
+    "change_today": "-3.51",
+    "qty_pending_exercise": null,
+    "side_pending_exercise": null
+  }
+]
