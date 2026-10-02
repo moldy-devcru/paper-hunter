@@ -523,18 +523,15 @@ def build_from_bars(
     Kept because it means a canned JSON fixture (exactly the shape
     ``alpaca_client`` parses) can drive the whole builder in a test without the test
     having to know how bars are constructed.
-    """
-    from executor.alpaca_client import Bar, BarSeries
 
-    bars = sorted(
-        (Bar.from_json(b) for b in (daily_bars_json.get("bars", {}).get(symbol) or [])),
-        key=lambda b: b.t,
-    )
-    series = BarSeries(
-        symbol=symbol,
-        timeframe="1Day",
-        feed=str(daily_bars_json.get("feed", "sip")),
-        bars=bars,
+    Parsing goes through ``alpaca_client._bar_series_from_payload`` on purpose. This
+    used to hand-roll ``bars[symbol]`` — the *multi-symbol* envelope — which silently
+    produced an empty series for every documented single-symbol payload.
+    """
+    from executor.alpaca_client import _bar_series_from_payload
+
+    series = _bar_series_from_payload(
+        symbol, "1Day", str(daily_bars_json.get("feed", "sip")), daily_bars_json
     )
     return build_snapshot(daily=series, **kwargs)
 

@@ -515,7 +515,7 @@ def test_dry_run_computes_a_row_from_the_repo_fixtures(tmp_path, capsys):
                 Bar.from_json(b)
                 for b in json.loads(
                     Path("tests/fixtures/stock_bars.json").read_text(encoding="utf-8")
-                )["bars"]["SPY"]
+                )["bars"]
             ],
         ),
         chain,

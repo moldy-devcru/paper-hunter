@@ -13,7 +13,9 @@ Source: docs/research/2026-10-02-options-data-sources.md
 Facts this client encodes rather than re-derives:
 
 * Base URLs. Trading (paper): ``https://paper-api.alpaca.markets``. Data:
-  ``https://data.alpaca.markets``. Options chain snapshots are v2beta1.
+  ``https://data.alpaca.markets``. Stock bars are v2 and single-symbol
+  (``/v2/stocks/{symbol}/bars``); options chain snapshots are v1beta1
+  (``/v1beta1/options/snapshots/{underlying}``).
 * Free / Basic plan. Equities realtime is **IEX only**; options realtime is the
   **Indicative Pricing Feed** (synthetic quotes, trades delayed 15 min); historical
   SIP bars are queryable as long as ``end`` is at least 15 minutes old. We never
@@ -34,22 +36,29 @@ pytest output.
 Offline tests
 -------------
 ``Transport`` is the single seam. ``UrllibTransport`` does real HTTPS; tests inject
-``MockTransport`` with canned JSON fixtures shaped exactly like Alpaca's documented
-responses. Nothing in the test suite touches the network.
+``MockTransport`` with canned JSON fixtures shaped exactly like Alpaca's *documented*
+responses — flat bar lists, contract-symbol-keyed snapshot dicts, and a query-param
+contract enforced per route. See :data:`DOC_VERIFIED_ROUTES`. Nothing in the test
+suite touches the network.
 
 Python 3.12+, stdlib only (``urllib``) — consistent with executor/indicators.py's
 zero-transitive-risk rule. No ``httpx`` dependency is added.
 
 # INTERPRETATION: ``timeframe`` values are the Alpaca wire strings ("1Min", "5Min",
-# "1Day"). Daily bars use the v2 ``/v2/stocks/bars`` route; intraday bars use the same
-# route with a ``timeframe`` parameter (the v1 route is the legacy shape and returns
-# a different envelope).
+# "1Day"). Daily and intraday bars use the *same* single-symbol route
+# ``GET /v2/stocks/{symbol}/bars`` with different ``timeframe`` values — the symbol is
+# a path segment. (The multi-symbol ``/v2/stocks/bars?symbols=...`` route exists and is
+# not what this client calls.)
+
+Every route below is doc-verified; ``tests/test_alpaca_routes.py`` pins each path shape
+so route drift fails in CI instead of on a live 3am soak run.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -65,11 +74,33 @@ from typing import Any, Literal, Protocol
 
 PAPER_TRADING_BASE = "https://paper-api.alpaca.markets"
 DATA_BASE = "https://data.alpaca.markets"
-STOCK_BARS_PATH = "/v2/stocks/bars"
-OPTIONS_SNAPSHOTS_PATH = "/v2beta1/options/snapshots"
+
+#: Single-symbol historical stock bars. ``{symbol}`` is substituted into the **path**.
+#: https://docs.alpaca.markets/us/reference/stockbarsingle-1
+#:
+#: The multi-symbol sibling (``/v2/stocks/bars?symbols=AAPL,MSFT``) is a *different*
+#: route with a different query contract and a different response envelope. Mixing the
+#: two is not a typo you get a free pass on: the multi-symbol route requires the
+#: ``symbols`` query param and returns 400 ``"query parameter 'symbols' is required"``
+#: if it is missing. See ``tests/test_alpaca_routes.py``.
+STOCK_BARS_PATH = "/v2/stocks/{symbol}/bars"
+
+#: Whole-chain option snapshots for one underlying.
+#: https://docs.alpaca.markets/us/reference/optionchain
+#:
+#: Options endpoints are **v1beta1**, not v2beta1 — there is no ``v2beta1`` anywhere in
+#: the current Alpaca API reference, and a request to an unknown version 404s.
+OPTIONS_SNAPSHOTS_PATH = "/v1beta1/options/snapshots"
+
 ACCOUNT_PATH = "/v2/account"
 POSITIONS_PATH = "/v2/positions"
 CLOCK_PATH = "/v2/clock"
+
+
+def stock_bars_path(symbol: str) -> str:
+    """Path for one symbol's bars. The symbol is a path segment, not a query param."""
+    return STOCK_BARS_PATH.format(symbol=urllib.parse.quote(symbol.upper(), safe=""))
+
 
 KEY_ENV = "ALPACA_PAPER_KEY"
 SECRET_ENV = "ALPACA_PAPER_SECRET"
@@ -182,21 +213,124 @@ def _api_message(raw: str) -> str:
     return raw[:300]
 
 
+@dataclass(frozen=True, slots=True)
+class DocRoute:
+    """One doc-verified Alpaca route: its path template, its real query params, its URL.
+
+    This is the load-bearing part of the offline test story. The mock used to be a
+    permissive lookup table keyed by whatever path the production code happened to
+    ask for, which meant it happily mirrored a *wrong* route — 537 green tests and a
+    live ``HTTP 400`` on the first real call. Recording the documented contract here
+    and validating against it means a drifted path or a renamed query parameter fails
+    in the test suite instead of at 3am.
+    """
+
+    path: str
+    doc_url: str
+    query_params: frozenset[str]
+    base: str
+
+
+#: Every route this project talks to, doc-verified. Single source of truth for both the
+#: constants above and the offline mock's fidelity check.
+DOC_VERIFIED_ROUTES: tuple[DocRoute, ...] = (
+    DocRoute(
+        path="/v2/stocks/{symbol}/bars",
+        doc_url="https://docs.alpaca.markets/us/reference/stockbarsingle-1",
+        query_params=frozenset(
+            {
+                "timeframe",
+                "feed",
+                "start",
+                "end",
+                "limit",
+                "adjustment",
+                "page_token",
+                "asof",
+                "sort",
+                "currency",
+            }
+        ),
+        base=DATA_BASE,
+    ),
+    DocRoute(
+        path="/v1beta1/options/snapshots/{underlying_symbol}",
+        doc_url="https://docs.alpaca.markets/us/reference/optionchain",
+        query_params=frozenset(
+            {
+                "feed",
+                "limit",
+                "updated_since",
+                "page_token",
+                "type",
+                "strike_price_gte",
+                "strike_price_lte",
+                "expiration_date",
+                "expiration_date_gte",
+                "expiration_date_lte",
+                "root_symbol",
+            }
+        ),
+        base=DATA_BASE,
+    ),
+    DocRoute(
+        path="/v2/account",
+        doc_url="https://docs.alpaca.markets/reference/getaccount-1",
+        query_params=frozenset(),
+        base=PAPER_TRADING_BASE,
+    ),
+    DocRoute(
+        path="/v2/positions",
+        doc_url="https://docs.alpaca.markets/reference/getopenpositions-1",
+        query_params=frozenset({"symbols", "side"}),
+        base=PAPER_TRADING_BASE,
+    ),
+    DocRoute(
+        path="/v2/clock",
+        doc_url="https://docs.alpaca.markets/reference/getclock-1",
+        query_params=frozenset(),
+        base=PAPER_TRADING_BASE,
+    ),
+)
+
+
+def match_doc_route(path: str) -> DocRoute | None:
+    """Match a concrete request path against the doc-verified route templates."""
+    for route in DOC_VERIFIED_ROUTES:
+        pattern = "^" + re.sub(r"\\\{[a-z_]+\\\}", "[^/]+", re.escape(route.path)) + "$"
+        if re.match(pattern, path):
+            return route
+    return None
+
+
 class MockTransport:
-    """Offline transport: canned JSON keyed by ``(METHOD, path)``.
+    """Offline transport: canned JSON keyed by request path.
 
     ``routes`` maps a path to either a payload (returned as-is) or to a callable
     ``(params) -> payload``. A request with no matching route raises
     ``AlpacaAPIError(404)`` — the same shape as the real API, so a wrong path in
     production code fails loudly in tests instead of silently returning nothing.
 
+    Fidelity guarantee
+    ------------------
+    The routes and envelopes here mirror **doc-verified** paths (see
+    :data:`DOC_VERIFIED_ROUTES`), and by default the mock also enforces the real API's
+    query-parameter contract: a parameter the documentation does not list for that
+    route raises ``AlpacaAPIError(400)``, exactly as Alpaca rejects an invalid format.
+    That is the specific check that would have caught the live bug — sending ``symbol``
+    as a query param to the bars route is a documented 400 ("query parameter 'symbols'
+    is required"), so the mock now refuses to be wrong about it.
+
+    Pass ``strict=False`` only for a deliberately ad-hoc shape.
+
     This class is import-safe in production but useless without routes; that is
     intentional. Nothing here reads an environment variable.
     """
 
-    def __init__(self, routes: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, routes: Mapping[str, Any] | None = None, *, strict: bool = True) -> None:
         self.routes: dict[str, Any] = dict(routes or {})
         self.calls: list[tuple[str, Mapping[str, str] | None]] = []
+        self.strict = strict
 
     def add(self, path: str, payload: Any) -> MockTransport:
         self.routes[path] = payload
@@ -211,12 +345,27 @@ class MockTransport:
     ) -> Any:
         self.calls.append((url, dict(params or {})))
         path = urllib.parse.urlsplit(url).path
+        if self.strict:
+            self._enforce_doc_contract(path, dict(params or {}))
         if path not in self.routes:
             raise AlpacaAPIError(404, f"no mock route for {path}", path=path)
         payload = self.routes[path]
         if callable(payload):
             return payload(dict(params or {}))
         return payload
+
+    def _enforce_doc_contract(self, path: str, params: Mapping[str, str]) -> None:
+        route = match_doc_route(path)
+        if route is None:
+            raise AlpacaAPIError(404, f"{path} is not a doc-verified Alpaca route", path=path)
+        unknown = sorted(set(params) - route.query_params)
+        if unknown:
+            raise AlpacaAPIError(
+                400,
+                f"invalid parameter(s) for {route.path}: {', '.join(unknown)} "
+                f"(see {route.doc_url})",
+                path=path,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -734,9 +883,7 @@ class AlpacaClient:
         """
         key = os.environ.get(KEY_ENV, "")
         secret = os.environ.get(SECRET_ENV, "")
-        missing = [
-            name for name, value in ((KEY_ENV, key), (SECRET_ENV, secret)) if not value
-        ]
+        missing = [name for name, value in ((KEY_ENV, key), (SECRET_ENV, secret)) if not value]
         if missing:
             raise AlpacaConfigError(
                 f"missing Alpaca credential env var(s): {', '.join(missing)} "
@@ -790,7 +937,11 @@ class AlpacaClient:
         page_token: str | None = None,
         asof: str | None = None,
     ) -> BarSeries:
-        """``GET /v2/stocks/bars`` for one symbol.
+        """``GET /v2/stocks/{symbol}/bars`` for one symbol.
+
+        ``symbol`` is interpolated into the path (not sent as a query param — that is
+        the multi-symbol route's contract, and using it here is what produced the live
+        ``400: query parameter 'symbols' is required``).
 
         ``end`` defaults to now. On the free tier a SIP query needs ``end`` at least
         15 minutes old; :func:`sip_end_is_queryable` is the honest check and this
@@ -800,9 +951,8 @@ class AlpacaClient:
         """
         payload = self._get(
             self.data_base,
-            STOCK_BARS_PATH,
+            stock_bars_path(symbol),
             {
-                "symbol": symbol,
                 "timeframe": timeframe,
                 "feed": feed,
                 "start": start,
@@ -816,21 +966,43 @@ class AlpacaClient:
         return _bar_series_from_payload(symbol, timeframe, feed, payload)
 
     def get_daily_bars(
-        self, symbol: str, *, feed: Feed, start: str | None = None, end: str | None = None,
-        limit: int | None = None, adjustment: str | None = "all",
+        self,
+        symbol: str,
+        *,
+        feed: Feed,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
+        adjustment: str | None = "all",
     ) -> BarSeries:
         return self.get_bars(
-            symbol, timeframe="1Day", feed=feed, start=start, end=end, limit=limit,
+            symbol,
+            timeframe="1Day",
+            feed=feed,
+            start=start,
+            end=end,
+            limit=limit,
             adjustment=adjustment,
         )
 
     def get_intraday_bars(
-        self, symbol: str, *, timeframe: Timeframe, feed: Feed, start: str | None = None,
-        end: str | None = None, limit: int | None = None,
+        self,
+        symbol: str,
+        *,
+        timeframe: Timeframe,
+        feed: Feed,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int | None = None,
     ) -> BarSeries:
-        """Intraday bars. Same route; the v2 envelope is identical for every timeframe."""
+        """Intraday bars. Same single-symbol route; ``timeframe`` selects the interval."""
         return self.get_bars(
-            symbol, timeframe=timeframe, feed=feed, start=start, end=end, limit=limit,
+            symbol,
+            timeframe=timeframe,
+            feed=feed,
+            start=start,
+            end=end,
+            limit=limit,
             adjustment="raw",
         )
 
@@ -844,28 +1016,37 @@ class AlpacaClient:
         limit: int | None = 100,
         updated_since: str | None = None,
         page_token: str | None = None,
-        strike_gte: float | None = None,
-        strike_lte: float | None = None,
-        expiration_gte: str | None = None,
-        expiration_lte: str | None = None,
+        right: Literal["call", "put"] | None = None,
+        strike_price_gte: float | None = None,
+        strike_price_lte: float | None = None,
+        expiration_date: str | None = None,
+        expiration_date_gte: str | None = None,
+        expiration_date_lte: str | None = None,
     ) -> OptionChain:
-        """One page of ``GET /v2beta1/options/snapshots/{underlying}``.
+        """One page of ``GET /v1beta1/options/snapshots/{underlying_symbol}``.
 
         A full SPY chain is multi-page even at ``limit=1000``; use
         :meth:`get_option_chain` unless you specifically want one page.
+
+        The filter parameters are named exactly as the reference names them
+        (``strike_price_gte``, ``expiration_date_gte``, …). The plausible-looking
+        ``strike_gte``/``expiration_gte`` pair does not exist on this route; Alpaca
+        rejects unknown query parameters rather than ignoring them.
         """
         payload = self._get(
             self.data_base,
-            f"{OPTIONS_SNAPSHOTS_PATH}/{underlying.upper()}",
+            f"{OPTIONS_SNAPSHOTS_PATH}/{urllib.parse.quote(underlying.upper(), safe='')}",
             {
                 "feed": feed,
                 "limit": limit,
                 "updated_since": updated_since,
                 "page_token": page_token,
-                "strike_gte": strike_gte,
-                "strike_lte": strike_lte,
-                "expiration_gte": expiration_gte,
-                "expiration_lte": expiration_lte,
+                "type": right,
+                "strike_price_gte": strike_price_gte,
+                "strike_price_lte": strike_price_lte,
+                "expiration_date": expiration_date,
+                "expiration_date_gte": expiration_date_gte,
+                "expiration_date_lte": expiration_date_lte,
             },
         )
         return _chain_from_payload(underlying, feed, payload)
@@ -918,17 +1099,33 @@ class AlpacaClient:
 # ---------------------------------------------------------------------------
 
 
-def _bar_series_from_payload(
-    symbol: str, timeframe: str, feed: str, payload: Any
-) -> BarSeries:
+def _bar_series_from_payload(symbol: str, timeframe: str, feed: str, payload: Any) -> BarSeries:
+    """Parse the **single-symbol** bars envelope.
+
+    The documented shape for ``/v2/stocks/{symbol}/bars`` is flat::
+
+        {"bars": [{"t": ..., "o": ...}, ...], "symbol": "AAPL", "next_page_token": null}
+
+    ``bars`` is a *list* here. The symbol-keyed object (``{"bars": {"AAPL": [...]}}``)
+    belongs to the multi-symbol route ``/v2/stocks/bars?symbols=...``, which is a
+    different route with a different contract. Accepting both is deliberate: reading
+    only the documented shape would turn a silent API change into an empty series
+    rather than an error, and reading only the keyed shape is what the old mock taught.
+    """
     if not isinstance(payload, dict):
         raise AlpacaError(f"unexpected bars payload type {type(payload).__name__}")
     bars_block = payload.get("bars")
-    if not isinstance(bars_block, dict):
+    if bars_block is None:
         raise AlpacaError("bars payload has no 'bars' object")
-    raw_bars = bars_block.get(symbol) or bars_block.get(symbol.upper()) or []
+    if isinstance(bars_block, dict):
+        raw_bars = bars_block.get(symbol) or bars_block.get(symbol.upper()) or []
+    elif isinstance(bars_block, list):
+        raw_bars = bars_block
+    else:
+        raise AlpacaError(f"bars payload has a 'bars' of unusable type {type(bars_block).__name__}")
     bars = [Bar.from_json(b) for b in raw_bars]
-    bars.sort(key=lambda b: b.t)  # Alpaca returns oldest-first; sort so we do not assume it.
+    # The API sorts by symbol then timestamp; we sort so we do not *assume* it.
+    bars.sort(key=lambda b: b.t)
     return BarSeries(
         symbol=symbol,
         timeframe=timeframe,  # type: ignore[arg-type]
@@ -939,21 +1136,26 @@ def _bar_series_from_payload(
 
 
 def _chain_from_payload(underlying: str, feed: str, payload: Any) -> OptionChain:
-    """Parse the double-nested snapshots envelope Alpaca actually returns:
+    """Parse the documented chain envelope:
 
-    ``{"snapshots": {"snapshots": [...]}, "next_page_token": null}``
+    ``{"snapshots": {"SPY251220C00685000": {...snapshot...}}, "next_page_token": null}``
 
-    The nesting is real (outer = request metadata, inner = the contracts) and is the
-    kind of detail that is easy to get wrong, so it is parsed in one place and
-    tested against a canned fixture of exactly that shape.
+    ``snapshots`` is a **dict keyed by OCC contract symbol**, not a list, and there is
+    no inner nesting. The keyed object is also the source of truth for the symbol:
+    it is read from the key rather than from a field inside the snapshot, so a chain
+    can never be mislabelled.
     """
     if not isinstance(payload, dict):
         raise AlpacaError(f"unexpected chain payload type {type(payload).__name__}")
-    outer = payload.get("snapshots")
-    if not isinstance(outer, dict):
+    snapshots = payload.get("snapshots")
+    if not isinstance(snapshots, dict):
         raise AlpacaError("chain payload has no 'snapshots' object")
-    raw_contracts = outer.get("snapshots") or []
-    contracts = [OptionContract.from_json(c) for c in raw_contracts]
+    contracts = []
+    for occ_symbol, snapshot in snapshots.items():
+        if not isinstance(snapshot, dict):
+            continue
+        enriched = {"symbol": occ_symbol, **snapshot}
+        contracts.append(OptionContract.from_json(enriched))
     return OptionChain(
         underlying=underlying.upper(),
         feed=feed,
@@ -964,7 +1166,9 @@ def _chain_from_payload(underlying: str, feed: str, payload: Any) -> OptionChain
 
 
 def sip_end_is_queryable(
-    end: datetime | None, *, now: datetime | None = None,
+    end: datetime | None,
+    *,
+    now: datetime | None = None,
     min_age_minutes: float = SIP_HISTORY_MIN_AGE_MINUTES,
 ) -> bool:
     """Whether ``end`` is old enough for a free-tier SIP historical query.
@@ -988,9 +1192,6 @@ def sip_end_is_queryable(
     return age >= min_age_minutes
 
 
-
-
-
 __all__ = [
     "ACCOUNT_PATH",
     "AlpacaAPIError",
@@ -1003,6 +1204,8 @@ __all__ = [
     "CLOCK_PATH",
     "Clock",
     "DATA_BASE",
+    "DOC_VERIFIED_ROUTES",
+    "DocRoute",
     "Greeks",
     "KEY_ENV",
     "MockTransport",
@@ -1023,6 +1226,8 @@ __all__ = [
     "STOCK_BARS_PATH",
     "Transport",
     "UrllibTransport",
+    "match_doc_route",
     "parse_occ_symbol",
     "sip_end_is_queryable",
+    "stock_bars_path",
 ]

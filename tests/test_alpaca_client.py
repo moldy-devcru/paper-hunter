@@ -24,7 +24,6 @@ from executor.alpaca_client import (
     PAPER_TRADING_BASE,
     POSITIONS_PATH,
     SECRET_ENV,
-    STOCK_BARS_PATH,
     AlpacaAPIError,
     AlpacaClient,
     AlpacaConfigError,
@@ -34,7 +33,12 @@ from executor.alpaca_client import (
     RateLimitError,
     parse_occ_symbol,
     sip_end_is_queryable,
+    stock_bars_path,
 )
+
+#: The concrete single-symbol bars path. Route pinning lives in test_alpaca_routes.py;
+#: these tests care about parsing, not URLs.
+BARS_PATH = stock_bars_path("SPY")
 
 JUNK_KEY = "TESTKEY-not-a-real-key"
 JUNK_SECRET = "TESTSECRET-not-a-real-secret"  # noqa: S105 - deliberately fake
@@ -58,9 +62,7 @@ def client_and_transport(routes: dict, **kwargs) -> tuple[AlpacaClient, MockTran
     can silently stop testing anything.
     """
     transport = MockTransport(routes)
-    client = AlpacaClient(
-        transport=transport, key=JUNK_KEY, secret=JUNK_SECRET, **kwargs
-    )
+    client = AlpacaClient(transport=transport, key=JUNK_KEY, secret=JUNK_SECRET, **kwargs)
     return client, transport
 
 
@@ -128,20 +130,19 @@ def test_base_urls_are_paper_trading_and_data(monkeypatch):
     assert DATA_BASE == "https://data.alpaca.markets"
 
 
-def test_bars_hit_v2_stock_bars_with_the_feed_param():
-    client, transport = client_and_transport({STOCK_BARS_PATH: load_fixture("stock_bars.json")})
+def test_bars_hit_the_single_symbol_bars_route_with_the_feed_param():
+    client, transport = client_and_transport({BARS_PATH: load_fixture("stock_bars.json")})
     series = client.get_daily_bars("SPY", feed="sip", start="2025-12-16", end="2025-12-18")
     url, params = transport.calls[0]
-    assert url == "https://data.alpaca.markets/v2/stocks/bars"
-    assert params["symbol"] == "SPY"
+    assert url == "https://data.alpaca.markets/v2/stocks/SPY/bars"
     assert params["timeframe"] == "1Day"
     assert params["feed"] == "sip"
+    assert "symbol" not in params
     assert len(series) == 3
 
 
 def test_intraday_bars_use_the_same_route_with_an_intraday_timeframe():
-    payload = {"bars": {"SPY": load_fixture("stock_bars.json")["bars"]["SPY"]}}
-    client, transport = client_and_transport({STOCK_BARS_PATH: payload})
+    client, transport = client_and_transport({BARS_PATH: {"bars": [], "next_page_token": None}})
     series = client.get_intraday_bars("SPY", timeframe="5Min", feed="iex")
     _, params = transport.calls[0]
     assert params["timeframe"] == "5Min"
@@ -155,7 +156,7 @@ def test_intraday_bars_use_the_same_route_with_an_intraday_timeframe():
 
 
 def test_bars_parse_to_typed_objects_oldest_first():
-    client = client_with({STOCK_BARS_PATH: load_fixture("stock_bars.json")})
+    client = client_with({BARS_PATH: load_fixture("stock_bars.json")})
     series = client.get_daily_bars("SPY", feed="sip")
     assert series.closes == [679.88, 681.95, 678.44]
     assert series.bars[0].t == dt.datetime(2025, 12, 16, 5, 0, tzinfo=dt.UTC)
@@ -167,8 +168,8 @@ def test_bars_parse_to_typed_objects_oldest_first():
 
 def test_bars_are_sorted_even_if_the_api_returns_them_newest_first():
     raw = load_fixture("stock_bars.json")
-    raw["bars"]["SPY"] = list(reversed(raw["bars"]["SPY"]))
-    client = client_with({STOCK_BARS_PATH: raw})
+    raw["bars"] = list(reversed(raw["bars"]))
+    client = client_with({BARS_PATH: raw})
     series = client.get_daily_bars("SPY", feed="sip")
     assert [b.t for b in series.bars] == sorted(b.t for b in series.bars)
     # The fixture's closes are 679.88, 681.95, 678.44 in date order — deliberately not
@@ -180,20 +181,20 @@ def test_malformed_bars_payload_is_an_error_not_an_empty_series():
     """An empty ``bars: {}`` for the requested symbol is a legitimate "no data"; a
     payload with no ``bars`` object at all is a shape error and must not be read as
     "zero bars, indicators undefined"."""
-    client = client_with({STOCK_BARS_PATH: {"next_page_token": None}})
+    client = client_with({BARS_PATH: {"next_page_token": None}})
     with pytest.raises(AlpacaError, match="bars payload"):
         client.get_daily_bars("SPY", feed="sip")
 
 
 def test_bars_payload_with_no_data_for_the_symbol_is_an_empty_series():
-    client = client_with({STOCK_BARS_PATH: {"bars": {}, "next_page_token": None}})
+    client = client_with({BARS_PATH: {"bars": [], "symbol": "SPY", "next_page_token": None}})
     series = client.get_daily_bars("SPY", feed="sip")
     assert len(series) == 0
     assert series.closes == []
 
 
 def test_bar_without_a_timestamp_is_rejected():
-    client = client_with({STOCK_BARS_PATH: {"bars": {"SPY": [{"c": "1.0"}]}}})
+    client = client_with({BARS_PATH: {"bars": [{"c": "1.0"}], "next_page_token": None}})
     with pytest.raises(AlpacaError, match="timestamp"):
         client.get_daily_bars("SPY", feed="sip")
 
@@ -221,11 +222,9 @@ def test_option_chain_defaults_to_the_indicative_feed_on_the_free_tier():
     client.get_option_chain_page("SPY")
     _, params = transport.calls[0]
     assert params["feed"] == "indicative"
-    assert url_path_is_v2beta1(transport.calls[0][0])
-
-
-def url_path_is_v2beta1(url: str) -> bool:
-    return url.startswith("https://data.alpaca.markets/v2beta1/options/snapshots/")
+    assert transport.calls[0][0].startswith(
+        "https://data.alpaca.markets/v1beta1/options/snapshots/"
+    )
 
 
 def test_contract_parses_greeks_iv_quote_and_bars():
@@ -233,7 +232,10 @@ def test_contract_parses_greeks_iv_quote_and_bars():
     chain = client.get_option_chain_page("SPY")
     call = next(c for c in chain if c.symbol == "SPY251220C00685000")
     assert (call.underlying, call.expiry, call.strike, call.right) == (
-        "SPY", "20251220", 685.0, "call"
+        "SPY",
+        "20251220",
+        685.0,
+        "call",
     )
     assert call.implied_volatility == pytest.approx(0.1710488)
     assert call.greeks.delta == pytest.approx(0.1984)
@@ -268,16 +270,15 @@ def test_atm_contract_is_the_nearest_strike_and_prefers_calls():
 
 
 def test_chain_pagination_follows_the_token_and_dedupes():
+    # The documented envelope keys ``snapshots`` by OCC contract symbol (optionchain).
     page1 = {
-        "snapshots": {"snapshots": [_contract("SPY251220C00680000", 680.0, "call")]},
+        "snapshots": {"SPY251220C00680000": _contract(680.0, "call")},
         "next_page_token": "tok-1",
     }
     page2 = {
         "snapshots": {
-            "snapshots": [
-                _contract("SPY251220C00680000", 680.0, "call"),  # overlap, must dedupe
-                _contract("SPY251220C00685000", 685.0, "call"),
-            ]
+            "SPY251220C00680000": _contract(680.0, "call"),  # overlap, must dedupe
+            "SPY251220C00685000": _contract(685.0, "call"),
         },
         "next_page_token": None,
     }
@@ -298,7 +299,7 @@ def test_chain_pagination_follows_the_token_and_dedupes():
 def test_pagination_stops_at_max_pages_and_leaves_the_token_set():
     """An unbounded page loop against a paged API is how a data layer drains a wallet."""
     always_more = {
-        "snapshots": {"snapshots": [_contract("SPY251220C00680000", 680.0, "call")]},
+        "snapshots": {"SPY251220C00680000": _contract(680.0, "call")},
         "next_page_token": "never-done",
     }
     client, transport = client_and_transport({f"{OPTIONS_SNAPSHOTS_PATH}/SPY": always_more})
@@ -307,31 +308,65 @@ def test_pagination_stops_at_max_pages_and_leaves_the_token_set():
     assert chain.next_page_token == "never-done"
 
 
-def _contract(symbol: str, strike: float, right: str) -> dict:
+def _contract(strike: float, right: str) -> dict:
+    """One snapshot, keyed shape. The OCC symbol is the dict key, not a field."""
     return {
-        "symbol": symbol,
         "impliedVolatility": "0.17",
         "greeks": {
-            "delta": "0.4", "gamma": "0.02", "theta": "-0.09", "vega": "0.10", "rho": "0.05"
+            "delta": "0.4",
+            "gamma": "0.02",
+            "theta": "-0.09",
+            "vega": "0.10",
+            "rho": "0.05",
         },
         "latestQuote": {
-            "ap": "1.00", "as": 10, "bp": "0.95", "bs": 10, "t": "2025-12-18T19:59:58Z"
+            "ap": "1.00",
+            "as": 10,
+            "bp": "0.95",
+            "bs": 10,
+            "t": "2025-12-18T19:59:58Z",
         },
         "latestTrade": {"p": "0.97", "s": 5, "t": "2025-12-18T19:59:59Z"},
-        "dailyBar": {"t": "2025-12-18T05:00:00Z", "o": "0.9", "h": "1.0", "l": "0.9", "c": "0.97",
-                     "v": "100", "n": 5, "vw": "0.97"},
+        "dailyBar": {
+            "t": "2025-12-18T05:00:00Z",
+            "o": "0.9",
+            "h": "1.0",
+            "l": "0.9",
+            "c": "0.97",
+            "v": "100",
+            "n": 5,
+            "vw": "0.97",
+        },
     }
 
 
-def test_chain_payload_without_the_outer_snapshots_object_is_an_error():
+def test_chain_payload_without_the_snapshots_object_is_an_error():
     client = client_with({f"{OPTIONS_SNAPSHOTS_PATH}/SPY": {"next_page_token": None}})
     with pytest.raises(AlpacaError, match="snapshots"):
         client.get_option_chain_page("SPY")
 
 
+def test_chain_symbol_comes_from_the_envelope_key_not_a_field():
+    """Alpaca keys ``snapshots`` by OCC symbol; the symbol is not inside the snapshot.
+    Taking it from the key is what stops a chain from being silently mislabelled."""
+    client = client_with(
+        {
+            f"{OPTIONS_SNAPSHOTS_PATH}/SPY": {
+                "snapshots": {"SPY251220C00685000": _contract(685.0, "call")},
+                "next_page_token": None,
+            }
+        }
+    )
+    chain = client.get_option_chain_page("SPY")
+    assert [c.symbol for c in chain] == ["SPY251220C00685000"]
+    only = next(iter(chain))
+    assert only.strike == 685.0
+    assert only.right == "call"
+
+
 def test_malformed_contract_symbol_is_rejected_loudly():
     client = client_with(
-        {f"{OPTIONS_SNAPSHOTS_PATH}/SPY": {"snapshots": {"snapshots": [{"symbol": "SPYXX"}]}}}
+        {f"{OPTIONS_SNAPSHOTS_PATH}/SPY": {"snapshots": {"SPYXX": {}}, "next_page_token": None}}
     )
     with pytest.raises(AlpacaError, match="OCC"):
         client.get_option_chain_page("SPY")
@@ -525,8 +560,9 @@ def test_no_credential_env_var_is_set_during_the_suite(monkeypatch):
 
 
 def test_mock_transport_records_calls_without_a_socket():
-    client, transport = client_and_transport({STOCK_BARS_PATH: synthetic_daily_payload(count=5)})
+    client, transport = client_and_transport({BARS_PATH: synthetic_daily_payload(count=5)})
     client.get_daily_bars("SPY", feed="iex")
     assert len(transport.calls) == 1
+    assert transport.calls[0][0] == "https://data.alpaca.markets/v2/stocks/SPY/bars"
     assert transport.calls[0][1]["feed"] == "iex"
     assert json.dumps(dict(transport.calls[0][1]))  # params are plain JSON-safe scalars

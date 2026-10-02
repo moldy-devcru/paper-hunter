@@ -63,7 +63,7 @@ def short_payload():
 def series_from(payload: dict, *, feed: str | None = None) -> BarSeries:
     from executor.alpaca_client import Bar
 
-    bars = sorted((Bar.from_json(b) for b in payload["bars"]["SPY"]), key=lambda b: b.t)
+    bars = sorted((Bar.from_json(b) for b in payload["bars"]), key=lambda b: b.t)
     return BarSeries(
         symbol="SPY",
         timeframe="1Day",
@@ -340,7 +340,7 @@ def test_mismatched_feed_propagates_to_pending_reasons(long_payload):
 
 
 def test_macd_cross_is_found_and_aged_in_hours():
-    closes = synthetic_daily_payload(count=LONG)["bars"]["SPY"]
+    closes = synthetic_daily_payload(count=LONG)["bars"]
     closes = [float(b["c"]) for b in closes]
     start = SYNTH_START
     times = [
@@ -360,7 +360,7 @@ def test_macd_cross_is_found_and_aged_in_hours():
 def test_cross_age_is_measured_from_the_bar_not_the_wall_clock():
     """A snapshot recomputed at 16:15 must report age as of the close, or the journal's
     numbers stop being reproducible from the same bars."""
-    closes = [float(b["c"]) for b in synthetic_daily_payload(count=LONG)["bars"]["SPY"]]
+    closes = [float(b["c"]) for b in synthetic_daily_payload(count=LONG)["bars"]]
     result = build_from_bars(synthetic_daily_payload(count=LONG))
     cross_direction = result.snapshot.macd_cross_direction
     assert cross_direction in ("call", "put")
@@ -404,7 +404,7 @@ def test_intraday_series_ages_in_hours_too():
     """A 5-minute series must produce fractional-hour ages, or the whipsaw guard would
     be measuring the wrong unit entirely."""
     payload = synthetic_daily_payload(count=1)
-    bar = payload["bars"]["SPY"][0]
+    bar = payload["bars"][0]
     base = dt.datetime.fromisoformat(bar["t"].replace("Z", "+00:00"))
     # Ramp down then up so the macd line must cross the signal line at least once.
     closes: list[float] = []
@@ -442,7 +442,7 @@ def calendar_with(kind: str, day: dt.date) -> EventCalendar:
 
 
 def test_event_day_sets_is_event_day_and_records_kinds(long_payload):
-    last_bar = long_payload["bars"]["SPY"][-1]
+    last_bar = long_payload["bars"][-1]
     day = dt.datetime.fromisoformat(last_bar["t"].replace("Z", "+00:00")).date()
     result = build_from_bars(long_payload, calendar=calendar_with("fomc", day))
     assert result.snapshot.is_event_day is True
@@ -451,7 +451,7 @@ def test_event_day_sets_is_event_day_and_records_kinds(long_payload):
 
 
 def test_non_event_day_leaves_the_veto_clear(long_payload):
-    last_bar = long_payload["bars"]["SPY"][-1]
+    last_bar = long_payload["bars"][-1]
     day = dt.datetime.fromisoformat(last_bar["t"].replace("Z", "+00:00")).date()
     elsewhere = calendar_with("fomc", day + dt.timedelta(days=40))
     result = build_from_bars(long_payload, calendar=elsewhere)
@@ -462,7 +462,7 @@ def test_non_event_day_leaves_the_veto_clear(long_payload):
 def test_veto_kinds_filter_narrows_the_calendar(long_payload):
     """The rulebook declares [fomc, cpi] as veto kinds; OPEX is awareness only, so a
     filter passed through from the rulebook must actually exclude it."""
-    last_bar = long_payload["bars"]["SPY"][-1]
+    last_bar = long_payload["bars"][-1]
     day = dt.datetime.fromisoformat(last_bar["t"].replace("Z", "+00:00")).date()
     cal = calendar_with("opex", day)
     unfiltered = build_from_bars(long_payload, calendar=cal)
@@ -480,7 +480,7 @@ def test_no_calendar_means_no_veto(long_payload):
 def test_as_of_overrides_the_calendar_date(long_payload):
     """The EOD recompute runs on today's date, which may differ from the last bar's
     date (a stale feed, or a weekend)."""
-    last_bar = long_payload["bars"]["SPY"][-1]
+    last_bar = long_payload["bars"][-1]
     bar_day = dt.datetime.fromisoformat(last_bar["t"].replace("Z", "+00:00")).date()
     cal = calendar_with("cpi", bar_day + dt.timedelta(days=3))
     result = build_from_bars(long_payload, calendar=cal, as_of=bar_day + dt.timedelta(days=3))
@@ -516,7 +516,7 @@ def test_warmup_snapshot_makes_t1_pending_not_failed(short_payload, rules):
 
 
 def test_event_day_short_circuits_t5(long_payload, rules):
-    last_bar = long_payload["bars"]["SPY"][-1]
+    last_bar = long_payload["bars"][-1]
     day = dt.datetime.fromisoformat(last_bar["t"].replace("Z", "+00:00")).date()
     result = build_from_bars(long_payload, iv_rank=90.0, calendar=calendar_with("fomc", day))
     outcome = evaluate(result.snapshot, rules, direction="call", arm="B")

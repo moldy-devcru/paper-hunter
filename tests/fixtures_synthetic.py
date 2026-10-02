@@ -88,13 +88,16 @@ def synthetic_daily_payload(
             price = close
             i += 1
         day += dt.timedelta(days=1)
-    return {"symbol": "SPY", "feed": feed, "bars": {"SPY": bars}, "next_page_token": None}
+    # Mirrors the documented single-symbol envelope (stockbarsingle-1): ``bars`` is a
+    # flat list, not a symbol-keyed object. The keyed shape belongs to the
+    # multi-symbol route /v2/stocks/bars?symbols=..., which this project never calls.
+    return {"symbol": "SPY", "feed": feed, "bars": bars, "next_page_token": None}
 
 
 def with_volume_spike(payload: dict, *, multiplier: float = 2.2) -> dict:
     """Copy of a bars payload with the newest bar's volume multiplied (T4 test aid)."""
     out = json.loads(json.dumps(payload))
-    bars = out["bars"]["SPY"]
+    bars = out["bars"]
     bars[-1]["v"] = bars[-1]["v"] * multiplier
     return out
 
@@ -103,7 +106,7 @@ def series_from(payload: dict, *, feed: str | None = None):
     """Payload -> ``BarSeries`` (the shape the snapshot builder and hunt plan want)."""
     from executor.alpaca_client import Bar, BarSeries
 
-    bars = sorted((Bar.from_json(b) for b in payload["bars"]["SPY"]), key=lambda b: b.t)
+    bars = sorted((Bar.from_json(b) for b in payload["bars"]), key=lambda b: b.t)
     return BarSeries(
         symbol="SPY",
         timeframe="1Day",

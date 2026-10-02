@@ -763,8 +763,13 @@ def load_fixture_source(fixture_dir: Path = FIXTURE_DIR, symbol: str = "SPY") ->
     """
     bars_payload = json.loads((fixture_dir / "stock_bars.json").read_text(encoding="utf-8"))
     chain_payload = json.loads((fixture_dir / "option_chain.json").read_text(encoding="utf-8"))
-    bars_block = bars_payload.get("bars", {})
-    raw = bars_block.get(symbol) or next(iter(bars_block.values()), [])
+    # The fixture mirrors the documented single-symbol envelope: ``bars`` is a flat list.
+    bars_block = bars_payload.get("bars", [])
+    raw = (
+        bars_block
+        if isinstance(bars_block, list)
+        else bars_block.get(symbol) or next(iter(bars_block.values()), [])
+    )
     bars = [Bar.from_json(b) for b in raw]
     bars.sort(key=lambda b: b.t)
     chain = _chain_from_payload(symbol, CHAIN_FEED, chain_payload)
