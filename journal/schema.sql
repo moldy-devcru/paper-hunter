@@ -143,6 +143,87 @@ CREATE INDEX IF NOT EXISTS idx_positions_status ON positions (status);
 CREATE INDEX IF NOT EXISTS idx_positions_arm    ON positions (arm, status);
 
 -- ---------------------------------------------------------------------------
+-- shadow_roll_legs + shadow_roll_marks: the brief's "4th shadow-sim, costless".
+--
+-- Prediction #3 asks "do TA entries pick better roll points than a fixed quarterly
+-- roll?" The comparison arm is a hypothetical, not a position: nothing is bought, no
+-- premium is paid, no order exists. It lives in the journal anyway, under the same
+-- append-only discipline as everything else, because a comparison that is not
+-- recorded at decision time is a comparison that will be reconstructed from memory
+-- once the results look interesting.
+--
+-- DESIGN NOTE (vocabulary honesty): the `decisions` table deliberately does NOT
+-- carry these. Its `kind` vocabulary is TRADE/NO_TRADE/ROLL/STOP/PROPOSAL/VETO and
+-- its CHECK constraint enforces that; a shadow roll is none of those (nothing was
+-- traded, nothing rolled), and borrowing 'ROLL' for it would put a row in the
+-- decision ledger that no executor could ever have written — the exact kind of
+-- ambiguity this schema exists to prevent. Dedicated tables, same immutability.
+--
+-- A "roll" is expressed by lineage, not by mutating a leg: a new leg carries
+-- `supersedes_leg_id`, and a leg is closed exactly when some later leg supersedes it.
+-- So the whole shadow sim is insert-only — there is no UPDATE or DELETE path at all.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_roll_legs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                  TEXT    NOT NULL,   -- UTC ISO-8601, write time
+    -- ET session date the leg was opened on (the open of the quarterly expiry).
+    opened_on           TEXT    NOT NULL,   -- YYYY-MM-DD
+    -- The quarterly expiry this leg rolls INTO (3rd Friday of Mar/Jun/Sep/Dec).
+    expiry              TEXT    NOT NULL,   -- YYYY-MM-DD
+    underlying_close    REAL    NOT NULL,   -- SPY close on opened_on
+    -- Size in CONTRACT UNITS, where 1 unit = 100 shares of notional. Expressing the
+    -- shadow leg in contract units (not shares) is what makes the comparison with
+    -- arm C honest: both sides are then measured as return on capital deployed.
+    qty                 REAL    NOT NULL,   -- contract-equivalents, >= 0
+    strategy_version    TEXT    NOT NULL,
+    supersedes_leg_id   INTEGER REFERENCES shadow_roll_legs (id),
+    notes               TEXT,
+    created_at          TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_legs_opened ON shadow_roll_legs (opened_on);
+
+CREATE TRIGGER IF NOT EXISTS shadow_roll_legs_no_update
+BEFORE UPDATE ON shadow_roll_legs
+BEGIN
+    SELECT RAISE(ABORT, 'journal is append-only: shadow_roll_legs may not be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS shadow_roll_legs_no_delete
+BEFORE DELETE ON shadow_roll_legs
+BEGIN
+    SELECT RAISE(ABORT, 'shadow_roll_legs may not be deleted');
+END;
+
+CREATE TABLE IF NOT EXISTS shadow_roll_marks (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                  TEXT    NOT NULL,   -- UTC ISO-8601, mark time
+    leg_id              INTEGER NOT NULL REFERENCES shadow_roll_legs (id),
+    date                TEXT    NOT NULL,   -- YYYY-MM-DD (ET session date of the mark)
+    underlying_close    REAL    NOT NULL,
+    -- (close - entry_close) * 100 * qty, computed by the writer from the leg it
+    -- belongs to and stored, so a reader never has to re-derive the notional basis.
+    leg_pnl             REAL    NOT NULL,
+    basis               TEXT    NOT NULL,   -- 'underlying_notional' — see module docstring
+    notes               TEXT,
+    created_at          TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_marks_leg ON shadow_roll_marks (leg_id, date);
+
+CREATE TRIGGER IF NOT EXISTS shadow_roll_marks_no_update
+BEFORE UPDATE ON shadow_roll_marks
+BEGIN
+    SELECT RAISE(ABORT, 'journal is append-only: shadow_roll_marks may not be updated');
+END;
+
+CREATE TRIGGER IF NOT EXISTS shadow_roll_marks_no_delete
+BEFORE DELETE ON shadow_roll_marks
+BEGIN
+    SELECT RAISE(ABORT, 'shadow_roll_marks may not be deleted');
+END;
+
+-- ---------------------------------------------------------------------------
 -- meta: key/value with a semantic guard on the three keys the brief cares about.
 --   strategy_version  — append a row per frozen rulebook version
 --   window_start      — the experiment's day-1 anchor
