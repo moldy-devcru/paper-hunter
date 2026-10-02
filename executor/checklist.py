@@ -29,6 +29,7 @@ frozen source of truth for a veto.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -527,6 +528,34 @@ def evaluate(
         "T5": _t5(snapshot, rules, arm),
         "T6": _t6(snapshot, rules, arm),
     }
+
+    # T3 group semantics: the rulebook (and the brief: "T3: Bollinger condition —
+    # one of: (a) squeeze release, (b) band rejection") declares
+    # ``satisfied_if_any_of: [squeeze_release, band_rejection]``. Evaluate T3a/T3b
+    # as an OR group: if either PASSes the sibling becomes non-blocking context;
+    # if neither PASSes the group produces ONE veto (carried by T3a, with T3b's
+    # detail folded in) so the failure histogram counts T3 once, not twice.
+    # FIX (2026-10-02, Moldy review of Phase 4a flag): previously both were
+    # independently blocking, making T3 an AND — no series could ever fire.
+    t3a, t3b = conditions["T3a"], conditions["T3b"]
+    if t3a.status == "PASS" or t3b.status == "PASS":
+        satisfied_by = "T3a squeeze-release" if t3a.status == "PASS" else "T3b band-rejection"
+        if t3a.status != "PASS":
+            conditions["T3a"] = dataclasses.replace(
+                t3a, blocking=False,
+                detail=f"{t3a.detail} | T3 group satisfied by {satisfied_by}")
+        if t3b.status != "PASS":
+            conditions["T3b"] = dataclasses.replace(
+                t3b, blocking=False,
+                detail=f"{t3b.detail} | T3 group satisfied by {satisfied_by}")
+    else:
+        conditions["T3a"] = dataclasses.replace(
+            t3a,
+            detail=f"{t3a.detail} | T3 group veto: neither arm satisfied — "
+                   f"T3b also {t3b.status} ({t3b.detail})")
+        conditions["T3b"] = dataclasses.replace(
+            t3b, blocking=False,
+            detail=f"{t3b.detail} | folded into T3 group veto (carried by T3a)")
 
     veto_reasons: list[str] = []
     for condition_id, result in conditions.items():

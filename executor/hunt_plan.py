@@ -28,6 +28,20 @@ that has no honest level. Two conditions do have one and both are computed, not 
 * **T3b** — when the signal bar already tagged the band but closed outside it, the
   band edge is the trigger (the close must finish back inside).
 
+# INTERPRETATION: a non-blocking condition can still get a trigger, for T3 only.
+The rulebook's ``t3_bollinger.satisfied_if_any_of`` makes T3 an OR group, so when one
+T3 arm PASSes the sibling is reported FAIL (or whatever it is) but ``blocking=False``:
+it cannot veto. A blind "triggers = every blocking non-PASS condition" filter would
+then drop the band-edge level from the plan entirely — even though that level is the
+one number an intraday loop would actually watch, and even though reaching it flips
+T3b to PASS and satisfies the T3 group through the sibling. So the non-blocking T3
+arm keeps its trigger, with its reason prefixed ``NON-BLOCKING`` so the journal never
+reads as if it were vetoing anything. PENDING is still excluded regardless of blocking
+(an unevaluated condition has no level and no "already satisfied" story to tell), and
+this exception is deliberately scoped to the T3 group rather than made general: every
+other non-blocking condition in the checklist is SKIPPED-for-this-arm (T6 on arm C),
+which is a scope fact, not a near-miss.
+
 Journal vocabulary: PROPOSAL vs NO_TRADE
 ----------------------------------------
 ``journal.store.DecisionKind`` offers TRADE / NO_TRADE / ROLL / STOP / PROPOSAL / VETO.
@@ -60,6 +74,7 @@ Python 3.12+, stdlib + the already-built data/checklist/snapshot/journal layers.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -682,17 +697,41 @@ def compute_triggers(
 ) -> tuple[TriggerPrice, ...]:
     """One :class:`TriggerPrice` per blocking condition that is not PASS.
 
+    Plus, per the module INTERPRETATION above, the non-blocking arm of a T3 OR group
+    when it has actually failed — it cannot veto, but its price level is the one the
+    plan is for, and its reason is prefixed ``NON-BLOCKING`` so nothing downstream
+    mistakes it for a veto.
+
     Separate from :func:`build_hunt_plan` so the trigger logic can be exercised
     directly against a hand-built snapshot (which is the only way to reach, say, "T1
     fails purely because the close is under EMA50 while the EMA stack is aligned").
     """
-    return tuple(
+    triggers = [
         _trigger_for(
             cid, cond.status, cond.detail, snapshot_result, rules, direction, event_day_veto
         )
         for cid, cond in result.conditions.items()
         if cond.blocking and cond.status != "PASS"
-    )
+    ]
+    for cid in ("T3a", "T3b"):
+        cond = result.conditions.get(cid)
+        if cond is None or cond.blocking or cond.status in ("PASS", "PENDING"):
+            continue
+        trigger = _trigger_for(
+            cid, cond.status, cond.detail, snapshot_result, rules, direction, event_day_veto
+        )
+        triggers.append(
+            dataclasses.replace(
+                trigger,
+                reason=(
+                    f"NON-BLOCKING: T3 is satisfied_if_any_of and the sibling PASSes, so "
+                    f"{cid} cannot veto; this level is a watch level, not a blocker — and "
+                    f"if {cid} does flip to PASS the T3 group is satisfied through it too. "
+                    f"{trigger.reason}"
+                ),
+            )
+        )
+    return tuple(triggers)
 
 
 def make_arm_plan(
@@ -920,7 +959,9 @@ def summarise(plan: HuntPlan) -> str:
         lines.append(f"  EVENT-DAY HARD VETO: {'; '.join(plan.event_reasons)}")
     for cell in plan.arms:
         flags = ",".join(
-            f"{cid}:{c.status}"
+            # A non-blocking FAIL (the losing arm of the T3 OR group) is shown as such,
+            # so the flag list never reads as a veto the checklist did not raise.
+            f"{cid}:{c.status}{'' if c.blocking else '(non-blocking)'}"
             for cid, c in cell.checklist.conditions.items()
             if c.status != "PASS"
         )

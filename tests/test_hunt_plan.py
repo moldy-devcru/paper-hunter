@@ -299,12 +299,21 @@ def test_t1_trigger_is_null_when_the_ema_stack_itself_is_misaligned(calibrated):
 
 
 def test_t3b_trigger_is_the_band_edge_once_the_bar_tagged_it(calibrated):
-    snapshot = passing_snapshot(close=619.0)  # tagged the lower band, closed outside
+    # T3b FAILs on its own read, but T3a (squeeze-release) passes, so T3b is
+    # non-blocking. The band edge is still shown — it is the level an intraday loop
+    # would watch, and reaching it flips T3b to PASS and satisfies the group through
+    # the sibling. The reason says out loud that it cannot veto.
+    # close stays above EMA50 so T1 holds: only T3b fails, and only as a group loser.
+    snapshot = passing_snapshot(close=620.5)  # tagged the lower band, closed outside
     cell = cell_for(snapshot, calibrated)
+    assert cell.checklist.status("T3b") == "FAIL"
+    assert cell.checklist.conditions["T3b"].blocking is False
+    assert cell.checklist.fire is True
     trigger = next(t for t in cell.triggers if t.condition == "T3b")
     assert trigger.level == 621.0
     assert trigger.sense == "above"
     assert "closed outside" in trigger.reason
+    assert trigger.reason.startswith("NON-BLOCKING:")
 
 
 def test_t3b_trigger_is_null_when_the_band_was_never_tagged(calibrated):
@@ -313,6 +322,36 @@ def test_t3b_trigger_is_null_when_the_band_was_never_tagged(calibrated):
     trigger = next(t for t in cell.triggers if t.condition == "T3b")
     assert trigger.level is None
     assert "candle-shape" in trigger.reason
+
+
+def test_t3a_non_blocking_group_sibling_keeps_a_null_trigger(calibrated):
+    # Mirror of the T3b case: T3b band-rejection passes, T3a fails. T3a has no honest
+    # price level, so the plan shows the null trigger with the reason, marked
+    # non-blocking — rather than inventing a squeeze threshold price.
+    snapshot = passing_snapshot(bollinger=_bb(squeeze=False))
+    cell = cell_for(snapshot, calibrated)
+    assert cell.checklist.status("T3a") == "FAIL"
+    assert cell.checklist.conditions["T3a"].blocking is False
+    assert cell.checklist.fire is True
+    trigger = next(t for t in cell.triggers if t.condition == "T3a")
+    assert trigger.level is None
+    assert trigger.actionable is False
+    assert trigger.reason.startswith("NON-BLOCKING:")
+    assert "bandwidth-percentile" in trigger.reason
+
+
+def test_t3b_non_blocking_trigger_never_reads_as_a_veto(calibrated):
+    # A firing cell (T3a passes) still carries the T3b level. The journal row must make
+    # it obvious this is a watch level, not a blocker — PROPOSAL rows store triggers.
+    cell = cell_for(passing_snapshot(close=620.5), calibrated)
+    state = cell.to_state()
+    assert state["fire"] is True
+    assert state["failed_conditions"] == []
+    assert "T3b" not in {t["condition"] for t in state["trigger_prices"]
+                        if not t["reason"].startswith("NON-BLOCKING:")}
+    assert any(t["condition"] == "T3b" and t["actionable"] is True
+               and t["reason"].startswith("NON-BLOCKING:")
+               for t in state["trigger_prices"])
 
 
 @pytest.mark.parametrize(

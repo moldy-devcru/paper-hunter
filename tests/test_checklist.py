@@ -441,40 +441,49 @@ def test_t2b_fresh_cross_in_trade_direction_is_fine(calibrated):
 
 
 # ---------------------------------------------------------------------------
-# T3a / T3b
+# T3a / T3b reads (the individual logic — group semantics live further down)
 # ---------------------------------------------------------------------------
 
 
-def test_t3a_requires_expansion_in_trade_direction(calibrated):
+def test_t3a_rejects_expansion_against_the_trade_direction(calibrated):
+    # The T3 *read* fails, but T3b still passes, so the OR group is satisfied and the
+    # failure is context, not a veto. Blocking behaviour needs BOTH arms to fail.
     result = evaluate_arm_b(_snapshot(bollinger=_bb(middle_rising=False)), calibrated)
     assert result.status("T3a") == "FAIL"
     assert "against trade direction" in result.conditions["T3a"].detail
-    assert result.fire is False
+    assert result.status("T3b") == "PASS"
+    assert result.conditions["T3a"].blocking is False
+    assert result.fire is True
 
 
 def test_t3a_requires_bandwidth_expansion(calibrated):
     result = evaluate_arm_b(_snapshot(bollinger=_bb(bandwidth_expanding=False)), calibrated)
     assert result.status("T3a") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T3a"].blocking is False   # T3b carries the group
+    assert result.fire is True
 
 
 def test_t3a_no_squeeze(calibrated):
     result = evaluate_arm_b(_snapshot(bollinger=_bb(squeeze=False)), calibrated)
     assert result.status("T3a") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T3a"].blocking is False   # T3b carries the group
+    assert result.fire is True
 
 
 def test_t3b_band_rejection_requires_touch_and_close_back_inside(calibrated):
-    # Touched the band but closed below it: no rejection.
-    result = evaluate_arm_b(_snapshot(close=589.0, bollinger=_bb(low=588.0)), calibrated)
+    # Touched the band but closed below it: no rejection. T3a still passes, so the
+    # group is satisfied and the trade can fire.
+    result = evaluate_arm_b(_snapshot(close=592.0, bollinger=_bb(low=588.0)), calibrated)
     assert result.status("T3b") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T3b"].blocking is False
+    assert result.fire is True
 
 
 def test_t3b_no_touch(calibrated):
     result = evaluate_arm_b(_snapshot(bollinger=_bb(low=596.0)), calibrated)
     assert result.status("T3b") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T3b"].blocking is False
+    assert result.fire is True
 
 
 def test_t3b_put_rejection_is_inverted(calibrated):
@@ -489,7 +498,82 @@ def test_t3_pending_without_bollinger_state(calibrated):
     result = evaluate_arm_b(_snapshot(bollinger=None), calibrated)
     assert result.status("T3a") == "PENDING"
     assert result.status("T3b") == "PENDING"
+    # Neither arm can satisfy the group, so T3a carries one group veto (as PENDING,
+    # which blocks) and T3b is folded in rather than vetoing a second time.
+    assert result.conditions["T3a"].blocking is True
+    assert result.conditions["T3b"].blocking is False
     assert result.fire is False
+    assert len([r for r in result.veto_reasons if r.startswith("T3")]) == 1
+
+
+# ---------------------------------------------------------------------------
+# T3 as an OR group: t3_bollinger.satisfied_if_any_of = [squeeze_release,
+# band_rejection]. These are the semantics tests — the evaluator treats T3 as one
+# gate, so each arm is tested by what it contributes to the group.
+# ---------------------------------------------------------------------------
+
+
+def test_t3_group_fires_when_only_t3a_passes(calibrated):
+    result = evaluate_arm_b(_snapshot(bollinger=_bb(squeeze=False)), calibrated)
+    assert result.status("T3a") == "FAIL"
+    assert result.status("T3b") == "PASS"
+    assert result.conditions["T3a"].blocking is False
+    assert result.fire is True
+    assert result.veto_reasons == ()
+    # the losing arm's detail says the group is satisfied, and by which arm
+    assert "T3 group satisfied by T3b band-rejection" in result.conditions["T3a"].detail
+
+
+def test_t3_group_fires_when_only_t3b_passes(calibrated):
+    result = evaluate_arm_b(_snapshot(bollinger=_bb(low=596.0)), calibrated)
+    assert result.status("T3a") == "PASS"
+    assert result.status("T3b") == "FAIL"
+    assert result.conditions["T3b"].blocking is False
+    assert result.fire is True
+    assert result.veto_reasons == ()
+    assert "T3 group satisfied by T3a squeeze-release" in result.conditions["T3b"].detail
+
+
+def test_t3_group_vetoes_once_when_both_arms_fail(calibrated):
+    result = evaluate_arm_b(_snapshot(bollinger=_bb(squeeze=False, low=596.0)), calibrated)
+    assert result.status("T3a") == "FAIL"
+    assert result.status("T3b") == "FAIL"
+    assert result.fire is False
+    # ONE group veto, carried by T3a; T3b is context folded into it.
+    assert result.conditions["T3a"].blocking is True
+    assert result.conditions["T3b"].blocking is False
+    t3_vetoes = [r for r in result.veto_reasons if r.startswith("T3")]
+    assert len(t3_vetoes) == 1, result.veto_reasons
+    assert t3_vetoes[0].startswith("T3a:")
+    assert "T3 group veto: neither arm satisfied" in t3_vetoes[0]
+    # T3b's own read is preserved in T3a's detail so the histogram is still readable.
+    assert "tagged=False" in t3_vetoes[0]
+    assert "folded into T3 group veto" in result.conditions["T3b"].detail
+
+
+def test_t3_group_veto_is_direction_agnostic_on_the_put_side(calibrated):
+    # Put side: squeeze-release needs the middle band FALLING and no upper-band tag.
+    bear_bb = _bb(upper=410.0, middle=402.5, lower=395.0, low=399.0, high=409.0,
+                  middle_rising=False, squeeze=False)
+    result = evaluate_arm_b(
+        _bear_snapshot(bollinger=bear_bb), calibrated, direction="put"
+    )
+    assert result.status("T3a") == "FAIL"
+    assert result.status("T3b") == "FAIL"
+    assert result.fire is False
+    t3_vetoes = [r for r in result.veto_reasons if r.startswith("T3")]
+    assert len(t3_vetoes) == 1, result.veto_reasons
+
+
+def test_t3_group_fires_on_the_put_side_with_only_t3a(calibrated):
+    # T3b's put read needs an upper-band tag; there is none, but squeeze-release holds.
+    bear_bb = _bb(upper=410.0, middle=402.5, lower=395.0, low=399.0, high=409.0,
+                  middle_rising=False)
+    result = evaluate_arm_b(_bear_snapshot(bollinger=bear_bb), calibrated, direction="put")
+    assert result.status("T3a") == "PASS"
+    assert result.status("T3b") == "FAIL"
+    assert result.conditions["T3b"].blocking is False
+    assert result.fire is True
 
 
 # ---------------------------------------------------------------------------
@@ -597,11 +681,15 @@ CASES: list[tuple[str, Mutator, int]] = [
     ("T2b", _mutate(macd_hist=0.0, macd_hist_prev=0.4), 1),
     # The whipsaw guard fires only when T3a squeeze-release has NOT fired, and
     # squeeze-release is exactly T3a's pass condition — so this row necessarily
-    # vetoes twice. The coupling is the rulebook's own design, not a test artifact.
+    # vetoes twice. `low=596.0` breaks T3b too, so the T3 group genuinely fails and
+    # carries its own veto; the coupling is the rulebook's own design, not a test
+    # artifact. (Under OR semantics a squeeze-only break would NOT add a second
+    # veto: T3b would still pass and carry the group.)
     ("T2b", _mutate(macd_cross_direction="put", macd_cross_age_hours=1.0,
-                    bollinger=_bb(squeeze=False)), 2),
-    ("T3a", _mutate(bollinger=_bb(squeeze=False)), 1),
-    ("T3b", _mutate(close=592.0), 1),  # tags the lower band but closes below it
+                    bollinger=_bb(squeeze=False, low=596.0)), 2),
+    # T3 is one OR gate, so the blocking row is the GROUP: both arms failing is the
+    # only way T3 can veto, and it vetoes exactly once.
+    ("T3", _mutate(bollinger=_bb(squeeze=False, low=596.0)), 1),
     ("T4", _mutate(relvol=0.9), 1),
     ("T5", _mutate(is_event_day=True, event_kinds=("fomc",)), 1),
     ("T5", _mutate(iv_rank=80.0), 1),
@@ -617,8 +705,17 @@ CASES: list[tuple[str, Mutator, int]] = [
 def test_each_condition_individually_blocks(calibrated, condition_id, mutate, expected_vetoes):
     result = evaluate_arm_b(mutate(_snapshot()), calibrated)
     assert result.fire is False, f"{condition_id} should have blocked"
-    assert result.status(condition_id) != "PASS"
+    if condition_id == "T3":
+        # The group veto is carried by T3a; the row must not also veto T3b.
+        assert result.status("T3a") == "FAIL"
+        assert result.conditions["T3a"].blocking is True
+        assert result.conditions["T3b"].blocking is False
+        assert any("T3 group veto" in r for r in result.veto_reasons)
+        first_veto_id = "T3a"
+    else:
+        assert result.status(condition_id) != "PASS"
+        first_veto_id = condition_id
     # the condition under test is the FIRST veto listed (rulebook evaluation order),
     # and nothing else fails beyond the expected coupled conditions.
-    assert result.veto_reasons[0].startswith(f"{condition_id}:")
+    assert result.veto_reasons[0].startswith(f"{first_veto_id}:")
     assert len(result.veto_reasons) == expected_vetoes, result.veto_reasons
