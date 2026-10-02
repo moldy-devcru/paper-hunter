@@ -193,10 +193,30 @@ checklist:
       value: null                      # "N to be calibrated from historical SPY flow data during implementation"
       calibration_pending: true             # ...and frozen before first trade
       reason: historical SPY deep-OTM 0DTE flow study during implementation
+    # What "deep OTM" means numerically. The brief does not define it; the research
+    # note illustrates it (">=3% OTM", 2026-10-02-flow-data-market.md §5.3). Separate
+    # thresholds per side, both pending until the operator freezes them at
+    # ratification — an "e.g." in a research note is an illustration, not a
+    # measurement, and a silent 3% default would be an invented threshold.
+    deep_otm:
+      measure: pct_distance_from_spot
+      calls:
+        value: null
+        calibration_pending: true
+        reason: research note §5.3 suggests >=3%; freeze at ratification
+      puts:
+        value: null
+        calibration_pending: true
+        reason: research note §5.3 suggests >=3%; freeze at ratification
+      bucket_size_pct: 1.0                 # histogram bucket width; integer thresholds re-derive exactly
+      applies_to_expiry: zero_dte
+      volume_source: daily_bar_volume      # the snapshot's dailyBar.v, not quote size
     evaluation: EOD_only                    # pending operator ruling: flow gate is end-of-day only
     purpose: quantifiable_gamma_squeeze_footprint
     notes:
       - "The robot-executable half of the social signal. Social text never enters the robot path."
+      - "executor/soak.py writes one immutable flow_baseline row per session and builds
+         the 20-day baseline from prior rows. N stays pending until that baseline exists."
 
 # ---------------------------------------------------------------------------
 # signal cadence (brief: "Signal cadence")

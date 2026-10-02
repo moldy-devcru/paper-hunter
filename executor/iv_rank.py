@@ -205,6 +205,57 @@ def atm_tenor_key(expiry: str, right: str, strike: float, bucket_size: float = 5
     return tenor_key(expiry=expiry, right=right, strike=strike, bucket_size=bucket_size)
 
 
+def dte_tenor_key(
+    *,
+    dte: int,
+    right: str,
+    strike_bucket: float,
+) -> str:
+    """Rolling tenor key: ``dte<bucket>-<right>-<strike_bucket>``.
+
+    # INTERPRETATION: the EOD soak records BOTH this key and :func:`tenor_key` for
+    # every ATM contract it polls, and T5 may read either — the operator picks at
+    # ratification. Reason: :func:`tenor_key` includes the calendar expiry, so a
+    # tenor's history lives and dies with that expiry. A weekly expiry therefore
+    # accrues ~5 observations before it rolls off, and a monthly one ~20, and
+    # *neither ever reaches* ``MIN_OBSERVATIONS = 60``. A key that can never leave
+    # warmup is a key that makes T5 PENDING forever, which blocks rather than lies —
+    # honest, but it also means the IV store we are paying to accumulate every day
+    # would never produce a rank at all. The DTE-bucketed key rolls with the
+    # underlying instead of the expiry, so it accumulates across expiries and does
+    # reach the warmup floor inside one quarter.
+    #
+    # The trade-off is real and is not hidden: a DTE bucket mixes expiries, so its
+    # rank is a statement about "roughly a week out, ATM-ish" rather than about one
+    # specific contract. That is the same kind of approximation as bucketing strikes
+    # to $5 (which :func:`tenor_key` already does), taken one step further. Storing
+    # both keeps the precise-but-never-warm series available for audit, so the
+    # approximation can be measured against the exact thing later instead of trusted
+    # on faith.
+    #
+    # ``dte`` is floored to a non-negative integer: a contract that has already
+    # expired reads as DTE 0 (0DTE is a real bucket, and it is the one Arm B trades)
+    # rather than as a negative key.
+    """
+    side = right.strip().lower()
+    if side not in ("call", "put"):
+        raise IvRankError(f"right must be 'call' or 'put', got {right!r}")
+    if dte < 0:
+        raise IvRankError(f"dte must be >= 0, got {dte}")
+    return f"dte{int(dte)}-{side}-{strike_bucket:.2f}"
+
+
+def strike_bucket(strike: float, bucket_size: float = 5.0) -> float:
+    """The $5-bucketed strike a tenor key is built from (same half-away-from-zero rule).
+
+    Exposed so a caller polling a chain does not have to re-implement the rounding to
+    discover which bucket a contract belongs to.
+    """
+    if bucket_size <= 0:
+        raise IvRankError(f"bucket_size must be > 0, got {bucket_size}")
+    return math.floor(strike / bucket_size + 0.5) * bucket_size
+
+
 # ---------------------------------------------------------------------------
 # store
 # ---------------------------------------------------------------------------
@@ -688,6 +739,8 @@ __all__ = [
     "VIX_PROXY_TENOR",
     "VIX_PROXY_UNDERLYING",
     "atm_tenor_key",
+    "dte_tenor_key",
+    "strike_bucket",
     "iter_proxy",
     "parse_vix_csv",
     "seed_vix_proxy",

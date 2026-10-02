@@ -1,0 +1,31 @@
+# Daily soak timer — 17:30 ET, weekdays.
+#
+# 17:30 ET rather than "at close" on purpose: Alpaca's consolidated SIP bars are not
+# queryable until 15 minutes after the requested `end`, so a bar pulled at 16:00 can
+# legitimately come back without the session's own bar. 17:30 puts the run two hours
+# clear of that, with time to retry before the operator goes to bed.
+#
+# Why OnCalendar rather than Persistent=true alone: this job is only meaningful on days
+# the market traded. A missed run (host asleep, laptop closed) must catch up, so
+# Persistent=true is set — but a catch-up run on a Sunday must be a no-op, not a fake
+# session, which is why the job itself refuses weekends and holidays rather than
+# relying on the timer to know. The timer's job is to *ask*; the script's is to answer
+# honestly. LastWakeup is cleared so a Monday run cannot be blocked by a month-old
+# timer state.
+#
+# Timezone is explicit. `OnCalendar=Mon..Fri 17:30` without one is interpreted in the
+# *system* timezone, and an EOD job that silently shifts an hour twice a year is writing
+# flow baselines on the wrong session boundary.
+
+[Unit]
+Description=Run the paper-hunter EOD soak once per weekday at 17:30 ET
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+
+[Timer]
+OnCalendar=Mon..Fri 17:30:00 America/New_York
+Persistent=true
+AccuracySec=60s
+Unit=soak.service
+
+[Install]
+WantedBy=timers.target

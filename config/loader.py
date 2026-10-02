@@ -426,6 +426,7 @@ class T6(FrozenModel):
     side: str
     baseline_lookback_days: int = Field(gt=0)
     multiplier: Pending
+    deep_otm: DeepOtm
     evaluation: Literal["EOD_only"]
     purpose: str
     notes: list[str] = Field(default_factory=list)
@@ -439,6 +440,30 @@ class T6(FrozenModel):
         return self
 
 
+class DeepOtm(FrozenModel):
+    """What "deep OTM" means, in numbers the soak can execute.
+
+    The brief says "deep-OTM 0DTE volume" without defining deep. Something has to
+    decide it before the window opens or the T6 baseline is not a fixed quantity, so
+    it lives here where a change is a versioned commit.
+
+    # INTERPRETATION: moneyness is a **percentage distance from spot**, with separate
+    thresholds per side, because calls and puts do not populate symmetrically around
+    spot on SPY and one shared number would silently call a crowded strike "deep" on
+    one side only. Defaults are 3% calls / 3% puts — the research note's own example
+    ("filter to deep-OTM (e.g. >=3% OTM)", 2026-10-02-flow-data-market.md §5.3).
+    They are marked calibration_pending because the note's "e.g." is an illustration,
+    not a measurement, and the operator freezes them at ratification.
+    """
+
+    measure: Literal["pct_distance_from_spot"]
+    calls: Pending
+    puts: Pending
+    bucket_size_pct: float = Field(gt=0, le=5)
+    applies_to_expiry: Literal["zero_dte"]
+    volume_source: Literal["daily_bar_volume"]
+
+
 class Checklist(FrozenModel):
     t1_ema_alignment: T1
     t2_rsi: T2
@@ -450,8 +475,15 @@ class Checklist(FrozenModel):
 
     def for_arm(self, arm: str) -> list[str]:
         """Checklist condition ids that apply to an arm, in rulebook order."""
-        sections = (self.t1_ema_alignment, self.t2_rsi, self.t2b_macd, self.t3_bollinger,
-                    self.t4_volume, self.t5_options_chain, self.t6_flow)
+        sections = (
+            self.t1_ema_alignment,
+            self.t2_rsi,
+            self.t2b_macd,
+            self.t3_bollinger,
+            self.t4_volume,
+            self.t5_options_chain,
+            self.t6_flow,
+        )
         return [s.id for s in sections if arm in s.applies_to]
 
 
@@ -549,6 +581,10 @@ class Rulebook(FrozenModel):
         """Human-readable list of every value still marked calibration_pending."""
         t6 = self.checklist.t6_flow
         pending = [f"checklist.t6_flow.multiplier (evaluation={t6.evaluation})"]
+        for side in ("calls", "puts"):
+            leg = getattr(t6.deep_otm, side)
+            if leg.calibration_pending:
+                pending.append(f"checklist.t6_flow.deep_otm.{side}")
         if self.checklist.t5_options_chain.arm_c.calibration_pending:
             pending.append("checklist.t5_options_chain.arm_c.iv_rank_max")
         if self.checklist.t5_options_chain.event_calendar.earnings_veto.calibration_pending:
@@ -598,6 +634,7 @@ __all__ = [
     "DEFAULT_RULES_PATH",
     "FROZEN",
     "REPO_ROOT",
+    "DeepOtm",
     "Rulebook",
     "RulesError",
     "load_example",

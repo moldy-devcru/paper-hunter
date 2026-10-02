@@ -143,6 +143,48 @@ class Position(BaseModel):
     id: int | None = None
 
 
+class FlowBaselineRow(BaseModel):
+    """One session's deep-OTM 0DTE flow aggregate (see ``flow_baseline`` in schema.sql).
+
+    ``baseline_*`` and ``ratio_*`` are allowed to be ``None`` and are filled by the
+    writer from PRIOR rows, never from the row being written: the brief's T6 is
+    "today >= N x 20-day baseline", so a session that counts itself in its own
+    baseline is a session that can never show a spike.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    date: str
+    underlying: str
+    feed: str
+    is_delayed: bool
+    session_spot: float
+    deep_otm_threshold_pct: float
+    deep_otm_call_volume: float
+    deep_otm_put_volume: float
+    call_volume_by_distance: dict[str, float]
+    put_volume_by_distance: dict[str, float]
+    strategy_version: str
+    ts: str
+    chain_contracts: int = 0
+    zero_dte_expiry: str | None = None
+    deep_otm_total_volume: float = 0.0
+    baseline_lookback_days: int = 20
+    baseline_days: int = 0
+    baseline_call_mean: float | None = None
+    baseline_put_mean: float | None = None
+    ratio_call: float | None = None
+    ratio_put: float | None = None
+    id: int | None = None
+    created_at: str | None = None
+
+    @field_validator("date")
+    @classmethod
+    def _date_shape(cls, v: str) -> str:
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # connection + init
 # ---------------------------------------------------------------------------
@@ -399,3 +441,102 @@ def list_positions(
 def get_meta(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return default if row is None else _loads(row["value"])
+
+
+# ---------------------------------------------------------------------------
+# flow_baseline — the T6 numerator/baseline accumulator (executor/soak.py writer)
+# ---------------------------------------------------------------------------
+
+
+class DuplicateFlowBaseline(RuntimeError):
+    """A row already exists for this session date.
+
+    A distinct exception rather than a silent no-op: the caller (the soak job) turns
+    it into a "already recorded" summary line and exit 0, while any *other* caller
+    that hits it has a bug worth seeing. The table is append-only and ``date`` is
+    UNIQUE, so there is no legitimate path that should be writing a second row.
+    """
+
+
+def append_flow_baseline(conn: sqlite3.Connection, entry: FlowBaselineRow) -> int:
+    """Insert one session's flow row. Returns its id.
+
+    Raises :class:`DuplicateFlowBaseline` when the session already has one. Never
+    updates — see the table's trigger comment.
+    """
+    if entry.id is not None or entry.created_at is not None:
+        raise ValueError("id/created_at are assigned by the store, not the caller")
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO flow_baseline (
+                ts, date, underlying, feed, is_delayed, session_spot, zero_dte_expiry,
+                chain_contracts, deep_otm_threshold_pct,
+                deep_otm_call_volume, deep_otm_put_volume, deep_otm_total_volume,
+                call_volume_by_distance, put_volume_by_distance,
+                baseline_lookback_days, baseline_days, baseline_call_mean,
+                baseline_put_mean, ratio_call, ratio_put, strategy_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry.ts,
+                entry.date,
+                entry.underlying.upper(),
+                entry.feed,
+                1 if entry.is_delayed else 0,
+                entry.session_spot,
+                entry.zero_dte_expiry,
+                int(entry.chain_contracts),
+                float(entry.deep_otm_threshold_pct),
+                float(entry.deep_otm_call_volume),
+                float(entry.deep_otm_put_volume),
+                float(entry.deep_otm_total_volume),
+                _dumps(entry.call_volume_by_distance),
+                _dumps(entry.put_volume_by_distance),
+                int(entry.baseline_lookback_days),
+                int(entry.baseline_days),
+                entry.baseline_call_mean,
+                entry.baseline_put_mean,
+                entry.ratio_call,
+                entry.ratio_put,
+                entry.strategy_version,
+                entry.created_at or utcnow(),
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise DuplicateFlowBaseline(
+            f"flow_baseline already has a row for {entry.date}: {exc}"
+        ) from None
+    conn.commit()
+    return int(cur.lastrowid)
+
+
+def _flow_from_row(row: sqlite3.Row) -> FlowBaselineRow:
+    data = dict(row)
+    for field in ("call_volume_by_distance", "put_volume_by_distance"):
+        data[field] = _loads(data[field])
+    data["is_delayed"] = bool(data["is_delayed"])
+    return FlowBaselineRow(**data)
+
+
+def get_flow_baseline(conn: sqlite3.Connection, date: str) -> FlowBaselineRow | None:
+    row = conn.execute("SELECT * FROM flow_baseline WHERE date = ?", (date,)).fetchone()
+    return _flow_from_row(row) if row else None
+
+
+def list_flow_baseline(
+    conn: sqlite3.Connection, *, before: str | None = None, limit: int | None = None
+) -> list[FlowBaselineRow]:
+    """Flow rows oldest-first; ``before`` is an exclusive ISO date bound.
+
+    The soak uses ``before=<this session>`` so the 20-day baseline is built from prior
+    sessions only — the day being written is never in its own baseline.
+    """
+    clauses, params = [], []
+    if before is not None:
+        clauses.append("date < ?")
+        params.append(before)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    order = " ORDER BY date ASC" + (f" LIMIT {int(limit)}" if limit else "")
+    rows = conn.execute(f"SELECT * FROM flow_baseline{where}{order}", params).fetchall()
+    return [_flow_from_row(r) for r in rows]

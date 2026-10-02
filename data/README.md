@@ -39,6 +39,68 @@ of it. That is the whole reason this store starts *before* the trading window op
   to be wrong for VIX data to reach a real SPY IV rank. The rows are never deleted at the
   switchover, so the seam stays visible in the store instead of disappearing from it.
 
+## `journal.db` — the experiment ledger (created on first write)
+
+Owned by [`journal/store.py`](../journal/store.py), schema in
+[`journal/schema.sql`](../journal/schema.sql). Append-only, trigger-enforced.
+
+### `flow_baseline` — T6's numerator and baseline, accumulated a session at a time
+
+One immutable row per trading session, written by `executor/soak.py`. This is where the
+20-day baseline T6 compares against comes from: there is no free source for historical
+SPY deep-OTM 0DTE volume, so the history has to be built before the window opens, one
+row per day, and the calibration (`N`) reads off the distribution that accumulates here.
+
+- `date` is UNIQUE, so a same-day re-run cannot insert a second row; the writer checks
+  first and reports a no-op rather than swallowing a duplicate.
+- `feed` / `is_delayed` / `session_spot` / `chain_contracts` are mandatory provenance.
+  These numbers come from the Indicative Pricing Feed (~15-min-delayed, synthetic), and a
+  flow figure without its feed attached is not auditable.
+- `deep_otm_threshold_pct` is stored per row. A threshold change is a rule change, and
+  rows aggregated at different thresholds are never mixed (the baseline builder excludes
+  them, so a change visibly restarts the day count rather than creating a jump).
+- `call_volume_by_distance` / `put_volume_by_distance` are the raw 1-percentage-point
+  histogram. Any *integer* threshold re-derives exactly from them, so revising the
+  threshold later costs nothing and needs no re-fetch.
+- Baseline means and the T6 ratios are computed from **prior** rows only. A session never
+  counts itself in its own baseline.
+
+## `soak.env` — credentials for the soak timer (NOT in this directory)
+
+`scripts/soak.service` reads `/etc/paper-hunter/soak.env` via `EnvironmentFile`, and the
+line is prefixed with `-` so a missing file makes the unit fail with a readable message
+rather than a silent no-op.
+
+That file is **deliberately not created here and must not be committed**. It belongs
+outside the repo for the ordinary reason (a secret in git is a secret in every clone and
+every fork), plus a project-specific one: this repo is a pre-registered experiment whose
+value depends on nobody quietly editing its inputs. A credential file inside the tree is
+an input to the tree.
+
+Create it once, on the host, as root:
+
+```sh
+sudo install -o root -g paper-hunter -m 0640 /dev/null /etc/paper-hunter/soak.env
+sudoedit /etc/paper-hunter/soak.env
+```
+
+with exactly:
+
+```
+ALPACA_PAPER_KEY=<paper key>
+ALPACA_PAPER_SECRET=<paper secret>
+```
+
+`0640 root:paper-hunter` — readable by the job's user, not by anything else on the box.
+**Paper credentials, never live ones.** This job only reads; there is no reason for it
+to hold keys that can place real orders, and a job that can is a job that eventually
+does. The same two variables serve `executor/main.py` and `scripts/seed_ivrank.py`, so
+one file covers the whole executor.
+
+Verify without the network: `sudo -u paper-hunter /opt/paper-hunter/.venv/bin/python -m
+executor.soak --dry-run` (fixtures, writes nothing). Verify with it:
+`sudo systemctl start soak.service && journalctl -u soak.service -n 20`.
+
 ## `events/` — the T5 hard veto
 
 Owned by [`event_calendar.py`](event_calendar.py). See [`events/README.md`](events/README.md)

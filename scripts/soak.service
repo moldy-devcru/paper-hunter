@@ -1,0 +1,62 @@
+# Soak units — accumulate T6 flow inputs and IV history before the window
+#
+# The soak runs once per trading day at 17:30 ET, after the 15:30 ET hard close, so the
+# session's SPY bar and its final option chain are both settled.
+#
+# DO NOT `systemctl enable --now` without reading docs/ratification.md first. The job
+# is inert in the sense that it places no orders, but it writes into the same journal DB
+# the experiment reads, and the calibration built on it is only valid if every day
+# before the window actually ran.
+#
+# Install:
+#   sudo cp scripts/soak.service scripts/soak.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now soak.timer        # enable, do not start the job
+#   systemctl list-timers soak.timer                # confirm the next run
+#
+# Check it works without touching the network or the databases:
+#   sudo -u paper-hunter /opt/paper-hunter/.venv/bin/python -m executor.soak --dry-run
+#
+# Then the credentials file (see data/README.md § `soak.env` for the exact contents):
+#   sudo install -o root -g paper-hunter -m 0640 /dev/null /etc/paper-hunter/soak.env
+#   sudo -u root vi /etc/paper-hunter/soak.env
+#   sudo systemctl start soak.service              # one manual run
+#   journalctl -u soak.service -n 20
+
+[Unit]
+Description=paper-hunter EOD soak (T6 flow baseline + IV-rank history)
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Overridable so a check-out elsewhere still works; the timer points at whatever
+# WorkingDirectory this unit is installed with.
+WorkingDirectory=/opt/paper-hunter
+EnvironmentFile=-/etc/paper-hunter/soak.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Read-only credentials, and a read-mostly data directory. The job writes exactly two
+# things (one flow_baseline row, N iv_observations rows), so ProtectSystem=strict plus a
+# writable state directory keeps a bug in this job from reaching the rulebook or the
+# code — those are the files whose integrity the experiment actually rests on.
+User=paper-hunter
+Group=paper-hunter
+ProtectSystem=strict
+ReadWritePaths=/opt/paper-hunter/data
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.soak
+
+# The job is expected to be quiet: one line on success, one on stderr per failure. A
+# summary line per session is the point, so they are kept rather than silenced.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paper-hunter-soak
+
+TimeoutStartSec=180

@@ -224,6 +224,89 @@ BEGIN
 END;
 
 -- ---------------------------------------------------------------------------
+-- flow_baseline: one immutable row per trading session, written by executor/soak.py.
+--
+-- This is the T6 numerator/baseline accumulator (brief: "deep-OTM 0DTE volume on the
+-- trade-direction side >= Nx 20-day baseline (N to be calibrated from historical SPY
+-- flow data during implementation; frozen before first trade)"). It exists BEFORE the
+-- trading window opens, because the 20-day baseline is history that has to be
+-- accumulated a session at a time — there is no free source for it (research note
+-- 2026-10-02-flow-data-market.md §4: real-time programmatic OPRA is a $2,000/mo
+-- non-display fee; >15-min-delayed is $0, and an EOD-only gate does not need more).
+--
+-- WHY IT LIVES IN THE JOURNAL DB (and the one thing it shares with the IV store):
+-- every other table here is either a decision or a measurement of one, and both
+-- qualities matter for flow. It is append-only because a day's deep-OTM volume is a
+-- fact about that day that must never be revised once the calibration reads it —
+-- re-running the poll with a corrected number has to be visible as a *new* fact, not
+-- a silent overwrite of an input to N. It is in the journal DB (not a third store
+-- beside ivrank.db) because it is experiment input the N calibration reads out of,
+-- and a calibration that reads from a database nobody backed up with the experiment
+-- is a calibration that cannot be reproduced.
+--
+-- IDEMPOTENCE: `date` is UNIQUE, so a re-run on the same session cannot insert a
+-- second row. The writer checks first and reports a no-op — it does NOT
+-- INSERT OR IGNORE, because a silently swallowed duplicate is how a half-finished
+-- poll looks like a clean one. Nothing here is ever UPDATEd, which is what makes
+-- UNIQUE(date) a guarantee rather than a race.
+--
+-- PROVENANCE COLUMNS (feed / is_delayed / session_spot / contract count) are
+-- non-optional: the flow is computed from Alpaca's *Indicative Pricing Feed*, whose
+-- option trades are delayed ~15 minutes and synthetic-derived from OPRA. A deep-OTM
+-- volume number without its feed attached is not auditable, and the research note
+-- flags exactly this as a condition that would distort the experiment's conclusions.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS flow_baseline (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts                      TEXT    NOT NULL,   -- UTC ISO-8601, write time
+    date                    TEXT    NOT NULL,   -- YYYY-MM-DD ET session date (UNIQUE)
+    underlying              TEXT    NOT NULL,
+    -- Provenance: where these numbers came from and how stale they are.
+    feed                    TEXT    NOT NULL,   -- e.g. 'indicative'
+    is_delayed              INTEGER NOT NULL,   -- 1 when the feed delays trades
+    session_spot            REAL    NOT NULL,   -- SPY close on `date`, the moneyness reference
+    zero_dte_expiry         TEXT,               -- YYYYMMDD of the 0DTE expiry, NULL if none listed
+    chain_contracts         INTEGER NOT NULL,   -- contracts in the snapshot
+    -- The deep-OTM threshold this row was aggregated at (percent distance from spot).
+    -- Stored per-row because a threshold change is a rule change, and rows aggregated
+    -- at different thresholds must never be silently compared.
+    deep_otm_threshold_pct  REAL    NOT NULL,
+    -- Aggregates at that threshold, per side (brief: "on the trade-direction side").
+    deep_otm_call_volume    REAL    NOT NULL,
+    deep_otm_put_volume     REAL    NOT NULL,
+    deep_otm_total_volume   REAL    NOT NULL,
+    -- Volume by integer-percent distance from spot, per side. Deep-OTM at any other
+    -- threshold is a suffix sum of these buckets, so a threshold change can be
+    -- re-derived exactly from stored rows instead of re-fetching (and re-paying) OPRA.
+    call_volume_by_distance TEXT    NOT NULL,   -- JSON {"1": n, "2": n, ...}
+    put_volume_by_distance  TEXT    NOT NULL,
+    -- T6 ratio inputs: this session against the trailing mean of PRIOR sessions.
+    baseline_lookback_days  INTEGER NOT NULL,
+    baseline_days           INTEGER NOT NULL,   -- prior rows actually found (may be < lookback)
+    baseline_call_mean      REAL,               -- NULL until enough prior sessions exist
+    baseline_put_mean       REAL,
+    ratio_call              REAL,               -- today / baseline mean, NULL if no baseline
+    ratio_put               REAL,
+    -- The frozen rulebook identity these inputs were collected under.
+    strategy_version        TEXT    NOT NULL,
+    created_at              TEXT    NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flow_baseline_date ON flow_baseline (date);
+
+CREATE TRIGGER IF NOT EXISTS flow_baseline_no_update
+BEFORE UPDATE ON flow_baseline
+BEGIN
+    SELECT RAISE(ABORT, 'flow_baseline is append-only: flow inputs to the T6 calibration may not be revised. Re-collect as a new journaled fact, not an overwrite.');
+END;
+
+CREATE TRIGGER IF NOT EXISTS flow_baseline_no_delete
+BEFORE DELETE ON flow_baseline
+BEGIN
+    SELECT RAISE(ABORT, 'flow_baseline rows may not be deleted');
+END;
+
+-- ---------------------------------------------------------------------------
 -- meta: key/value with a semantic guard on the three keys the brief cares about.
 --   strategy_version  — append a row per frozen rulebook version
 --   window_start      — the experiment's day-1 anchor
