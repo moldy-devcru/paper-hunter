@@ -99,6 +99,170 @@ def with_volume_spike(payload: dict, *, multiplier: float = 2.2) -> dict:
     return out
 
 
+def series_from(payload: dict, *, feed: str | None = None):
+    """Payload -> ``BarSeries`` (the shape the snapshot builder and hunt plan want)."""
+    from executor.alpaca_client import Bar, BarSeries
+
+    bars = sorted((Bar.from_json(b) for b in payload["bars"]["SPY"]), key=lambda b: b.t)
+    return BarSeries(
+        symbol="SPY",
+        timeframe="1Day",
+        feed=feed or payload.get("feed", "sip"),
+        bars=bars,
+    )
+
+
+# ---------------------------------------------------------------------------
+# synthetic options chains
+# ---------------------------------------------------------------------------
+
+
+def make_contract(
+    *,
+    symbol: str,
+    underlying: str,
+    expiry: str,
+    strike: float,
+    right: str,
+    ask: float | None = 1.0,
+    bid: float | None = None,
+    delta: float | None = None,
+    iv: float | None = 0.18,
+):
+    """One ``OptionContract``, built directly (no OCC parsing, no network)."""
+    from executor.alpaca_client import Greeks, OptionContract, OptionQuote, OptionTrade
+
+    return OptionContract(
+        symbol=symbol,
+        underlying=underlying,
+        expiry=expiry,
+        strike=strike,
+        right=right,  # type: ignore[arg-type]
+        implied_volatility=iv,
+        greeks=Greeks(delta=delta),
+        latest_quote=OptionQuote(bid=bid, ask=ask),
+        latest_trade=OptionTrade(p=ask),
+    )
+
+
+def zero_dte_chain(
+    *,
+    day: dt.date,
+    spot: float = 625.0,
+    step: float = 1.0,
+    otm_calls: int = 4,
+    otm_puts: int = 4,
+    ask: float = 1.40,
+    underlying: str = "SPY",
+):
+    """A same-expiry (0DTE) chain around ``spot`` with one premium per contract.
+
+    Enough for arm B's strike rule: the first OTM strike beyond the setup-day range
+    projection, and a premium-cap check against the $200 hard cap.
+    """
+    expiry = day.strftime("%Y%m%d")
+    calls = [
+        make_contract(
+            symbol=f"{underlying}{expiry}C{int((spot + i * step) * 1000):08d}",
+            underlying=underlying,
+            expiry=expiry,
+            strike=round(spot + i * step, 2),
+            right="call",
+            ask=ask,
+        )
+        for i in range(1, otm_calls + 1)
+    ]
+    puts = [
+        make_contract(
+            symbol=f"{underlying}{expiry}P{int((spot - i * step) * 1000):08d}",
+            underlying=underlying,
+            expiry=expiry,
+            strike=round(spot - i * step, 2),
+            right="put",
+            ask=ask,
+        )
+        for i in range(1, otm_puts + 1)
+    ]
+    return _chain(underlying, calls + puts)
+
+
+def deep_itm_chain(
+    *,
+    day: dt.date,
+    spot: float = 625.0,
+    underlying: str = "SPY",
+    specs: list[tuple[int, float, float]] | None = None,
+):
+    """A chain of long-dated calls for arm C's selection.
+
+    ``specs`` is ``[(dte, strike, delta), ...]``. The default set deliberately contains
+    a too-short expiry, a too-long one, and a delta below the floor, so the selection
+    has something to reject.
+    """
+    if specs is None:
+        specs = [
+            (60, spot - 20, 0.88),    # outside the DTE window
+            (120, spot - 20, 0.55),   # inside the window, delta too low
+            (120, spot - 10, 0.82),   # qualifying, expensive
+            (120, spot - 12, 0.85),   # qualifying, cheaper -> the selection
+            (200, spot - 30, 0.95),   # outside the DTE window
+        ]
+    contracts = []
+    for dte, strike, delta in specs:
+        expiry_day = day + dt.timedelta(days=dte)
+        exp = expiry_day.strftime("%Y%m%d")
+        # Premium falls as the strike drops (deeper ITM), scaled off the delta.
+        premium = max(0.20, round((1.0 - delta) * 40.0 + 2.0, 2))
+        contracts.append(
+            make_contract(
+                symbol=f"{underlying}{exp}C{int(strike * 1000):08d}",
+                underlying=underlying,
+                expiry=exp,
+                strike=strike,
+                right="call",
+                ask=premium,
+                delta=delta,
+            )
+        )
+    return _chain(underlying, contracts)
+
+
+def _chain(underlying: str, contracts: list):
+    from executor.alpaca_client import OptionChain
+
+    return OptionChain(
+        underlying=underlying,
+        feed="opra",
+        contracts=contracts,
+        fetched_at=None,
+    )
+
+
+def calendar_with(*, day: dt.date, kind: str = "fomc", label: str = "FOMC decision",
+                  veto: bool | None = None):
+    """A one-event calendar (``veto`` defaults to the kind's own severity)."""
+    from data.event_calendar import CalendarEvent, CalendarFile, EventCalendar
+
+    return EventCalendar(
+        [
+            CalendarFile(
+                quarter=None,
+                updated=day,
+                events=[
+                    CalendarEvent(
+                        date=day,
+                        kind=kind,  # type: ignore[arg-type]
+                        label=label,
+                        veto=veto,
+                        verified=True,
+                        source="test fixture",
+                    )
+                ],
+            )
+        ]
+    )
+
+
 class _Lcg:
     """Deterministic linear congruential generator (Numerical Recipes constants).
 
