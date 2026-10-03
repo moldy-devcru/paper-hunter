@@ -66,7 +66,7 @@ from typing import Any
 import yaml
 
 from analysis import rollup, shadow_roll
-from config.loader import DEFAULT_RULES_PATH, load_rules, load_rules_text
+from config.loader import DEFAULT_RULES_PATH, Rulebook, load_rules, load_rules_text
 from data.event_calendar import EventCalendar
 from executor.alpaca_client import (
     Bar,
@@ -86,13 +86,13 @@ from executor.hunt_plan import (
     summarise,
     write_hunt_plan,
 )
-from executor.iv_rank import IvRankStore, tenor_key
+from executor.iv_rank import IvRankStore
 from executor.position_manager import (
     ArmState,
     ManagedPosition,
     MemoryJournalSink,
-    OrderLeg,
     PositionManager,
+    arm_c_roll_replacement,
 )
 from executor.soak import run_soak
 from executor.watch_loop import (
@@ -388,7 +388,21 @@ def rehearsal_rules_text(
         }
     data["checklist"]["t5_options_chain"]["arm_c"]["calibration_pending"] = False
     data["checklist"]["t5_options_chain"]["arm_c"]["iv_rank_max"] = float(arm_c_iv_rank_max)
-    return _json.dumps(data, indent=2, sort_keys=True) + "\n"
+
+    def _plain(value: Any) -> Any:
+        # `yaml.safe_load` types an unquoted `2026-11-02` as a ``datetime.date``, which
+        # ``json.dumps`` refuses. Rendering it as an ISO string is lossless for the
+        # round trip: `load_rules_text` parses this back with yaml, and the field is
+        # typed ``dt.date | None``, so pydantic coerces the string to the same date.
+        # FIX 2026-10-03: surfaced by the R5 window start, the first date in the
+        # rulebook to reach this path.
+        if isinstance(value, dt.datetime):
+            return value.date().isoformat()
+        if isinstance(value, dt.date):
+            return value.isoformat()
+        raise TypeError(f"cannot serialise {type(value).__name__} into the rehearsal rulebook")
+
+    return _json.dumps(data, indent=2, sort_keys=True, default=_plain) + "\n"
 
 
 def rehearsal_rules(
@@ -432,9 +446,47 @@ def rehearsal_rules(
 # ---------------------------------------------------------------------------
 
 
+def _tenor_key(
+    mode: str,
+    *,
+    day: dt.date,
+    expiry: str,
+    right: str,
+    strike: float,
+    dte_bucket_days: int,
+) -> str:
+    """The rulebook's chosen tenor key — by calling the executor's own function.
+
+    RULED 2026-10-03 (R4): the mode and bucket width are read from the rulebook, and
+    the key is computed by ``hunt_plan._tenor_key_for`` rather than a second
+    implementation. A rehearsal that keyed differently from the executor would warm a
+    store the executor cannot read — a green run over a store nobody queries. That is
+    not hypothetical: the first cut of this helper omitted the executor's
+    ``max(dte, 0)`` clamp and blew up on the fixture chain's 0DTE contract.
+
+    The tiny ``OptionContract`` shell exists only to satisfy the executor's signature;
+    the fields used are exactly the ones it reads.
+    """
+    from executor.hunt_plan import _tenor_key_for
+
+    shell = OptionContract(
+        symbol="REHEARSAL",
+        underlying="SPY",
+        expiry=expiry,
+        right=right,
+        strike=strike,
+        greeks=None,
+        implied_volatility=0.20,
+        latest_quote=None,
+        latest_trade=None,
+    )
+    return _tenor_key_for(shell, day, mode=mode, dte_bucket_days=dte_bucket_days)
+
+
 def seed_iv_store(
     path: Path,
     *,
+    rules: Rulebook,
     day: dt.date,
     chain: OptionChain,
     spot: float,
@@ -454,11 +506,15 @@ def seed_iv_store(
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     store = IvRankStore(conn)
+    # RULED 2026-10-03 (operator, R4): T5 reads the ROLLING DTE-keyed tenor, so the
+    # fixture writes the key the executor will actually read — same mode, same bucket
+    # width, both taken from the rulebook rather than restated here.
+    mode = rules.checklist.t5_options_chain.tenor_key_mode
+    bucket = rules.checklist.t5_options_chain.dte_bucket_days
     keys: dict[str, str] = {}
     for contract in chain.contracts:
-        key = tenor_key(
-            expiry=contract.expiry, right=contract.right, strike=contract.strike
-        )
+        key = _tenor_key(mode, day=day, expiry=contract.expiry, right=contract.right,
+                         strike=contract.strike, dte_bucket_days=bucket)
         keys.setdefault(key, contract.symbol)
     written = 0
     for key in keys:
@@ -481,11 +537,27 @@ def seed_iv_store(
     conn.commit()
     ranks: dict[str, float | None] = {}
     for contract in chain.contracts:
-        key = tenor_key(expiry=contract.expiry, right=contract.right, strike=contract.strike)
+        key = _tenor_key(mode, day=day, expiry=contract.expiry, right=contract.right,
+                         strike=contract.strike, dte_bucket_days=bucket)
         ranks[key] = store.iv_rank(
             contract.implied_volatility or 0.18, "SPY", key, as_of=day
         ).rank
+    # R4's load-bearing claim, checked rather than asserted: recomputing the key as the
+    # calendar advances must NOT mint a new tenor every session. Raw integer DTE did
+    # exactly that, which is why the rolling series could never reach MIN_OBSERVATIONS
+    # — it was a series of length 1 wearing a series' name.
+    churn: list[str] = []
+    if chain.contracts:
+        sample = chain.contracts[0]
+        churn = [
+            _tenor_key(mode, day=day + dt.timedelta(days=offset), expiry=sample.expiry,
+                       right=sample.right, strike=sample.strike, dte_bucket_days=bucket)
+            for offset in range(0, 2 * bucket + 1)
+        ]
     return store, {
+        "tenor_key_mode": mode,
+        "dte_bucket_days": bucket,
+        "tenor_key_stability": churn,
         "tenor_keys": len(keys),
         "observations_written": written,
         "observations_per_tenor": days,
@@ -841,7 +913,9 @@ def _prepare(r: Rehearsal, st: Stage) -> None:
         fetched_at=dt.datetime.combine(SIGNAL_LAST_BAR, dt.time(19, 45), tzinfo=UTC),
     )
 
-    iv_store, iv_info = seed_iv_store(r.iv_path, day=shot_day, chain=combined, spot=spot)
+    iv_store, iv_info = seed_iv_store(
+        r.iv_path, rules=r.rules, day=shot_day, chain=combined, spot=spot
+    )
 
     r.journal = init_db(r.conn_out)
     set_meta(r.conn, "strategy_version", r.rules.strategy_version)
@@ -1151,6 +1225,64 @@ def stage_plan_shot(r: Rehearsal, st: Stage) -> None:
 # ---------------------------------------------------------------------------
 # stage: the watch loop
 # ---------------------------------------------------------------------------
+
+
+def _roll_contract(
+    day: dt.date,
+    *,
+    dte: int,
+    strike: float,
+    delta: float | None,
+    price: float,
+    right: str = "call",
+):
+    """One option contract shaped for arm C's roll selection (R1)."""
+    from executor.alpaca_client import Greeks, OptionContract, OptionQuote, OptionTrade
+
+    return OptionContract(
+        symbol=(
+            f"SPY{day + dt.timedelta(days=dte):%Y%m%d}{'C' if right == 'call' else 'P'}"
+            f"{strike * 1000:08.0f}"
+        ),
+        underlying="SPY",
+        expiry=f"{day + dt.timedelta(days=dte):%Y%m%d}",
+        right=right,
+        strike=strike,
+        greeks=Greeks(delta=delta),
+        implied_volatility=0.20,
+        latest_quote=OptionQuote(bid=price - 0.05, ask=price),
+        latest_trade=OptionTrade(p=price),
+    )
+
+
+def _roll_chain(
+    day: dt.date, rules, *, only_out_of_band: bool = False,
+    deltas_all_none: bool = False, price: float = 7.00,
+):
+    """A chain whose correct answer under R1 is known, so the stage can assert it.
+
+    The variants each break exactly one of R1's three conditions, which is what makes
+    the refusals a test of the rule rather than a test of the fixture.
+    """
+    from executor.alpaca_client import OptionChain
+
+    if only_out_of_band:
+        contracts = [_roll_contract(day, dte=45, strike=475.0, delta=0.81, price=9.0)]
+    else:
+        d = None if deltas_all_none else 0.81
+        contracts = [
+            # Below the DTE band — must be ignored even at a perfect delta.
+            _roll_contract(day, dte=45, strike=475.0, delta=0.80, price=9.0),
+            # Above the DTE band — likewise.
+            _roll_contract(day, dte=240, strike=475.0, delta=0.80, price=9.0),
+            # In band: the nearest delta to 0.80 wins.
+            _roll_contract(day, dte=100, strike=460.0, delta=0.72, price=6.0),
+            _roll_contract(day, dte=100, strike=475.0, delta=d, price=price),
+            _roll_contract(day, dte=100, strike=485.0, delta=d, price=price),
+            # A put is never a candidate, however good its delta looks.
+            _roll_contract(day, dte=100, strike=475.0, delta=0.80, price=1.0, right="put"),
+        ]
+    return OptionChain(underlying="SPY", feed="opra", contracts=contracts)
 
 
 def _tick_times(day: dt.date, count: int = 3, start: str = "09:35") -> list[dt.datetime]:
@@ -1539,8 +1671,10 @@ def stage_exits_and_roll(r: Rehearsal, st: Stage) -> None:
             st.find(f"arm B produced NO exit at {label} — the ladder did not fire")
         _ = wstate
 
-    # arm C's roll: the ladder is exercised with a replacement leg, because the watch
-    # loop never supplies one (see findings).
+    # arm C's roll, R1 (RULED 2026-10-03): the replacement is now SELECTED from the
+    # chain by rule, not hand-supplied, so the rehearsal proves the selection itself —
+    # including the cases where it must refuse (out of band, over cap, no Greeks) and
+    # the case where the trigger fires and nothing can be rolled to.
     manager = PositionManager(r.rules)
     c_position = ManagedPosition(
         arm="C",
@@ -1556,6 +1690,12 @@ def stage_exits_and_roll(r: Rehearsal, st: Stage) -> None:
     c_state = ArmState(bankroll_usd=r.rules.arms.C.bankroll_usd, position=c_position).with_entry(
         _tick_times(day, 1, "09:45")[0]
     )
+    # A chain with an out-of-band expiry (fails the band), a qualifying expiry at several
+    # deltas, and a too-expensive qualifying expiry that must lose on the cap.
+    roll_chain = _roll_chain(day, r.rules)
+    selection = arm_c_roll_replacement(
+        chain=roll_chain, spot=500.0, day=day, rules=r.rules, state=c_state
+    )
     roll_eval = manager.evaluate_exits(
         "C",
         now=_tick_times(day, 1, "11:00")[0],
@@ -1563,13 +1703,30 @@ def stage_exits_and_roll(r: Rehearsal, st: Stage) -> None:
         price=1.0,
         delta=0.60,  # below the 0.70 trigger
         dte=40,
-        replacement=OrderLeg("SPY260120C00600000", 1, "buy"),
+        replacement=selection.leg if selection is not None else None,
+        selection=selection,
     )
     roll_actions = [
         {"kind": a.kind, "legs": [(lg.symbol, lg.side, lg.qty) for lg in a.legs],
-            "reason": a.reason}
+            "reason": a.reason, "selection": a.gov_checks.get("selection")}
         for a in roll_eval.actions
     ]
+    # The refusal cases, each asserted rather than described.
+    cap = r.rules.arms.C.entry.premium_pct_of_bankroll_max * r.rules.arms.C.bankroll_usd
+    refusals = {
+        "no_qualifying_expiry": arm_c_roll_replacement(
+            chain=_roll_chain(day, r.rules, only_out_of_band=True),
+            spot=500.0, day=day, rules=r.rules, state=c_state,
+        ),
+        "no_readable_greeks": arm_c_roll_replacement(
+            chain=_roll_chain(day, r.rules, deltas_all_none=True),
+            spot=500.0, day=day, rules=r.rules, state=c_state,
+        ),
+        "over_the_premium_cap": arm_c_roll_replacement(
+            chain=_roll_chain(day, r.rules, price=cap / 100.0 + 5.0),
+            spot=500.0, day=day, rules=r.rules, state=c_state,
+        ),
+    }
     bare_eval = manager.evaluate_exits(
         "C", now=_tick_times(day, 1, "11:00")[0], state=c_state, price=1.0, delta=0.60, dte=40
     )
@@ -1577,10 +1734,13 @@ def stage_exits_and_roll(r: Rehearsal, st: Stage) -> None:
         "position": pos_state.position.to_dict(),
         "exits": outcomes,
         "arm_c_position": c_position.to_dict(),
+        "arm_c_roll_selection": selection.to_dict() if selection is not None else None,
         "arm_c_roll_with_replacement": roll_actions,
+        "arm_c_roll_refusals": {k: v is None for k, v in refusals.items()},
         "arm_c_roll_without_replacement": [
             {"kind": a.kind, "reason": a.reason} for a in bare_eval.actions
         ],
+        "arm_c_roll_without_replacement_notes": list(bare_eval.notes),
         "routed_during_stage": len(r.router.actions) - router_before,
     }
     for o in outcomes:
@@ -1595,24 +1755,80 @@ def stage_exits_and_roll(r: Rehearsal, st: Stage) -> None:
     st.say(
         f"arm C roll without a replacement leg: {[a['kind'] for a in
             st.detail['arm_c_roll_without_replacement']] or 'no action'}"
+        + (
+            " — REPORTED: "
+            + st.detail["arm_c_roll_without_replacement_notes"][0].split(".")[0]
+            if st.detail["arm_c_roll_without_replacement_notes"]
+            else " — reported NOTHING (regression: a silent stuck roll)"
+        )
+    )
+    st.say(
+        "arm C roll selection (R1): "
+        + (
+            f"{selection.expiry} {selection.dte} DTE, strike {selection.strike:g}, "
+            f"delta {selection.delta:.2f}, premium ${selection.premium_usd:,.2f} of "
+            f"${selection.cap_usd:,.2f}"
+            if selection is not None
+            else "NO SELECTION (regression)"
+        )
+    )
+    st.say(
+        "arm C roll refusals (R1): "
+        + ", ".join(f"{k}={refused}" for k, refused in st.detail["arm_c_roll_refusals"].items())
     )
     if not any(o["stops"] for o in outcomes):
         st.ok = False
         st.error = "neither arm B exit fired"
     if not any(a["kind"] == "ROLL" for a in roll_actions):
         st.ok = False
-        st.error = "arm C's roll ladder produced no ROLL even with a replacement leg"
+        st.error = "arm C's roll ladder produced no ROLL with a rule-selected replacement"
+    if selection is None:
+        st.ok = False
+        st.error = "R1 selected no replacement from a chain that contains a qualifying one"
+    else:
+        dte_band = r.rules.arms.C.entry.dte
+        if not dte_band.min <= selection.dte <= dte_band.max:
+            st.ok = False
+            st.error = (
+                f"R1 picked {selection.dte} DTE, outside the {dte_band.min}-"
+                f"{dte_band.max} band"
+            )
+        if abs(selection.delta - selection.target_delta) > 0.10:
+            st.ok = False
+            st.error = (
+                f"R1 picked delta {selection.delta:.2f}, not near the "
+                f"{selection.target_delta:.2f} target"
+            )
+    if not all(st.detail["arm_c_roll_refusals"].values()):
+        st.ok = False
+        st.error = f"R1 refused to refuse: {st.detail['arm_c_roll_refusals']}"
+    if not bare_eval.notes:
+        st.ok = False
+        st.error = (
+            "a fired roll trigger with no replacement produced NO note — the stuck-roll "
+            "case is silent again, which is the bug R1's reporting was meant to end"
+        )
     st.find(
         "EXIT PATHS EXERCISED: arm B's hard close outranked the profit take at 15:30, "
         "and the profit take fired at +100% earlier in the day — the documented "
         "precedence, verified rather than asserted."
     )
     st.find(
-        "ROLL GAP (design-level, operator question): arm C's roll trigger fires, but the "
-        "watch loop calls evaluate_exits without a replacement leg, so the ladder "
-        "refuses to roll and reports a VETO-shaped note instead. An arm C position past "
-        "its roll trigger therefore has no executor path. Choosing the replacement "
-        "contract intraday is a trading mechanic, so this is documented, not fixed."
+        "R1 ROLL PATH EXERCISED (RULED 2026-10-03): the replacement leg is now SELECTED "
+        "by rule from the tick's own chain — earliest expiry in the 90-180 DTE band, "
+        "strike nearest delta 0.80, inside arm C's existing premium cap — not supplied by "
+        "hand. The chain carries an out-of-band expiry at a perfect delta, a put at the "
+        "exact target delta, and a closer strike, so the three refusals below are tests of "
+        "the ruling rather than of the fixture. The selection's provenance "
+        "(expiry/DTE/strike/delta/premium/cap) is journalled on the action, so a future "
+        "review can check R1 was followed rather than trust that it was."
+    )
+    st.find(
+        "STUCK ROLL IS NO LONGER SILENT: with the trigger fired and no qualifying contract, "
+        "the ladder returns no action AND a note naming the trigger and stating the "
+        "position is HELD, not rolled. Before this, that case and a healthy position both "
+        "returned an empty tuple, so a roll that could never be satisfied was invisible "
+        "from the outside. The rehearsal fails if the note is missing."
     )
 
 
@@ -2201,8 +2417,32 @@ def _stage_iv_warmup(r: Rehearsal, st: Stage) -> None:
                 "IvRankStore requires, so T5's rank is undefined for every live cell. "
                 "This is a data-accumulation problem, not a code problem: at one soak "
                 "observation per session per tenor, the first tenor to reach 60 needs 60 "
-                "sessions (and the tenor keying question below decides whether that is "
-                "the expiry or the rolling DTE bucket)."
+                "sessions. Under R4 the tenor is the rolling 7-day DTE bucket, so the "
+                "series a given contract contributes to now spans ~7 sessions per bucket "
+                "instead of exactly one key per session."
+            )
+        # The R4 consequence that is NOT visible in the code: history written under the
+        # old keying cannot be read under the new one. Reported rather than discovered
+        # in November, when T5 is silently PENDING and the cause is a table of singletons.
+        rows = int(deployed.get("observations") or 0)
+        tenors = int(deployed.get("tenor_keys") or 0)
+        if rows and tenors and rows == tenors and rows >= 5:
+            st.find(
+                f"PRE-EXISTING IV HISTORY IS UNUSABLE UNDER R4 (operator decision "
+                f"needed): the deployed store holds {rows} rows across {tenors} distinct "
+                f"tenor keys — one observation per key, the exact signature of the old "
+                f"raw-integer-DTE key, where every session minted a new tenor. Under "
+                f"`rolling_dte` those rows sit under keys the executor will never query "
+                f"again, so T5's warm-up restarts from zero and the 60-observation "
+                f"threshold is 60 sessions away again from a standing start. Options, in "
+                f"the order I would rank them: (a) accept the restart and let the soak "
+                f"accumulate under the new key — simplest, costs ~60 sessions of T5; "
+                f"(b) re-key the existing rows from their stored expiry/strike into "
+                f"bucketed keys, which recovers nothing real, because one observation "
+                f"per key was never a distribution; (c) backfill historical IV from the "
+                f"provider. My read is (a) — (b) would manufacture a warm-looking series "
+                f"out of singletons, which is exactly the kind of green that is not "
+                f"earned. This is flagged, not decided: it is a data-retention ruling."
             )
     st.say(
         f"fixture: {fixture.get('observations_written')} observations over "
@@ -2210,11 +2450,33 @@ def _stage_iv_warmup(r: Rehearsal, st: Stage) -> None:
         f"{fixture.get('rank_min')}..{fixture.get('rank_max')} "
         f"(all defined: {fixture.get('all_defined')})"
     )
+    mode = fixture.get("tenor_key_mode")
+    stability = fixture.get("tenor_key_stability") or []
+    distinct = len(set(stability))
+    st.say(
+        f"tenor key: mode={mode} bucket={fixture.get('dte_bucket_days')}d; over "
+        f"{len(stability)} days the same contract yields {distinct} distinct key(s)"
+    )
+    if mode != "rolling_dte":
+        st.ok = False
+        st.error = f"R4 ruled rolling_dte but the rulebook says {mode!r}"
+    if len(stability) > 1 and distinct >= len(stability):
+        st.ok = False
+        st.error = (
+            f"the tenor key changed every single day across {len(stability)} sessions "
+            f"({distinct} distinct) — the rolling series can never warm, which is "
+            f"exactly the defect R4 fixed"
+        )
     st.find(
-        "T5 TENOR (operator question, unchanged): the rehearsal keys the IV store on the "
-        "expiry (`tenor_key`), which is what executor/hunt_plan.py already does. Whether "
-        "T5 should instead read the rolling `dte_tenor_key` is still an open operator "
-        "decision and was not resolved here."
+        "T5 TENOR (RULED 2026-10-03, R4 — was an open operator question): T5 now reads "
+        "the ROLLING DTE-keyed tenor, `tenor_key_mode: rolling_dte`, bucketed at 7 days. "
+        "The rehearsal writes and reads the same key the executor reads, taking the mode "
+        "and the bucket width from the rulebook rather than restating them. This matters "
+        "more than it looks: under the old raw-integer DTE key, every session minted a "
+        "brand-new tenor, so each series was a series of length 1 and could never reach "
+        "MIN_OBSERVATIONS no matter how long the soak ran. The stage now recomputes the "
+        f"key for the next {2 * int(fixture.get('dte_bucket_days') or 7)} days and fails if "
+        "it churns daily — the anti-churn property is checked, not claimed."
     )
 
 

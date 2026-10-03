@@ -54,7 +54,7 @@ import datetime as dt
 import hashlib
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -257,12 +257,15 @@ def build_parser() -> argparse.ArgumentParser:
     plan_cmd.add_argument(
         "--flow-gate",
         choices=FLOW_GATE_POLICIES,
-        default="none",
+        default=None,
         help=(
-            "T6 input policy. 'none' (default) hands the plan no flow gate, which is "
-            "the pre-2026-10-03 behaviour. 'last-confirmed' reads the newest "
-            "flow_baseline row dated before the session — an OPEN OPERATOR QUESTION, "
-            "not a settled mechanic (see executor/flow_gate.py)"
+            "T6 input policy. RULED 2026-10-03 (R3): defaults to the rulebook's "
+            "checklist.t6_flow.intraday_policy, which is 'carry_forward' — the newest "
+            "flow_baseline row dated before the session, carried forward however old, "
+            "with its age recorded as sessions_stale. 'next_day_only' accepts only the "
+            "immediately preceding session and leaves T6 PENDING on a gap. 'none' hands "
+            "the plan no flow gate at all (the pre-2026-10-03 behaviour). 'last-"
+            "confirmed' is a deprecated alias of 'carry_forward'."
         ),
     )
 
@@ -403,12 +406,23 @@ def _iv_store(path: str | None) -> Any:
 
 
 def _flow_gate(args: argparse.Namespace, conn: Any, rules: Rulebook, day: dt.date) -> Any:
-    """T6's gate for this run, or ``None`` under the ``--flow-gate none`` policy.
+    """T6's gate for this run, or ``None`` under the ``none`` policy.
 
-    Prints the read (source session, ratio, status) because "which session did T6 read"
-    is the first question anyone will ask of a journal row that hinges on this gate.
+    RULED 2026-10-03 (R3): the default is the RULEBOOK's
+    ``checklist.t6_flow.intraday_policy`` (``carry_forward``), not a constant in this
+    file. The ruling is meant to live in the rulebook where the version bump that
+    changes it is already required — duplicating the default here would give the
+    operator two places to flip a policy and no way to tell which one the journal used.
+
+    Prints the read (source session, ratio, status, staleness) because "which session
+    did T6 read" is the first question anyone will ask of a journal row that hinges on
+    this gate, and "how stale was it" is the second.
     """
-    policy = getattr(args, "flow_gate", "none")
+    from executor.flow_gate import normalise_policy
+
+    policy = normalise_policy(
+        getattr(args, "flow_gate", None) or rules.checklist.t6_flow.intraday_policy
+    )
     if policy == "none" or conn is None:
         return None
     from executor.flow_gate import flow_gate_from_journal
@@ -421,6 +435,7 @@ def _flow_gate(args: argparse.Namespace, conn: Any, rules: Rulebook, day: dt.dat
         side=getattr(args, "flow_side", "call"),
         multiplier=multiplier,
         lookback_days=t6.baseline_lookback_days,
+        policy=policy,
     )
     print(read.summary_line())
     return read.gate
@@ -428,37 +443,86 @@ def _flow_gate(args: argparse.Namespace, conn: Any, rules: Rulebook, day: dt.dat
 
 def _watch_iv_rank(
     args: argparse.Namespace, plan: HuntPlan, rules: Rulebook
-) -> tuple[float | None, str]:
-    """The IV rank ``watch`` re-verifies T5 with, and where it came from.
+) -> tuple[dict[str, float] | float | None, str]:
+    """The IV rank(s) ``watch`` re-verifies T5 with, and where each came from.
 
-    Precedence: ``--iv-rank`` (the operator states it), else the rank the pre-market
-    plan already recorded for the B/call cell, else the newest ranked observation in the
-    store. The value and its source are printed once per session, so a journal row's T5
-    can be tied to a number rather than to an absence.
+    RULED 2026-10-03 (operator, R4): T5's rank is per tenor, and the tenor differs per
+    cell — arm B's 0DTE call and arm C's 150-DTE call are different series whose
+    warm-up states differ. This used to collapse them to ONE number (the newest ranked
+    observation in the store, i.e. an arbitrary tenor) and forward it to every cell, so
+    a rank that was warm for one contract was asserted for all of them.
+
+    Precedence, per cell:
+      1. ``--iv-rank`` — the operator states it, for every cell, unchanged.
+      2. the rank the pre-market plan recorded for THAT cell, with its tenor key.
+      3. the newest ranked observation whose tenor key is the one the plan chose for
+         that cell. Falling back to "newest overall" is what made the old value
+         arbitrary, so a cell with no plan-time read is left PENDING instead.
+
+    Returns a mapping keyed by ``ArmPlan.key`` (``"B/call"``), a bare float when
+    ``--iv-rank`` pinned one, or ``None`` when nothing resolved.
     """
     if getattr(args, "iv_rank", None) is not None:
         return float(args.iv_rank), "--iv-rank (operator supplied)"
+    store = _iv_store(getattr(args, "ivrank", None))
+    observations: list[Any] = []
+    if store is not None:
+        try:
+            observations = list(store.observations(rules.strategy.symbol))
+        except Exception as exc:  # noqa: BLE001 - a broken store must not stop the session
+            return None, f"IV store unreadable ({exc})"
+    resolved: dict[str, float] = {}
+    notes: list[str] = []
     for cell in plan.arms:
         value = cell.snapshot_dict.get("iv_rank")
-        if cell.arm == "B" and cell.direction == "call" and isinstance(value, (int, float)):
-            return float(value), "plan cell B/call (hunt-plan --ivrank)"
-    store = _iv_store(getattr(args, "ivrank", None))
-    if store is None:
-        return None, "no IV store"
-    try:
-        observations = store.observations(rules.strategy.symbol)
-    except Exception as exc:  # noqa: BLE001 - a broken store must not stop the session
-        return None, f"IV store unreadable ({exc})"
-    if not observations:
-        return None, "IV store has no observations"
-    ranked = [o for o in observations if o.rank is not None]
-    if not ranked:
-        return None, (
-            f"IV store has {len(observations)} observation(s) but no tenor has reached "
-            f"MIN_OBSERVATIONS — T5 cannot be evaluated until the history warms up"
+        if isinstance(value, (int, float)):
+            resolved[cell.key] = float(value)
+            key = cell.snapshot_dict.get("iv_rank_tenor_key")
+            notes.append(f"{cell.key} from plan ({key or 'tenor not recorded'})")
+    if not resolved:
+        if store is None:
+            return None, "no IV store"
+        if not observations:
+            return None, "IV store has no observations"
+        ranked = [o for o in observations if o.rank is not None]
+        if not ranked:
+            return None, (
+                f"IV store has {len(observations)} observation(s) but no tenor has reached "
+                f"MIN_OBSERVATIONS — T5 cannot be evaluated until the history warms up"
+            )
+        # No plan-time read for any cell, so there is no tenor to be faithful to.
+        # Say that rather than inventing one: under R4 the newest tenor is as likely
+        # to be the wrong one as the right one, and a wrong-but-warm rank is worse
+        # than a PENDING that says why.
+        best = max(ranked, key=lambda o: (o.as_of, o.tenor_key))
+        return (
+            float(best.rank),
+            f"IV store tenor {best.tenor_key} as of {best.as_of} "
+            f"(no plan-time read for this session — tenor may not match the cell)",
         )
-    best = max(ranked, key=lambda o: (o.as_of, o.tenor_key))
-    return float(best.rank), f"IV store tenor {best.tenor_key} as of {best.as_of}"
+    return resolved, "; ".join(notes) if notes else "plan cells"
+
+
+def _print_window_arms(
+    args: argparse.Namespace, rules: Rulebook, *, t5_defined: bool | None = None
+) -> list[str]:
+    """Print and return the arms this window may trade (RULED 2026-10-03, R5).
+
+    Printed at startup rather than only on the first entry, because an arm that is
+    silently missing from a run is indistinguishable from an arm that found no setups
+    — and those two facts need completely different responses from the operator.
+    """
+    active = rules.active_arms(t5_iv_rank_defined=t5_defined)
+    inert = rules.inert_arms(t5_iv_rank_defined=t5_defined)
+    print(f"window arms active: {', '.join(active)}")
+    for arm in inert:
+        gate = rules.window.arm_b_gate
+        print(
+            f"  arm {arm} is INERT for this window — {gate.requires} is not satisfied "
+            f"({gate.status}). It will not place positions and will not be scored as a "
+            f"missed setup. {gate.note}"
+        )
+    return active
 
 
 def _router(args: argparse.Namespace, rules: Rulebook) -> Any:
@@ -568,8 +632,20 @@ def cmd_watch(args: argparse.Namespace, now: dt.datetime) -> int:
             "pass --iv-rank, or re-run hunt-plan with --ivrank so the store is read",
             file=sys.stderr,
         )
+    elif isinstance(iv_rank, Mapping):
+        if not iv_rank:
+            print(
+                "warning: plan recorded no IV rank for any cell — T5 evaluates PENDING "
+                "and blocks every arm B/C entry (R4: no fallback to an arbitrary tenor)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"T5 iv_rank per cell (source: {iv_source}):")
+            for key, value in sorted(iv_rank.items()):
+                print(f"  {key}: {value:.2f}")
     else:
         print(f"T5 iv_rank={iv_rank:.2f} (source: {iv_source})")
+    _print_window_arms(args, rules, t5_defined=bool(iv_rank))
     results = run_loop(
         provider=provider,
         rules=rules,
