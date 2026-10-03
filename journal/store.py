@@ -33,6 +33,13 @@ Arm = Literal["A", "B", "C", "EXCEPTION"]
 DecisionKind = Literal["TRADE", "NO_TRADE", "ROLL", "STOP", "PROPOSAL", "VETO"]
 PositionStatus = Literal["OPEN", "CLOSED"]
 
+#: How a ``flow_baseline`` row was collected. 'live' = the EOD soak read the chain
+#: snapshot for that session; 'backfill' = executor/backfill_flow.py reconstructed the
+#: session from historical per-contract bars afterwards (docs/research/
+#: 2026-10-02-backfill-feasibility.md). Same feed either way — this is a *collection*
+#: marker, not a data-vendor marker.
+FlowOrigin = Literal["live", "backfill"]
+
 CONVICTION_MIN = 1
 CONVICTION_MAX = 10
 
@@ -158,6 +165,7 @@ class FlowBaselineRow(BaseModel):
     underlying: str
     feed: str
     is_delayed: bool
+    origin: FlowOrigin = "live"
     session_spot: float
     deep_otm_threshold_pct: float
     deep_otm_call_volume: float
@@ -199,12 +207,60 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | Path, schema_path: str | Path | None = None) -> sqlite3.Connection:
-    """Create the schema if absent. Idempotent."""
+    """Create the schema if absent. Idempotent. Applies additive column migrations."""
     conn = connect(db_path)
     sql = Path(schema_path or SCHEMA_PATH).read_text(encoding="utf-8")
     conn.executescript(sql)
+    apply_migrations(conn)
     conn.commit()
     return conn
+
+
+# ---------------------------------------------------------------------------
+# migrations
+# ---------------------------------------------------------------------------
+
+#: Columns added to an EXISTING table after it was first deployed, in order. Each entry
+#: is (table, column, DDL fragment). They are additive only, because this journal is
+#: append-only: a column can be *added* (existing rows read the DEFAULT) but a row can
+#: never be rewritten to populate it, and no column is ever dropped or retyped.
+MIGRATIONS: tuple[tuple[str, str, str], ...] = (
+    # 2026-10-02: provenance marker for reconstructed sessions (T6 backfill).
+    ("flow_baseline", "origin", "TEXT NOT NULL DEFAULT 'live'"),
+)
+
+
+def apply_migrations(conn: sqlite3.Connection) -> list[str]:
+    """Add any post-deployment columns this database is missing. Idempotent.
+
+    ``CREATE TABLE IF NOT EXISTS`` in schema.sql is a no-op on a database that already
+    has the table, so a column added to the schema later would otherwise be invisible
+    to every existing install — the writer would then fail with a confusing
+    ``no such column`` on the live box while every test (which builds a fresh DB) passed.
+    That is the same class of bug as the 2026-10-02 route drift, one layer down.
+
+    # INTERPRETATION: ``ALTER TABLE ... ADD COLUMN`` is the *only* statement used here,
+    and that is the append-only guarantee talking, not caution. It does not rewrite
+    existing rows (they read the DEFAULT), it does not fire the table's
+    ``BEFORE UPDATE`` trigger — verified, not assumed; a test asserts a legacy row still
+    cannot be updated afterwards — and it is reversible in the sense that matters: a
+    database with the column is readable by code that ignores it.
+
+    Returns the list of columns it added, so a caller can report what it did. An empty
+    list means the database was already current.
+    """
+    added: list[str] = []
+    for table, column, ddl in MIGRATIONS:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            # Table not created yet (someone called apply_migrations on a raw connect()).
+            # schema.sql owns the full shape; nothing to add.
+            continue
+        if column in existing:
+            continue
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        added.append(f"{table}.{column}")
+    return added
 
 
 # ---------------------------------------------------------------------------
@@ -470,13 +526,18 @@ def append_flow_baseline(conn: sqlite3.Connection, entry: FlowBaselineRow) -> in
         cur = conn.execute(
             """
             INSERT INTO flow_baseline (
-                ts, date, underlying, feed, is_delayed, session_spot, zero_dte_expiry,
+                ts, date, underlying, feed, is_delayed, origin, session_spot,
+                zero_dte_expiry,
                 chain_contracts, deep_otm_threshold_pct,
                 deep_otm_call_volume, deep_otm_put_volume, deep_otm_total_volume,
                 call_volume_by_distance, put_volume_by_distance,
                 baseline_lookback_days, baseline_days, baseline_call_mean,
                 baseline_put_mean, ratio_call, ratio_put, strategy_version, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?,
+                      ?, ?, ?,
+                      ?, ?, ?,
+                      ?, ?, ?, ?)
             """,
             (
                 entry.ts,
@@ -484,6 +545,7 @@ def append_flow_baseline(conn: sqlite3.Connection, entry: FlowBaselineRow) -> in
                 entry.underlying.upper(),
                 entry.feed,
                 1 if entry.is_delayed else 0,
+                entry.origin,
                 entry.session_spot,
                 entry.zero_dte_expiry,
                 int(entry.chain_contracts),
@@ -516,6 +578,10 @@ def _flow_from_row(row: sqlite3.Row) -> FlowBaselineRow:
     for field in ("call_volume_by_distance", "put_volume_by_distance"):
         data[field] = _loads(data[field])
     data["is_delayed"] = bool(data["is_delayed"])
+    # A row written before the `origin` column existed has no such key. Those rows were
+    # all produced by the EOD soak, so 'live' is the truth, not a guess — but say it
+    # rather than crashing a read of an un-migrated database.
+    data.setdefault("origin", "live")
     return FlowBaselineRow(**data)
 
 

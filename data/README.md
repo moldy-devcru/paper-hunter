@@ -64,6 +64,15 @@ row per day, and the calibration (`N`) reads off the distribution that accumulat
   threshold later costs nothing and needs no re-fetch.
 - Baseline means and the T6 ratios are computed from **prior** rows only. A session never
   counts itself in its own baseline.
+- `origin` says how the row was collected: `'live'` (the EOD soak read that session's
+  chain snapshot) or `'backfill'` (reconstructed afterwards by
+  [`executor/backfill_flow.py`](../executor/backfill_flow.py) from per-contract
+  historical bars — see
+  [`docs/research/2026-10-02-backfill-feasibility.md`](../docs/research/2026-10-02-backfill-feasibility.md)).
+  It defaults to `'live'`, is written at INSERT only, and the table stays append-only: a
+  reconstructed session is never relabelled in place, and the calibration may weight the
+  two differently only because it can tell them apart. The backfill is optional — the
+  live soak alone still fills this table, just three weeks later.
 
 ## `soak.env` — credentials for the soak timer (NOT in this directory)
 

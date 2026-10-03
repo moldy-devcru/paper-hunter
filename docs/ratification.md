@@ -41,7 +41,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**55 interpretations across 7 domains.** Every one was a decision
+**62 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -67,18 +67,19 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/checklist.py:325`** — "close tags lower band and closes back inside" = the signal bar's LOW touched or undercut the lower band AND the close finished back above it (inverted for puts: high tags the upper band, close back below). ([source](../executor/checklist.py#L325))
 - [ ] **`executor/checklist.py:374`** — an event day is checked FIRST and short-circuits T5. The brief calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it outranks a healthy IV rank rather than being one AND-condition among several. ([source](../executor/checklist.py#L374))
 
-### data (8)
+### data (9)
 
 - [ ] **`executor/alpaca_client.py:47`** — `timeframe` values are the Alpaca wire strings ("1Min", "5Min", "1Day"). Daily and intraday bars use the *same* single-symbol route `GET /v2/stocks/{symbol}/bars` with different `timeframe` values — the symbol is a path segment. ([source](../executor/alpaca_client.py#L47))
-- [ ] **`executor/alpaca_client.py:411`** — after sleeping, if the window still looks full (the clock did not move), the oldest stamp is dropped and the call proceeds. ([source](../executor/alpaca_client.py#L411))
-- [ ] **`executor/alpaca_client.py:687`** — the reference date is a UTC date. Alpaca expiry timestamps are exchange-local (America/New_York); for an after-hours decision the two agree in every case this executor cares about, and a documented UTC choice is better than an implicit local-time one. ([source](../executor/alpaca_client.py#L687))
-- [ ] **`executor/alpaca_client.py:703`** — ties break toward calls. Arm C is calls-only and arm B picks its own strike, so the only consumer of the ATM contract is the IV-rank tenor selection, and a deterministic tie-break keeps that key stable day to day. ([source](../executor/alpaca_client.py#L703))
-- [ ] **`executor/alpaca_client.py:1192`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1192))
+- [ ] **`executor/alpaca_client.py:127`** — this splits rather than truncates. ([source](../executor/alpaca_client.py#L127))
+- [ ] **`executor/alpaca_client.py:461`** — after sleeping, if the window still looks full (the clock did not move), the oldest stamp is dropped and the call proceeds. ([source](../executor/alpaca_client.py#L461))
+- [ ] **`executor/alpaca_client.py:737`** — the reference date is a UTC date. Alpaca expiry timestamps are exchange-local (America/New_York); for an after-hours decision the two agree in every case this executor cares about, and a documented UTC choice is better than an implicit local-time one. ([source](../executor/alpaca_client.py#L737))
+- [ ] **`executor/alpaca_client.py:753`** — ties break toward calls. Arm C is calls-only and arm B picks its own strike, so the only consumer of the ATM contract is the IV-rank tenor selection, and a deterministic tie-break keeps that key stable day to day. ([source](../executor/alpaca_client.py#L753))
+- [ ] **`executor/alpaca_client.py:1367`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1367))
 - [ ] **`executor/iv_rank.py:180`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L180))
 - [ ] **`executor/iv_rank.py:216`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L216))
 - [ ] **`config/loader.py:525`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L525))
 
-### trading (17)
+### trading (18)
 
 - [ ] **`executor/alpaca_trading.py:52`** — paper proof is `account.paper is True` OR an account id beginning `PA` (the prefix Alpaca issues paper accounts). ([source](../executor/alpaca_trading.py#L52))
 - [ ] **`executor/alpaca_trading.py:58`** — market orders are the default `time_in_force`. Alpaca rejects `DAY` market orders after 16:00 ET, and the brief's hard-close is 15:30 ET, so DAY is correct for every order this executor places. ([source](../executor/alpaca_trading.py#L58))
@@ -97,6 +98,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/watch_loop.py:40`** — re-entry — a cell that has already produced an entry action this session is not re-entered on a later tick, even if spot re-crosses the trigger. ([source](../executor/watch_loop.py#L40))
 - [ ] **`executor/watch_loop.py:202`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L202))
 - [ ] **`executor/watch_loop.py:513`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L513))
+- [ ] **`journal/store.py:242`** — `ALTER TABLE ... ADD COLUMN` is the *only* statement used here, and that is the append-only guarantee talking, not caution. ([source](../journal/store.py#L242))
 
 ### analysis (9)
 
@@ -125,6 +127,14 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
 - [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
 - [ ] **`executor/main.py:513`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L513))
+
+### other (5)
+
+- [ ] **`executor/backfill_flow.py:285`** — the grid step is a **parameter, not a fact about the world**. ([source](../executor/backfill_flow.py#L285))
+- [ ] **`executor/backfill_flow.py:294`** — strikes are snapped to a multiple of `strike_step` by `ceil(lo/step)*step` and emitted while `<= hi`, so the span is symmetric to within one step and contains no strike outside the window. ([source](../executor/backfill_flow.py#L294))
+- [ ] **`executor/backfill_flow.py:364`** — the contract is built by *parsing the OCC symbol back* rather than by remembering what we asked for, so strike/right/expiry in the row come from the same parser the live path uses. ([source](../executor/backfill_flow.py#L364))
+- [ ] **`executor/backfill_flow.py:559`** — the message keeps the exception type and text (Alpaca's HTTP status and body are the whole diagnosis — see the feasibility note's §5), and the run continues. ([source](../executor/backfill_flow.py#L559))
+- [ ] **`executor/backfill_flow.py:634`** — the honest-empty rule, inherited from the live soak. ([source](../executor/backfill_flow.py#L634))
 
 <!-- END GENERATED: INTERPRETATION INVENTORY -->
 

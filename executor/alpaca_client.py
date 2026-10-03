@@ -63,9 +63,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal, Protocol
 
 # ---------------------------------------------------------------------------
@@ -92,6 +92,23 @@ STOCK_BARS_PATH = "/v2/stocks/{symbol}/bars"
 #: the current Alpaca API reference, and a request to an unknown version 404s.
 OPTIONS_SNAPSHOTS_PATH = "/v1beta1/options/snapshots"
 
+#: Historical option DAILY BARS, per contract symbol. This is the backfill path's only
+#: options route (``executor/backfill_flow.py``): the chain snapshot endpoint has no
+#: point-in-time parameter, so the way to get a past session's 0DTE contract volume is to
+#: ask for the bars of the contracts that expired that day.
+#: https://docs.alpaca.markets/us/reference/optionbars
+#:
+#: Deliberately NOT named ``/v1beta1/options/daily-bars`` or ``/v2beta1/...``: the
+#: reference's OpenAPI block lists exactly one historical options path, ``/v1beta1/options/
+#: bars``, and the version prefix is part of the contract (an unknown version 404s).
+OPTIONS_HISTORICAL_BARS_PATH = "/v1beta1/options/bars"
+
+#: Documented hard cap on the ``symbols`` query param: "A comma-separated list of
+#: contract symbols with a limit of 100." Exceeding it is a 422, so ``chunk_symbols``
+#: batches at exactly this and the client refuses a larger list outright rather than
+#: letting the API truncate it silently.
+MAX_OPTION_SYMBOLS_PER_REQUEST = 100
+
 ACCOUNT_PATH = "/v2/account"
 POSITIONS_PATH = "/v2/positions"
 CLOCK_PATH = "/v2/clock"
@@ -100,6 +117,27 @@ CLOCK_PATH = "/v2/clock"
 def stock_bars_path(symbol: str) -> str:
     """Path for one symbol's bars. The symbol is a path segment, not a query param."""
     return STOCK_BARS_PATH.format(symbol=urllib.parse.quote(symbol.upper(), safe=""))
+
+
+def chunk_option_symbols(
+    symbols: Sequence[str], size: int = MAX_OPTION_SYMBOLS_PER_REQUEST
+) -> list[list[str]]:
+    """Split OCC contract symbols into documented-legal batches (max 100 per request).
+
+    # INTERPRETATION: this splits rather than truncates. The documented limit is on the
+    ``symbols`` query param, and a caller that handed us 260 contracts and got 100 of
+    them back would have a *silently incomplete* ladder — the one failure mode this
+    whole module exists to prevent (see docs/research/2026-10-02-backfill-feasibility.md
+    §1b: an undercounted ladder understates the deep-OTM buckets, which are the input to
+    a frozen threshold). Order is preserved and no duplicate is sent twice, so a caller
+    can zip the batches back onto its own list positionally if it needs to.
+    """
+    if size < 1 or size > MAX_OPTION_SYMBOLS_PER_REQUEST:
+        raise ValueError(
+            f"size must be between 1 and {MAX_OPTION_SYMBOLS_PER_REQUEST}, got {size}"
+        )
+    ordered = list(dict.fromkeys(s.strip().upper() for s in symbols if s and s.strip()))
+    return [ordered[i : i + size] for i in range(0, len(ordered), size)]
 
 
 KEY_ENV = "ALPACA_PAPER_KEY"
@@ -270,6 +308,18 @@ DOC_VERIFIED_ROUTES: tuple[DocRoute, ...] = (
                 "expiration_date_lte",
                 "root_symbol",
             }
+        ),
+        base=DATA_BASE,
+    ),
+    DocRoute(
+        path="/v1beta1/options/bars",
+        doc_url="https://docs.alpaca.markets/us/reference/optionbars",
+        # From the reference's OpenAPI `components.parameters`: symbols (required),
+        # timeframe (required), start, end, limit, page_token, sort. There is NO `feed`
+        # parameter on this route — the historical options feed is not selectable per
+        # request — and no `asof`/`date`: history is a start/end interval, nothing else.
+        query_params=frozenset(
+            {"symbols", "timeframe", "start", "end", "limit", "page_token", "sort"}
         ),
         base=DATA_BASE,
     ),
@@ -725,6 +775,41 @@ class OptionChain:
 
 
 @dataclass(frozen=True, slots=True)
+class OptionBarSeries:
+    """Historical option bars for a batch of contracts, keyed by OCC contract symbol.
+
+    ``bars`` is a dict because the API's is: ``{"bars": {"SPY251220C00685000": [...]}}``.
+    A contract with no bar in the window is simply **absent from the dict** — that is
+    the documented shape for "no data", not an error, and it is exactly the signal the
+    backfill needs ("this contract did not trade that session").
+    """
+
+    bars_by_symbol: dict[str, list[Bar]]
+    next_page_token: str | None = None
+
+    def __len__(self) -> int:
+        return len(self.bars_by_symbol)
+
+    def symbols_with_data(self) -> list[str]:
+        return sorted(self.bars_by_symbol)
+
+    def bar_on(self, symbol: str, day: date | None = None) -> Bar | None:
+        """The contract's bar, optionally the one stamped on ``day`` (ET date).
+
+        A multi-day window can hold several bars per contract; the backfill asks for one
+        session at a time, but pinning the date here means a wrong-window response
+        cannot be silently summed into that session's volume.
+        """
+        series = self.bars_by_symbol.get(symbol.upper(), [])
+        if day is None:
+            return series[-1] if series else None
+        for bar in series:
+            if bar.t.astimezone(UTC).date() == day:
+                return bar
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class Account:
     id: str
     status: str
@@ -1079,6 +1164,59 @@ class AlpacaClient:
             pages += 1
         return chain
 
+    def get_option_daily_bars(
+        self,
+        symbols: Sequence[str],
+        *,
+        start: str,
+        end: str,
+        timeframe: str = "1Day",
+        limit: int | None = 10000,
+        page_token: str | None = None,
+        sort: Literal["asc", "desc"] | None = None,
+    ) -> OptionBarSeries:
+        """``GET /v1beta1/options/bars`` for up to 100 contract symbols.
+
+        The historical options route. ``start``/``end`` are required here (not defaulted)
+        because this method exists to answer "what happened on *that* day" — a default
+        window would answer "what happened recently", which is the chain snapshot's job.
+
+        ``symbols`` is the **query param name** on this route (unlike stock bars, where
+        the symbol is a path segment), it is comma-separated, and it is capped at 100
+        per request. More than 100 raises here rather than at the API: a silently
+        truncated ladder would understate the deep-OTM buckets, and the whole point of
+        this module is that an incomplete answer is a *reported* condition, never a quiet
+        one. Use :func:`chunk_option_symbols` to batch.
+
+        No ``feed`` parameter exists on this route, so a caller cannot mix feeds inside
+        one backfill — every bar comes from the same (indicative) universe the live soak
+        samples. ``page_token`` is exposed for completeness; with ``timeframe=1Day`` over
+        a single session there is one bar per symbol and a 100-symbol chunk fits in one
+        page.
+        """
+        batch = [s.strip().upper() for s in symbols if s and s.strip()]
+        if not batch:
+            return OptionBarSeries(bars_by_symbol={})
+        if len(batch) > MAX_OPTION_SYMBOLS_PER_REQUEST:
+            raise AlpacaError(
+                f"historical option bars take at most {MAX_OPTION_SYMBOLS_PER_REQUEST} "
+                f"symbols per request, got {len(batch)} — use chunk_option_symbols()"
+            )
+        payload = self._get(
+            self.data_base,
+            OPTIONS_HISTORICAL_BARS_PATH,
+            {
+                "symbols": ",".join(dict.fromkeys(batch)),
+                "timeframe": timeframe,
+                "start": start,
+                "end": end,
+                "limit": limit,
+                "page_token": page_token,
+                "sort": sort,
+            },
+        )
+        return _option_bars_from_payload(payload)
+
     # -- paper account (read-only) --------------------------------------------
 
     def get_account(self) -> Account:
@@ -1175,6 +1313,43 @@ def _chain_from_payload(underlying: str, feed: str, payload: Any) -> OptionChain
     )
 
 
+def _option_bars_from_payload(payload: Any) -> OptionBarSeries:
+    """Parse the documented historical option bars envelope:
+
+    ``{"bars": {"SPY251220C00685000": [{"t":…, "o":…, "v":…}]}, "next_page_token": null}``
+
+    ``bars`` is keyed by OCC contract symbol, like the chain snapshot's ``snapshots``.
+    A malformed *bar* raises (it would be a real API shape change); a malformed
+    *envelope* raises too, including the empty-window case, because here a missing
+    ``bars`` key means "this request told us nothing", and a backfill that treated that
+    as "no contracts traded" would write a zero-volume session.
+    """
+    if not isinstance(payload, dict):
+        raise AlpacaError(f"unexpected option bars payload type {type(payload).__name__}")
+    bars_block = payload.get("bars")
+    if bars_block is None:
+        if set(payload.keys()) <= {"bars", "next_page_token", "currency"}:
+            bars_block = {}
+        else:
+            raise AlpacaError("option bars payload has no 'bars' object")
+    if not isinstance(bars_block, dict):
+        raise AlpacaError(
+            f"option bars payload has a 'bars' of unusable type {type(bars_block).__name__}"
+        )
+    series: dict[str, list[Bar]] = {}
+    for occ_symbol, raw_bars in bars_block.items():
+        if not isinstance(raw_bars, list):
+            raise AlpacaError(f"option bars for {occ_symbol} is not a list")
+        bars = [Bar.from_json(b) for b in raw_bars]
+        bars.sort(key=lambda b: b.t)
+        if bars:
+            series[str(occ_symbol).upper()] = bars
+    return OptionBarSeries(
+        bars_by_symbol=series,
+        next_page_token=_as_str(payload.get("next_page_token")),
+    )
+
+
 def sip_end_is_queryable(
     end: datetime | None,
     *,
@@ -1219,7 +1394,10 @@ __all__ = [
     "Greeks",
     "KEY_ENV",
     "MockTransport",
+    "MAX_OPTION_SYMBOLS_PER_REQUEST",
+    "OPTIONS_HISTORICAL_BARS_PATH",
     "OPTIONS_SNAPSHOTS_PATH",
+    "OptionBarSeries",
     "OptionChain",
     "OptionContract",
     "OptionQuote",
@@ -1236,6 +1414,7 @@ __all__ = [
     "STOCK_BARS_PATH",
     "Transport",
     "UrllibTransport",
+    "chunk_option_symbols",
     "match_doc_route",
     "parse_occ_symbol",
     "sip_end_is_queryable",

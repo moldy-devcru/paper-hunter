@@ -255,12 +255,26 @@ END;
 -- option trades are delayed ~15 minutes and synthetic-derived from OPRA. A deep-OTM
 -- volume number without its feed attached is not auditable, and the research note
 -- flags exactly this as a condition that would distort the experiment's conclusions.
+--
+-- `origin` says HOW THE ROW WAS COLLECTED, which is a different question from where the
+-- data came from: 'live' = one EOD soak pass read the chain snapshot for that session;
+-- 'backfill' = executor/backfill_flow.py reconstructed the session afterwards from
+-- historical per-contract bars (research note 2026-10-02-backfill-feasibility.md).
+-- It defaults to 'live' so every row written by the original writer is unchanged by
+-- this column's arrival, and it is written at INSERT only — the table is append-only,
+-- so a backfilled session is never relabelled in place. The T6 calibration is free to
+-- weight the two differently, but it must be able to TELL them apart, which is why this
+-- is a column and not a comment.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS flow_baseline (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
     ts                      TEXT    NOT NULL,   -- UTC ISO-8601, write time
     date                    TEXT    NOT NULL,   -- YYYY-MM-DD ET session date (UNIQUE)
     underlying              TEXT    NOT NULL,
+    -- 'live' (EOD soak) | 'backfill' (reconstructed from historical bars). See the
+    -- table comment above; migration-safe for pre-existing rows via DEFAULT 'live'.
+    origin                  TEXT    NOT NULL DEFAULT 'live'
+                                       CHECK (origin IN ('live', 'backfill')),
     -- Provenance: where these numbers came from and how stale they are.
     feed                    TEXT    NOT NULL,   -- e.g. 'indicative'
     is_delayed              INTEGER NOT NULL,   -- 1 when the feed delays trades

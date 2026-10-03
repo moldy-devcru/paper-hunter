@@ -1,0 +1,169 @@
+{
+  "_comment": [
+    "Offline fixture for executor/backfill_flow.py --dry-run, shaped exactly like the two",
+    "documented Alpaca responses it parses:",
+    "  stock_bars  : GET /v2/stocks/{symbol}/bars           -> {\"bars\": [ ...flat list... ]}",
+    "  option_bars : GET /v1beta1/options/bars              -> {\"bars\": {<OCC sym>: [...]}}",
+    "The option contracts all expire 2025-12-18, the session this fixture replays, and",
+    "the stock bars are the same 2025-12-17/18 pair the chain fixture carries, so the",
+    "backfill's reconstruction can be compared against the live soak reading the SAME",
+    "numbers through the chain-snapshot path (tests/test_backfill_flow.py).",
+    "The ladder is deliberately sparse: 8 contracts have bars, one has a bar stamped on",
+    "the WRONG day (2025-12-17) so the off-session guard is exercised, and the ~260",
+    "symbols the default grid requests have none -- which is what a real sparse 0DTE",
+    "ladder looks like and why coverage is reported per session."
+  ],
+  "session": "2025-12-18",
+  "stock_bars": {
+    "symbol": "SPY",
+    "next_page_token": null,
+    "bars": [
+      {
+        "t": "2025-12-17T05:00:00Z",
+        "o": "680.02",
+        "h": "682.71",
+        "l": "679.30",
+        "c": "681.95",
+        "v": "38870544",
+        "n": 381004,
+        "vw": "681.10"
+      },
+      {
+        "t": "2025-12-18T05:00:00Z",
+        "o": "682.31",
+        "h": "683.95",
+        "l": "677.62",
+        "c": "678.44",
+        "v": "66902112",
+        "n": 655320,
+        "vw": "680.42"
+      }
+    ]
+  },
+  "option_bars": {
+    "currency": "USD",
+    "next_page_token": null,
+    "bars": {
+      "SPY251218C00685000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "1.55",
+          "h": "2.10",
+          "l": "1.40",
+          "c": "1.62",
+          "v": 5000,
+          "n": 910,
+          "vw": "1.66"
+        }
+      ],
+      "SPY251218C00695000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.41",
+          "h": "0.62",
+          "l": "0.36",
+          "c": "0.44",
+          "v": 800,
+          "n": 205,
+          "vw": "0.45"
+        }
+      ],
+      "SPY251218C00700000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.30",
+          "h": "0.47",
+          "l": "0.26",
+          "c": "0.31",
+          "v": 1200,
+          "n": 318,
+          "vw": "0.32"
+        }
+      ],
+      "SPY251218C00705000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.22",
+          "h": "0.36",
+          "l": "0.19",
+          "c": "0.24",
+          "v": 340,
+          "n": 97,
+          "vw": "0.24"
+        }
+      ],
+      "SPY251218C00660000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "7.10",
+          "h": "7.55",
+          "l": "6.85",
+          "c": "6.95",
+          "v": 150,
+          "n": 41,
+          "vw": "6.98"
+        }
+      ],
+      "SPY251218P00640000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.14",
+          "h": "0.24",
+          "l": "0.12",
+          "c": "0.15",
+          "v": 220,
+          "n": 88,
+          "vw": "0.15"
+        }
+      ],
+      "SPY251218P00650000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.29",
+          "h": "0.48",
+          "l": "0.25",
+          "c": "0.33",
+          "v": 1900,
+          "n": 402,
+          "vw": "0.34"
+        }
+      ],
+      "SPY251218P00660000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "0.58",
+          "h": "0.92",
+          "l": "0.51",
+          "c": "0.66",
+          "v": 2600,
+          "n": 507,
+          "vw": "0.68"
+        }
+      ],
+      "SPY251218P00675000": [
+        {
+          "t": "2025-12-18T05:00:00Z",
+          "o": "2.05",
+          "h": "2.60",
+          "l": "1.90",
+          "c": "2.18",
+          "v": 6000,
+          "n": 1043,
+          "vw": "2.21"
+        }
+      ],
+      "SPY251218C00720000": [
+        {
+          "t": "2025-12-17T05:00:00Z",
+          "o": "0.12",
+          "h": "0.18",
+          "l": "0.10",
+          "c": "0.13",
+          "v": 999,
+          "n": 60,
+          "vw": "0.13"
+        }
+      ]
+    }
+  }
+}

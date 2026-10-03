@@ -21,6 +21,7 @@ Doc references (verified 2026-10-02):
 * stock bars (single symbol)  https://docs.alpaca.markets/us/reference/stockbarsingle-1
 * stock bars (multi symbol)   https://docs.alpaca.markets/us/reference/stockbars
 * option chain                https://docs.alpaca.markets/us/reference/optionchain
+* historical option bars      https://docs.alpaca.markets/us/reference/optionbars
 * get account                 https://docs.alpaca.markets/reference/getaccount-1
 * get open positions          https://docs.alpaca.markets/reference/getopenpositions-1
 * get clock                   https://docs.alpaca.markets/reference/getclock-1
@@ -37,13 +38,17 @@ from executor.alpaca_client import (
     CLOCK_PATH,
     DATA_BASE,
     DOC_VERIFIED_ROUTES,
+    MAX_OPTION_SYMBOLS_PER_REQUEST,
+    OPTIONS_HISTORICAL_BARS_PATH,
     OPTIONS_SNAPSHOTS_PATH,
     PAPER_TRADING_BASE,
     POSITIONS_PATH,
     STOCK_BARS_PATH,
     AlpacaAPIError,
     AlpacaClient,
+    AlpacaError,
     MockTransport,
+    chunk_option_symbols,
     match_doc_route,
     stock_bars_path,
 )
@@ -53,6 +58,8 @@ JUNK_SECRET = "TESTSECRET-not-a-real-secret"  # noqa: S105 - deliberately fake
 
 BARS_URL = "https://data.alpaca.markets/v2/stocks/SPY/bars"
 CHAIN_URL = "https://data.alpaca.markets/v1beta1/options/snapshots/SPY"
+OPTION_BARS_URL = "https://data.alpaca.markets/v1beta1/options/bars"
+EMPTY_OPTION_BARS = {"bars": {}, "next_page_token": None}
 
 EMPTY_BARS = {"bars": [], "symbol": "SPY", "next_page_token": None}
 EMPTY_CHAIN = {"snapshots": {}, "next_page_token": None}
@@ -96,6 +103,93 @@ def test_option_chain_route_is_v1beta1_not_v2beta1():
     assert OPTIONS_SNAPSHOTS_PATH == "/v1beta1/options/snapshots"
     assert "v2beta1" not in OPTIONS_SNAPSHOTS_PATH
     assert "v2beta1" not in STOCK_BARS_PATH
+    assert "v2beta1" not in OPTIONS_HISTORICAL_BARS_PATH
+
+
+# ---------------------------------------------------------------------------
+# historical option bars (the T6 backfill's only options route)
+# ---------------------------------------------------------------------------
+
+
+def test_historical_option_bars_route_is_the_documented_path():
+    """``/v1beta1/options/bars`` — the reference lists no ``daily-bars`` sibling."""
+    assert OPTIONS_HISTORICAL_BARS_PATH == "/v1beta1/options/bars"
+    route = match_doc_route(OPTIONS_HISTORICAL_BARS_PATH)
+    assert route is not None
+    assert route.base == DATA_BASE
+    assert route.doc_url == "https://docs.alpaca.markets/us/reference/optionbars"
+    # symbols + timeframe are documented REQUIRED on this route.
+    assert {"symbols", "timeframe"} <= route.query_params
+    # …and there is no `feed`: the historical options feed is not selectable per request,
+    # which is why backfilled and soaked rows are the same indicative universe.
+    assert "feed" not in route.query_params
+    # …and no point-in-time parameter, which is the whole reason the backfill has to
+    # enumerate the contract ladder itself.
+    assert not {"asof", "date", "expiration_date"} & route.query_params
+
+
+def test_get_option_daily_bars_sends_symbols_as_the_documented_query_param():
+    url, params = probe(
+        {OPTIONS_HISTORICAL_BARS_PATH: EMPTY_OPTION_BARS},
+        lambda c: c.get_option_daily_bars(
+            ["SPY251218C00700000", "spy251218p00650000"], start="2025-12-18", end="2025-12-18"
+        ),
+    )
+    assert url == OPTION_BARS_URL
+    assert params == {
+        "symbols": "SPY251218C00700000,SPY251218P00650000",  # comma-separated, normalised
+        "timeframe": "1Day",
+        "start": "2025-12-18",
+        "end": "2025-12-18",
+        "limit": 10000,
+    }
+    # Unlike stock bars, the contract symbols are NOT path segments and not a `symbol` param.
+    assert "symbol" not in params
+    assert OPTIONS_HISTORICAL_BARS_PATH.endswith("/bars")
+
+
+def test_get_option_daily_bars_refuses_more_than_the_documented_100_symbols():
+    transport = MockTransport({OPTIONS_HISTORICAL_BARS_PATH: EMPTY_OPTION_BARS})
+    client = AlpacaClient(transport=transport, key=JUNK_KEY, secret=JUNK_SECRET)
+    too_many = [
+        f"SPY251218C{700 + i:06d}00"[:16] for i in range(MAX_OPTION_SYMBOLS_PER_REQUEST + 1)
+    ]
+    with pytest.raises(AlpacaError, match="at most 100 symbols"):
+        client.get_option_daily_bars(too_many, start="2025-12-18", end="2025-12-18")
+    assert transport.calls == []  # refused before the network, not after a 422
+
+
+def test_get_option_daily_bars_with_no_symbols_makes_no_request():
+    transport = MockTransport({OPTIONS_HISTORICAL_BARS_PATH: EMPTY_OPTION_BARS})
+    client = AlpacaClient(transport=transport, key=JUNK_KEY, secret=JUNK_SECRET)
+    assert client.get_option_daily_bars([], start="a", end="b").bars_by_symbol == {}
+    assert transport.calls == []
+
+
+def test_mock_rejects_a_feed_param_on_the_historical_option_bars_route():
+    """The route has no `feed`; sending one is a documented-parameter violation."""
+    transport = MockTransport({OPTIONS_HISTORICAL_BARS_PATH: EMPTY_OPTION_BARS})
+    with pytest.raises(AlpacaAPIError) as exc:
+        transport.get_json(
+            OPTION_BARS_URL,
+            headers={},
+            params={"symbols": "SPY251218C00700000", "timeframe": "1Day", "feed": "opra"},
+        )
+    assert exc.value.status == 400
+    assert "feed" in str(exc.value)
+
+
+def test_chunk_option_symbols_batches_at_the_documented_limit():
+    symbols = [f"SPY251218C{i:06d}00"[:16] for i in range(250)]
+    batches = chunk_option_symbols(symbols)
+    assert [len(b) for b in batches] == [100, 100, 50]
+    assert sum(len(b) for b in batches) == 250
+    assert max(len(b) for b in batches) <= MAX_OPTION_SYMBOLS_PER_REQUEST
+    # Case-normalised, de-duplicated, order preserved — no contract asked for twice.
+    assert chunk_option_symbols(["a", "A", " b "]) == [["A", "B"]]
+    assert chunk_option_symbols([]) == []
+    with pytest.raises(ValueError):
+        chunk_option_symbols(["SPY251218C00700000"], size=101)
 
 
 @pytest.mark.parametrize(
@@ -240,6 +334,7 @@ def test_every_pinned_route_resolves_in_the_doc_registry():
     for path in (
         stock_bars_path("SPY"),
         f"{OPTIONS_SNAPSHOTS_PATH}/SPY",
+        OPTIONS_HISTORICAL_BARS_PATH,
         ACCOUNT_PATH,
         POSITIONS_PATH,
         CLOCK_PATH,
