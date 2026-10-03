@@ -13,7 +13,7 @@
 # because a typo in a frozen rulebook must fail loudly, not quietly disable a veto.
 
 strategy:
-  version: "1.0.0-draft"          # bump on every rule change (brief: "any change = new strategy version")
+  version: "1.1.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
   status: "DRAFT"                 # flipped to "FROZEN" by the operator at ratification
   symbol: SPY
   timezone: America/New_York
@@ -37,7 +37,22 @@ window:
   months: 3
   target_sessions: 60
   extension: monthly_review_only
-  start: null
+  start: 2026-11-02
+  # RULED 2026-10-03 (operator): the November window opens ARMS A + C ONLY. Arm B is
+  # inert until T5 can resolve, because the deployed IV store has one observation per
+  # tenor and `IvRankStore.MIN_OBSERVATIONS = 60` — T5 is PENDING, and T5 is blocking
+  # for arm B, so arm B could not take a single position in the window no matter how
+  # good the rest of the stack looked. Naming the arms here makes "B is inert" a fact
+  # of the pre-registration rather than a surprise found in a journal.
+  #
+  # `arm_b` is gated, not disabled: when T5's IV rank resolves the gate opens and arm
+  # B plans and trades under its existing rules with no further ruling. Arm B's rules
+  # are frozen and unchanged; only its activation is gated.
+  arms: [A, C]
+  arm_b_gate:
+    requires: t5_iv_rank_defined
+    status: armed_pending_warmup
+    note: "opens automatically when a tenor the plan reads reaches MIN_OBSERVATIONS; no new ruling needed"
 
 # ---------------------------------------------------------------------------
 # arms — 3 x $10k paper, same window (brief: "Arms")
@@ -184,6 +199,27 @@ checklist:
     id: T5
     applies_to: [B, C]
     purpose: no_hostile_iv_setup
+    # RULED 2026-10-03 (operator, ruling R4): T5 reads the ROLLING DTE-keyed tenor
+    # (`dte_tenor_key`), not the expiry-keyed one. The expiry-keyed series includes the
+    # calendar expiry in its key, so a weekly expiry accrues ~5 observations and dies
+    # with that expiry — it can never reach MIN_OBSERVATIONS=60 and T5 would stay
+    # PENDING forever. The rolling key buckets DTE (see `dte_bucket_days`) and rolls
+    # with the underlying instead.
+    #
+    # The cost is stated, not hidden: a DTE bucket mixes expiries, so the rank is a
+    # statement about "roughly this many DTE out, ATM-ish" rather than about one exact
+    # contract. The expiry-keyed series is still written by the soak, so the
+    # approximation can be measured against the exact thing instead of trusted.
+    #
+    # Operator's reasoning on the record: roll-before-theta instinct. That instinct is
+    # ALREADY the frozen arm C roll trigger (delta < 0.70 or DTE < 45); IV rank gates
+    # ENTRY, not roll timing, so the two do not fight.
+    tenor_key_mode: rolling_dte
+    # Days per rolling-DTE bucket. One week, because every option expiry steps down
+    # the DTE axis by exactly 7 between two Fridays — with a 7-day bucket the SET of
+    # buckets written each session is stable, so each keeps collecting one observation
+    # per session from a different expiry each time.
+    dte_bucket_days: 7
     arm_b:
       iv_rank_max: 50                      # premium-buying (B): IV rank < 50
       iv_rank_lookback: "1y"
@@ -256,7 +292,31 @@ checklist:
       bucket_size_pct: 1.0                 # histogram bucket width; integer thresholds re-derive exactly
       applies_to_expiry: zero_dte
       volume_source: daily_bar_volume      # the snapshot's dailyBar.v, not quote size
-    evaluation: EOD_only                    # pending operator ruling: flow gate is end-of-day only
+    evaluation: EOD_only                    # the flow DATA is EOD-only; the POLICY below is not
+    # RULED 2026-10-03 00:43 EDT (operator, ruling R3) — OPERATOR-RATIFIED, not
+    # delegated: mads confirmed "your recs are good with me". T6's gate data is
+    # EOD-confirmed, but the thing it gates — an arm B entry — is intraday. Resolved as
+    # CARRY-FORWARD: the newest confirmed row from a session BEFORE this one is this
+    # session's gate input.
+    #
+    # The alternative reading was `next_day_only`: the gate resolves only from the
+    # immediately preceding session, and a gap (holiday, failed soak) leaves T6
+    # PENDING rather than carrying an older regime forward. It is kept as a live switch
+    # so the choice can be changed without a code edit; flipping the default is a
+    # one-line YAML change plus a strategy-version bump.
+    #
+    # CAVEAT, on the record, because it is the cost of the ruling and not a detail: the
+    # carried ratio is one session stale, so T6 is a *prior-session regime* filter, not
+    # a same-session flow read. Nothing about the carried row describes today's flow.
+    # `executor/flow_gate.py` records `sessions_stale` on every read, so the staleness
+    # is measured in the journal rather than asserted here.
+    #
+    # REVISIT: at the first monthly review, once the baseline has enough sessions to
+    # say whether the carry-forward is behaving — i.e. whether the call side's P90
+    # (1.157) and the put side's (4.024) describe a distribution stable enough for one
+    # multiplier applied to whichever side is traded.
+    intraday_policy: carry_forward
+    intraday_policy_operator_ruling: "2026-10-03T00:43:00-04:00"
     purpose: quantifiable_gamma_squeeze_footprint
     notes:
       - "The robot-executable half of the social signal. Social text never enters the robot path."

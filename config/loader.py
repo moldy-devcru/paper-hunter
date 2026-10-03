@@ -117,6 +117,20 @@ class Strategy(FrozenModel):
     brief: str = "docs/brief.md"
 
 
+class ArmBWindowGate(FrozenModel):
+    """Why arm B is not active yet, in the rulebook rather than in a status message.
+
+    ``requires`` names the condition that opens the gate; ``status`` is the operator's
+    label for where it stands today. Neither is free text the executor branches on —
+    :meth:`Rulebook.active_arms` reads ``requires`` and the checklist decides whether
+    the condition holds, so the field records intent and the code decides fact.
+    """
+
+    requires: Literal["t5_iv_rank_defined"]
+    status: str
+    note: str = ""
+
+
 class Window(FrozenModel):
     """How long the experiment runs.
 
@@ -125,12 +139,17 @@ class Window(FrozenModel):
     count to look at, and because "3 months" and "60 sessions" only agree until a
     holiday week and a window that stops short would otherwise be indistinguishable
     from one that ran long.
+
+    RULED 2026-10-03 (operator, R5): the window opens arms A + C only, with arm B
+    gated on T5's IV rank resolving. See :attr:`arms` and :attr:`arm_b_gate`.
     """
 
     months: int = Field(gt=0)
     target_sessions: int = Field(gt=0)
     extension: Literal["monthly_review_only"]
     start: dt.date | None = None
+    arms: list[Literal["A", "B", "C"]] = Field(default_factory=lambda: ["A", "B", "C"])
+    arm_b_gate: ArmBWindowGate | None = None
 
     @model_validator(mode="after")
     def _length_is_sane(self) -> Window:
@@ -140,6 +159,17 @@ class Window(FrozenModel):
             raise ValueError(
                 f"target_sessions {self.target_sessions} is implausible for "
                 f"{self.months} months"
+            )
+        # Listing arm B as active AND gating it is a contradiction that would silently
+        # make the gate a no-op. Loud here rather than confusing at the first entry.
+        if self.arm_b_gate is not None and "B" in self.arms:
+            raise ValueError(
+                "window.arms lists B as active while window.arm_b_gate defers it — pick "
+                "one: arm B is deferred (omit it from arms) or it is active (drop the gate)"
+            )
+        if self.arm_b_gate is not None and "C" not in self.arms:
+            raise ValueError(
+                "window.arm_c_gate defers arm C but C is not listed in window.arms"
             )
         return self
 
@@ -488,6 +518,13 @@ class T5(FrozenModel):
     id: Literal["T5"]
     applies_to: list[Literal["B", "C"]]
     purpose: str
+    # RULED 2026-10-03 (operator, R4): `rolling_dte`. Pinned to the two documented
+    # modes so a hand-edit to a third value fails loudly instead of quietly changing
+    # which IV series T5 scores against — the failure mode this project measures
+    # around. The ruling is the default; `expiry` stays reachable because the soak
+    # writes both keys and the operator may want to measure the approximation.
+    tenor_key_mode: Literal["rolling_dte", "expiry"] = "rolling_dte"
+    dte_bucket_days: int = Field(default=7, gt=0, le=30)
     arm_b: T5ArmB
     arm_c: T5ArmC
     event_calendar: EventCalendar
@@ -502,7 +539,16 @@ class T6(FrozenModel):
     baseline_lookback_days: int = Field(gt=0)
     multiplier: Pending
     deep_otm: DeepOtm
+    # `evaluation` is a fact about the DATA (flow_baseline rows are written by an EOD
+    # soak); `intraday_policy` is the ruling about what to DO with that data when it
+    # gates an intraday entry. They were conflated as one field, which is what left
+    # the policy unratified for so long.
     evaluation: Literal["EOD_only"]
+    # RULED 2026-10-03 (operator, R3): `carry_forward`. `next_day_only` is the strict
+    # alternative and stays selectable — a gap in the baseline leaves T6 PENDING
+    # instead of carrying an older regime forward.
+    intraday_policy: Literal["carry_forward", "next_day_only"] = "carry_forward"
+    intraday_policy_operator_ruling: str = ""
     purpose: str
     notes: list[str] = Field(default_factory=list)
 
@@ -651,6 +697,38 @@ class Rulebook(FrozenModel):
         digest = hashlib.sha256(raw).hexdigest()
         object.__setattr__(self, "config_sha256", digest)
         object.__setattr__(self, "strategy_version", f"{self.strategy.version}+{digest[:12]}")
+
+    def active_arms(self, *, t5_iv_rank_defined: bool | None = None) -> list[str]:
+        """The arms allowed to take a position in this window.
+
+        RULED 2026-10-03 (operator, R5): the window opens arms A + C; arm B is gated on
+        T5's IV rank being defined. The gate is a *fact about the data*, so the caller
+        supplies it and this method only applies the rulebook's policy — the rulebook
+        says WHAT opens the gate, the checklist says whether it is open.
+
+        ``t5_iv_rank_defined=None`` means "not yet known", which is the conservative
+        answer and the one that keeps arm B inert until something positively reports a
+        rank. Passing a stale ``True`` is the caller's responsibility, so the CLI reads
+        it from the store on every run rather than caching it.
+        """
+        arms = list(self.window.arms)
+        if self.window.arm_b_gate is not None and t5_iv_rank_defined:
+            arms = sorted({*arms, "B"})
+        return arms
+
+    def inert_arms(self, *, t5_iv_rank_defined: bool | None = None) -> list[str]:
+        """The arms the window defers, with the gate that would release them.
+
+        Inverse of :meth:`active_arms` over the gated arm only: a window with no
+        ``arm_b_gate`` defers nothing, and once T5 resolves the list empties. Reported
+        separately from :meth:`active_arms` because "B is missing from the active list"
+        and "B is missing and here is exactly what is holding it" are different things
+        to show an operator deciding whether the window is trading what it promised.
+        """
+        gate = self.window.arm_b_gate
+        if gate is None or "B" in self.active_arms(t5_iv_rank_defined=t5_iv_rank_defined):
+            return []
+        return ["B"]
 
     @property
     def pending_calibrations(self) -> list[str]:
