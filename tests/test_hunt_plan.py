@@ -54,7 +54,7 @@ from executor.hunt_plan import (
     project_setup_day_range,
     write_hunt_plan,
 )
-from executor.iv_rank import IvRankStore
+from executor.iv_rank import IvRankStore, strike_bucket
 from executor.snapshot_builder import SnapshotResult
 from journal.store import (
     DecisionEntry,
@@ -502,8 +502,11 @@ def test_iv_rank_from_the_store_satisfies_t5_for_arm_b(tmp_path, series, rules, 
         session_day,
         mode=rules.checklist.t5_options_chain.tenor_key_mode,
         dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+        spot=spot,
     )
-    assert tenor.startswith("dte"), f"R4: expected a rolling DTE key, got {tenor!r}"
+    assert tenor.startswith("mte"), (
+        f"R4/key-schema ruling: expected a rolling moneyness key, got {tenor!r}"
+    )
     # The current reading must not be the highest in the window: rank is the share of
     # observations STRICTLY BELOW it, so seeding everything below would give rank 100
     # and fail T5 for the wrong reason. Three below, seven above -> rank 30.
@@ -530,6 +533,50 @@ def test_iv_rank_from_the_store_satisfies_t5_for_arm_b(tmp_path, series, rules, 
     # Arm B's T5 now has a rank to judge, and it is well under the frozen ceiling.
     assert cell.checklist.status("T5") == "PASS"
     store.close()
+
+
+def test_the_rolling_tenor_key_refuses_to_be_built_without_spot(session_day, spot):
+    """A missing spot must fail loudly, not silently fall back to the old dollar axis.
+
+    The fallback would put the plan on a key schema the soak no longer writes: T5 would
+    read a series nobody fills, sit in warmup for the whole window, and report nothing
+    worse than "warming up".
+    """
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    contract = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=0, dte_max=0
+    )
+    assert contract is not None
+    with pytest.raises(ValueError, match="spot is required"):
+        hunt_plan._tenor_key_for(
+            contract, session_day, mode="rolling_dte", dte_bucket_days=7
+        )
+    # The expiry-keyed mode never needed a spot and still must not ask for one.
+    assert hunt_plan._tenor_key_for(
+        contract, session_day, mode="expiry", dte_bucket_days=7
+    ) == f"{contract.expiry}-call-{strike_bucket(contract.strike):.2f}"
+
+
+def test_the_rolling_tenor_key_follows_the_money_and_not_the_price(session_day, spot):
+    """The same contract, priced against a drifting spot, keeps ONE series."""
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    contract = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=0, dte_max=0
+    )
+    assert contract is not None
+    key_at_spot = hunt_plan._tenor_key_for(
+        contract, session_day, mode="rolling_dte", dte_bucket_days=7, spot=spot
+    )
+    key_half_a_percent_up = hunt_plan._tenor_key_for(
+        contract, session_day, mode="rolling_dte", dte_bucket_days=7, spot=spot * 1.005
+    )
+    assert key_at_spot == key_half_a_percent_up
+    # Far enough out (a whole moneyness bucket) and it moves — the axis is real, not a
+    # constant pretending to be one.
+    key_two_buckets_up = hunt_plan._tenor_key_for(
+        contract, session_day, mode="rolling_dte", dte_bucket_days=7, spot=spot * 0.96
+    )
+    assert key_two_buckets_up != key_at_spot
 
 
 def test_iv_rank_warmup_surfaces_its_own_reason(tmp_path, series, rules, session_day, spot):
@@ -810,6 +857,7 @@ def test_the_iv_provenance_names_the_tenor_that_answered(tmp_path, series, rules
         contract, session_day,
         mode=rules.checklist.t5_options_chain.tenor_key_mode,
         dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+        spot=spot,
     )
     for i in range(6):
         store.record(underlying="SPY", as_of=(session_day - dt.timedelta(days=i)).isoformat(),

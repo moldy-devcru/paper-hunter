@@ -70,11 +70,12 @@ from executor.alpaca_client import (
 from executor.iv_rank import DEFAULT_DB_PATH as DEFAULT_IV_DB_PATH
 from executor.iv_rank import (
     DTE_BUCKET_DAYS,
+    MONEYNESS_BUCKET_PCT,
     STRIKE_BUCKET_SIZE,
     IvObservation,
     IvRankStore,
-    dte_tenor_key,
-    strike_bucket,
+    moneyness_bucket,
+    moneyness_tenor_key,
     tenor_key,
 )
 from executor.position_manager import to_et
@@ -467,10 +468,19 @@ def _observation_for(
     *,
     underlying: str,
     session: dt.date,
+    spot: float,
     bucket_size: float,
     dte_bucket_days: int,
+    moneyness_pct: float = MONEYNESS_BUCKET_PCT,
 ) -> list[IvObservation]:
-    """Both tenor keys for one contract — expiry-keyed and rolling-DTE."""
+    """Both tenor keys for one contract — expiry-keyed and rolling moneyness-keyed.
+
+    RULED 2026-10-03 (operator): the rolling key's strike axis is
+    moneyness-relative (``strike/spot - 1`` at ``moneyness_pct``, default 2%), so
+    ``spot`` is a required argument here. The expiry-keyed series keeps its dollar
+    ``$5`` buckets — it is an audit series, not the one T5 reads, and its cost is one
+    extra row per contract.
+    """
     try:
         expiry_day = dt.datetime.strptime(contract.expiry or "", "%Y%m%d").date()
     except ValueError:
@@ -497,10 +507,12 @@ def _observation_for(
             **common,
         ),
         IvObservation(
-            tenor_key=dte_tenor_key(
+            tenor_key=moneyness_tenor_key(
                 dte=dte,
                 right=contract.right,
-                strike_bucket=strike_bucket(contract.strike, bucket_size),
+                moneyness_bucket=moneyness_bucket(
+                    contract.strike, spot, moneyness_pct
+                ),
                 dte_bucket_days=dte_bucket_days,
             ),
             **common,
@@ -517,6 +529,7 @@ def arm_iv_observations(
     bands: tuple[tuple[str, int, int], ...] = ARM_IV_BANDS,
     bucket_size: float = STRIKE_BUCKET_SIZE,
     dte_bucket_days: int = DTE_BUCKET_DAYS,
+    moneyness_pct: float = MONEYNESS_BUCKET_PCT,
 ) -> tuple[list[IvObservation], int]:
     """``(observations, skipped_bands)`` — one reading per arm, under that arm's own band.
 
@@ -548,8 +561,10 @@ def arm_iv_observations(
             contract,
             underlying=underlying,
             session=session,
+            spot=spot,
             bucket_size=bucket_size,
             dte_bucket_days=dte_bucket_days,
+            moneyness_pct=moneyness_pct,
         ):
             # A band can resolve to the same contract as another (a 0DTE-only chain also
             # satisfies arm C's band when it has no long-dated leg). The store's uniqueness
@@ -572,11 +587,14 @@ def iv_observations(
     max_dte: int = IV_MAX_DTE,
     bucket_size: float = STRIKE_BUCKET_SIZE,
     dte_bucket_days: int = DTE_BUCKET_DAYS,
+    moneyness_pct: float = MONEYNESS_BUCKET_PCT,
 ) -> tuple[list[IvObservation], int]:
     """``(observations, skipped_expiries)`` — one ATM reading per live expiry, twice-keyed.
 
     Reuses the Phase-3a bucketing (``iv_rank.tenor_key``, $5 strike buckets) so the
-    soak and the checklist key IV history identically.
+    soak and the checklist key IV history identically — for the EXPIRY-keyed audit
+    series. The rolling key T5 actually reads is moneyness-relative as of the
+    2026-10-03 key-schema ruling; see ``_observation_for``.
 
     # INTERPRETATION: for each expiry we record the **single ATM contract** (nearest
     strike to spot, calls-first tie-break — ``OptionChain.atm_contract``), not every
@@ -587,9 +605,10 @@ def iv_observations(
     "IV on the chosen strike within normal band" against the same neighbourhood. One
     row per expiry per day is the smallest series that answers the question asked.
 
-    # Each reading is stored under both the expiry-keyed tenor and the rolling DTE
-    # tenor (see ``iv_rank.dte_tenor_key`` for why the expiry-keyed series can never
-    # leave warmup on its own). Both are written under the same ``source``, so a reader
+    # Each reading is stored under both the expiry-keyed tenor and the rolling
+    # moneyness-keyed tenor (see ``iv_rank.moneyness_tenor_key`` for why the
+    # expiry-keyed series can never leave warmup on its own, and for why the rolling
+    # key is namespaced). Both are written under the same ``source``, so a reader
     # picking one is picking a tenor, not a data vintage.
 
     # INTERPRETATION: an expiry whose ATM contract carries no usable IV is **skipped
@@ -620,7 +639,6 @@ def iv_observations(
             skipped += 1
             continue
         iv = float(contract.implied_volatility)
-        bucket = strike_bucket(contract.strike, bucket_size)
         common = {
             "underlying": underlying.upper(),
             "as_of": session.isoformat(),
@@ -644,10 +662,12 @@ def iv_observations(
         )
         observations.append(
             IvObservation(
-                tenor_key=dte_tenor_key(
+                tenor_key=moneyness_tenor_key(
                     dte=dte,
                     right=contract.right,
-                    strike_bucket=bucket,
+                    moneyness_bucket=moneyness_bucket(
+                        contract.strike, spot, moneyness_pct
+                    ),
                     dte_bucket_days=dte_bucket_days,
                 ),
                 **common,
@@ -873,6 +893,7 @@ def run_soak(
             # nothing ever wrote (FIX 2026-10-03, R4).
             bucket_size=STRIKE_BUCKET_SIZE,
             dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+            moneyness_pct=MONEYNESS_BUCKET_PCT,
         )
         # Per-arm rows on top of the per-expiry sweep. Without these the ATM sweep cannot
         # write arm C's 90-180 DTE tenor at all: the nearest-to-spot contract in that band
@@ -886,6 +907,7 @@ def run_soak(
             bands=_bands_from_rules(rules),
             bucket_size=STRIKE_BUCKET_SIZE,
             dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+            moneyness_pct=MONEYNESS_BUCKET_PCT,
         )
         observations = observations + arm_observations
         iv_skipped_bands = arm_skipped

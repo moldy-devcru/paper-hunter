@@ -20,15 +20,22 @@ import pytest
 
 from executor.iv_rank import (
     DEFAULT_LOOKBACK_DAYS,
+    DTE_BUCKET_DAYS,
     MIN_OBSERVATIONS,
+    MONEYNESS_BUCKET_PCT,
     VIX_PROXY_SOURCE,
     VIX_PROXY_TENOR,
     VIX_PROXY_UNDERLYING,
     IvObservation,
     IvRankError,
     IvRankStore,
+    dte_tenor_key,
+    moneyness,
+    moneyness_bucket,
+    moneyness_tenor_key,
     parse_vix_csv,
     seed_vix_proxy,
+    strike_bucket,
     tenor_key,
 )
 
@@ -93,6 +100,134 @@ def test_tenor_key_rejects_bad_input():
         tenor_key(expiry="20260117", right="straddle", strike=700.0)
     with pytest.raises(IvRankError):
         tenor_key(expiry="20260117", right="call", strike=700.0, bucket_size=0)
+
+
+# ---------------------------------------------------------------------------
+# moneyness tenor keying (RULED 2026-10-03, operator) — the schema that lets the
+# rolling series reach MIN_OBSERVATIONS at all
+# ---------------------------------------------------------------------------
+
+
+def test_moneyness_bucket_is_zero_at_the_money():
+    assert moneyness(650.0, 650.0) == pytest.approx(0.0)
+    assert moneyness_bucket(650.0, 650.0) == pytest.approx(0.0)
+    # A dollar axis cannot say this at all: it needs a spot to compare against.
+    assert moneyness(663.0, 650.0) == pytest.approx(0.02, abs=1e-9)
+
+
+def test_the_atm_bucket_survives_a_spot_drift_that_walks_the_dollar_axis():
+    """The bug this ruling exists for, stated as one assertion.
+
+    An ATM strike follows spot, so its dollar bucket changes constantly and its
+    moneyness bucket never does. Over this walk the dollar axis mints several different
+    keys for the same contract-following-the-money — and ``MIN_OBSERVATIONS`` is 60.
+    """
+    spots = [500.0, 587.5, 625.0, 650.0, 700.0, 775.0, 812.5]
+    dollar_keys = {strike_bucket(spot) for spot in spots}
+    assert len(dollar_keys) > 1, "the dollar axis did not rotate — the test proves nothing"
+    assert {moneyness_bucket(spot, spot) for spot in spots} == {0.0}
+
+
+def test_strikes_within_one_percent_of_spot_share_a_bucket():
+    """Half-width of a 2pp bucket is 1pp, so a +/-1% neighbourhood is one series."""
+    spot = 650.0
+    for strike in (646.0, 650.0, 656.0):
+        assert moneyness_bucket(strike, spot) == pytest.approx(0.0)
+    # The first strike outside that neighbourhood rolls to the next bucket.
+    assert moneyness_bucket(657.0, spot) == pytest.approx(MONEYNESS_BUCKET_PCT)
+
+
+def test_the_bucket_width_is_the_measured_two_percent():
+    """Pinned because the feasibility measurement the ruling rests on measured THIS width."""
+    assert MONEYNESS_BUCKET_PCT == 2.0
+    # +0.9% -> still the ATM bucket; +1.0% is the exact tie and rounds away from zero
+    # (the same half-away-from-zero rule as `strike_bucket`); +2% -> one bucket up.
+    assert moneyness_bucket(650.0 * 0.991, 650.0) == pytest.approx(0.0)
+    assert moneyness_bucket(650.0 * 1.01, 650.0) == pytest.approx(2.0)
+    assert moneyness_bucket(650.0 * 1.02, 650.0) == pytest.approx(2.0)
+    assert moneyness_bucket(650.0 * 1.04, 650.0) == pytest.approx(4.0)
+    # And the scale cancels: the same relative strike at any spot level.
+    assert moneyness_bucket(800.0 * 1.04, 800.0) == pytest.approx(4.0)
+
+
+def test_moneyness_bucket_rejects_bad_input():
+    with pytest.raises(IvRankError, match="spot must be > 0"):
+        moneyness_bucket(650.0, 0.0)
+    with pytest.raises(IvRankError, match="bucket_pct"):
+        moneyness_bucket(650.0, 650.0, bucket_pct=0)
+
+
+def test_moneyness_tenor_key_buckets_dte_and_rights():
+    key = moneyness_tenor_key(dte=133, right="call", moneyness_bucket=0.0)
+    assert key == "mte133-call-mny+0.00"
+    # The DTE axis is unchanged from R4: floored to a multiple of the bucket width.
+    assert moneyness_tenor_key(
+        dte=30, right="call", moneyness_bucket=0.0, dte_bucket_days=DTE_BUCKET_DAYS
+    ) == "mte28-call-mny+0.00"
+    assert moneyness_tenor_key(dte=0, right="put", moneyness_bucket=-4.0) == (
+        "mte0-put-mny-4.00"
+    )
+
+
+def test_moneyness_tenor_key_rejects_bad_input():
+    with pytest.raises(IvRankError, match="right must be"):
+        moneyness_tenor_key(dte=7, right="straddle", moneyness_bucket=0.0)
+    with pytest.raises(IvRankError, match="dte must be"):
+        moneyness_tenor_key(dte=-1, right="call", moneyness_bucket=0.0)
+    with pytest.raises(IvRankError, match="dte_bucket_days"):
+        moneyness_tenor_key(dte=7, right="call", moneyness_bucket=0.0, dte_bucket_days=0)
+
+
+def test_the_two_key_schemas_cannot_alias():
+    """Namespacing is the whole anti-mixing mechanism — pin it at both ends.
+
+    An old dollar-axis row and a new moneyness-axis row must never share a key, or a
+    series built under one meaning would silently absorb observations from the other.
+    """
+    collisions = []
+    for dte in (0, 28, 133):
+        for right in ("call", "put"):
+            for strike, spot in ((650.0, 650.0), (600.0, 625.0), (700.0, 650.0)):
+                new = moneyness_tenor_key(
+                    dte=dte,
+                    right=right,
+                    moneyness_bucket=moneyness_bucket(strike, spot),
+                )
+                for size in (5.0, 10.0, 25.0):
+                    old = dte_tenor_key(
+                        dte=dte, right=right, strike_bucket=strike_bucket(strike, size)
+                    )
+                    if new == old:
+                        collisions.append((new, old))
+    assert not collisions, f"key schemas alias: {collisions}"
+    # And the prefixes are disjoint, so a prefix-scanning reader cannot confuse them.
+    assert moneyness_tenor_key(dte=7, right="call", moneyness_bucket=0.0).startswith("mte")
+    assert dte_tenor_key(dte=7, right="call", strike_bucket=650.0).startswith("dte")
+
+
+def test_old_schema_rows_are_invisible_to_a_moneyness_query(store):
+    """The R7 disposition, achieved by construction rather than by a migration."""
+    old_key = dte_tenor_key(dte=28, right="call", strike_bucket=650.0)
+    new_key = moneyness_tenor_key(dte=28, right="call", moneyness_bucket=0.0)
+    today = dt.datetime.now(dt.UTC).date()
+    for i in range(12):
+        store.record(
+            underlying="SPY",
+            as_of=today - dt.timedelta(days=30 - i),
+            tenor=old_key,
+            iv=0.20 + i * 0.001,
+            source="alpaca_chain",
+            expiry="20260117",
+            right="call",
+            strike=650.0,
+        )
+    # A dollar-axis history of 12 rows must not answer a moneyness query — not
+    # partially, not as a warmup count, not at all.
+    assert store.count_observations("SPY", new_key) == 0
+    assert store.history("SPY", new_key) == []
+    result = store.iv_rank(0.20, "SPY", new_key)
+    assert result.rank is None
+    assert result.status == "no_history"
 
 
 # ---------------------------------------------------------------------------

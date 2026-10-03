@@ -25,6 +25,12 @@ The honesty rules, in priority order
    call are different statistics. The store keys on ``(underlying, expiry, right,
    strike_bucket)`` via an explicit ``tenor_key`` so a caller cannot accidentally rank
    one contract's IV against another's history.
+4. **The key schema is part of the key.** Nothing in the store records *which* bucketing
+   produced a ``tenor_key``, so a change of bucketing must also change the key's
+   spelling. Keys are namespaced (``mte``/``mny`` for moneyness-relative) for exactly
+   this reason: an old-schema row is then never read by a new-schema query, which is
+   the R7 disposition — orphaned, not migrated — achieved by construction rather than by
+   remembering to migrate.
 
 Storage choice: **separate database** (``data/ivrank.db``), not a table in the
 journal DB. The journal is an append-only, immutability-enforced experiment ledger
@@ -75,6 +81,24 @@ DTE_BUCKET_DAYS = 7
 #: by hand; a drift there reads one key and writes another, and T5 then sits in warmup
 #: forever with no error anywhere (FIX 2026-10-03, R4).
 STRIKE_BUCKET_SIZE = 5.0
+
+#: Width of the MONEYNESS-relative tenor bucket, in percentage points of spot.
+#: RULED 2026-10-03 (operator, T5 key-schema ruling): the rolling tenor key's strike
+#: axis switches from the absolute ``$5`` bucket above to a moneyness bucket at 2%.
+#: The absolute axis is the reason T5 could never warm: ``$5`` at SPY ~650 is ~0.8% of
+#: spot, so a 20% drift in the underlying walks the bucket off any given key in a
+#: matter of weeks, and inside the frozen 1y lookback no key reached
+#: ``MIN_OBSERVATIONS = 60`` (measured: 22 best case; the full 718-session history
+#: tops out at 25 — ``docs/reviews/2026-10-03-iv-backfill-feasibility.md`` §2b). A
+#: 2% moneyness bucket is ~$13 at SPY 650 and ~$15.50 at SPY 775, so the same key
+#: survives a spot drift of that order — the same fix R4 applied to the DTE axis.
+#:
+#: 2% is the granularity the feasibility study measured, and it is the only variant of
+#: the four tried (absolute ``$5``/``$10``/``$20``/``$25``/``$50`` vs moneyness 2%)
+#: that clears 60 observations inside the frozen 1-year lookback — 210 of them. It is
+#: not a tuned number and must not be tuned further: it is the width the ruling rests
+#: on, so changing it is another version seam, not an experiment.
+MONEYNESS_BUCKET_PCT = 2.0
 
 #: Default lookback. Matches the rulebook's ``iv_rank_lookback: "1y"``.
 DEFAULT_LOOKBACK_DAYS = 365
@@ -285,10 +309,94 @@ def strike_bucket(strike: float, bucket_size: float = 5.0) -> float:
 
     Exposed so a caller polling a chain does not have to re-implement the rounding to
     discover which bucket a contract belongs to.
+
+    RULED 2026-10-03 (operator): retained for the EXPIRY-keyed series
+    (:func:`tenor_key`) and for reading historical rows, but the ROLLING tenor key no
+    longer buckets the strike in dollars — it uses :func:`moneyness_bucket` instead. See
+    :data:`MONEYNESS_BUCKET_PCT`.
     """
     if bucket_size <= 0:
         raise IvRankError(f"bucket_size must be > 0, got {bucket_size}")
     return math.floor(strike / bucket_size + 0.5) * bucket_size
+
+
+def moneyness(strike: float, spot: float) -> float:
+    """Moneyness as a fraction of spot: ``strike/spot - 1``.
+
+    Separated from :func:`moneyness_bucket` so a caller (or a journal payload) can
+    report the actual distance from the money rather than the bucket it landed in.
+    """
+    if spot <= 0:
+        raise IvRankError(f"spot must be > 0, got {spot}")
+    return strike / spot - 1.0
+
+
+def moneyness_bucket(
+    strike: float,
+    spot: float,
+    bucket_pct: float = MONEYNESS_BUCKET_PCT,
+) -> float:
+    """The moneyness bucket (in percentage points) a tenor key is built from.
+
+    Same half-away-from-zero rule as :func:`strike_bucket`, applied to
+    ``strike/spot - 1`` scaled to percent, so the bucketing is monotonic at the
+    edges for the reason given in :func:`tenor_key`.
+
+    The invariant that makes this key worth having: **the bucket depends on where the
+    strike sits relative to spot, not on where spot happens to be.** A 650 strike is
+    bucket ``+0.00`` at spot 650 and still bucket ``+0.00`` at spot 662, where the
+    absolute ``$5`` axis has already stepped to a different key.
+    """
+    if bucket_pct <= 0:
+        raise IvRankError(f"bucket_pct must be > 0, got {bucket_pct}")
+    pct = moneyness(strike, spot) * 100.0
+    return math.floor(pct / bucket_pct + 0.5) * bucket_pct
+
+
+def moneyness_tenor_key(
+    *,
+    dte: int,
+    right: str,
+    moneyness_bucket: float,
+    dte_bucket_days: int = DTE_BUCKET_DAYS,
+) -> str:
+    """Rolling tenor key on the moneyness axis: ``mte<bucket>-<right>-mny<bucket>``.
+
+    RULED 2026-10-03 (operator, T5 key-schema ruling). Same shape and same DTE
+    bucketing as :func:`dte_tenor_key` (R4 is untouched); the strike axis moves from
+    an absolute dollar bucket to a percentage-of-spot bucket at
+    :data:`MONEYNESS_BUCKET_PCT`.
+
+    # INTERPRETATION: the key is NAMESPACED (``mte``/``mny``) rather than reusing the
+    # ``dte``/dollar prefix, and this is load-bearing rather than cosmetic. The store's
+    # uniqueness key is ``(underlying, as_of, tenor_key, source)`` and nothing there
+    # records which *schema* built a key — so a bare ``dte91-call-650.00`` written
+    # under the old dollars axis and a ``mny+0.00`` reading meant "roughly ATM"
+    # expressed in a different unit would collide, or worse, sit adjacent and be
+    # counted together by anything that scanned prefixes. Under the namespaced form
+    # the two schemas cannot alias: an old-schema row is simply never looked up by a
+    # new-schema reader, which is exactly the R7 disposition applied by construction —
+    # orphaned rows, no migration, no deletion, warm-up counting only new-schema rows.
+    #
+    # The cost is stated, not hidden. Every row written under the R4 dollars axis is
+    # orphaned by this change, so T5's warm-up restarts from zero **again** — the same
+    # cost R7 accepted once, paid a second time by a ruling that was worth it (the old
+    # key could never reach ``MIN_OBSERVATIONS`` at all, so the warm-up it was
+    # restarting was one that could never finish). And a 2% bucket is coarser than a
+    # $5 bucket near the money: the rank is a statement about "roughly within 2% of
+    # spot at roughly this DTE" rather than one strike. The expiry-keyed series is
+    # still written at $5, so the approximation stays measurable against the exact
+    # thing instead of trusted on faith.
+    """
+    side = right.strip().lower()
+    if side not in ("call", "put"):
+        raise IvRankError(f"right must be 'call' or 'put', got {right!r}")
+    if dte < 0:
+        raise IvRankError(f"dte must be >= 0, got {dte}")
+    if dte_bucket_days <= 0:
+        raise IvRankError(f"dte_bucket_days must be > 0, got {dte_bucket_days}")
+    bucket = (int(dte) // int(dte_bucket_days)) * int(dte_bucket_days)
+    return f"mte{bucket}-{side}-mny{moneyness_bucket:+.2f}"
 
 
 # ---------------------------------------------------------------------------
@@ -775,9 +883,13 @@ __all__ = [
     "VIX_PROXY_SOURCE",
     "VIX_PROXY_TENOR",
     "VIX_PROXY_UNDERLYING",
+    "MONEYNESS_BUCKET_PCT",
     "STRIKE_BUCKET_SIZE",
     "atm_tenor_key",
     "dte_tenor_key",
+    "moneyness",
+    "moneyness_bucket",
+    "moneyness_tenor_key",
     "strike_bucket",
     "iter_proxy",
     "parse_vix_csv",

@@ -595,8 +595,11 @@ def test_iv_snapshot_writes_both_tenor_flavours(rules, journal, iv_store):
     # Rolling DTE-keyed, BUCKETED to 7 days (R4): 30 DTE floors to 28. Before the
     # bucket the key carried the raw DTE, so a contract wrote a fresh key every day of
     # its life and no rolling tenor could ever collect a second observation.
-    assert "dte28-call-625.00" in keys  # rolling DTE-keyed, 30 DTE -> 28 bucket
-    assert "dte0-call-625.00" in keys
+    # Rolling MONEYNESS-keyed (RULED 2026-10-03), DTE still bucketed at 7 days: 30 DTE
+    # floors to 28. Strike 625 at spot 625 is 0.00% from the money, so the key reads
+    # mny+0.00. Under the old dollar axis this row carried `dte28-call-625.00`.
+    assert "mte28-call-mny+0.00" in keys
+    assert "mte0-call-mny+0.00" in keys
 
 
 def test_iv_snapshot_skips_far_out_expiries(rules, journal, iv_store):
@@ -676,7 +679,7 @@ def test_iv_snapshot_records_the_atm_contract_when_it_has_an_iv(rules):
     assert all(o.iv == 0.19 for o in observations)
     assert {o.tenor_key for o in observations} == {
         f"{SESSION:%Y%m%d}-call-625.00",
-        "dte0-call-625.00",
+        "mte0-call-mny+0.00",
     }
     assert skipped == 0
 
@@ -797,8 +800,37 @@ def test_arm_c_row_key_names_the_long_dated_tenor():
         _banded_chain(), SPOT, session=SESSION, underlying="SPY"
     )
     keys = {o.tenor_key for o in observations}
-    assert "dte133-call-600.00" in keys
+    # 600 against SPOT 625 is -4.00% from the money, so the rolling key is
+    # mte133-call-mny-4.00 — the arm-C tenor T5 actually reads.
+    assert "mte133-call-mny-4.00" in keys
     assert f"{C_EXPIRY:%Y%m%d}-call-600.00" in keys
+
+
+def test_the_recorders_rolling_key_survives_a_spot_drift():
+    """The production bug the 2026-10-03 key ruling exists for, at the recorder.
+
+    Two sessions a few percent apart, each with its own ATM contract. Under the old
+    ``$5`` dollar axis those two readings landed in two different series, so a 60-observation
+    warmup could never complete; under the moneyness axis they land in one. The expiry-
+    keyed audit series still uses dollar buckets — deliberately, and asserted here so
+    nobody "fixes" it into the rolling one.
+    """
+    keys_per_spot = {}
+    for spot in (SPOT, SPOT * 1.05):
+        chain = chain_of(contract_with_volume(strike=round(spot, 2), right="call", volume=1.0))
+        observations, _skipped = soak.iv_observations(
+            chain, spot, session=SESSION, underlying="SPY"
+        )
+        keys_per_spot[spot] = {o.tenor_key for o in observations}
+    rolling = {k for keys in keys_per_spot.values() for k in keys if k.startswith("mte")}
+    assert rolling == {"mte0-call-mny+0.00"}, keys_per_spot
+    expiry = {
+        k
+        for keys in keys_per_spot.values()
+        for k in keys
+        if not k.startswith("mte")
+    }
+    assert len(expiry) == 2, f"the audit series must stay dollar-keyed, got {expiry}"
 
 
 def test_arm_iv_observations_skips_an_empty_band_rather_than_filling_it():
@@ -867,7 +899,7 @@ def test_soak_run_records_per_arm_iv_rows(rules, journal, iv_store):
         r["tenor_key"]
         for r in iv_store.conn.execute("SELECT tenor_key FROM iv_observations")
     }
-    assert "dte133-call-600.00" in keys
+    assert "mte133-call-mny-4.00" in keys
     assert out.iv_rows > 0
 
 

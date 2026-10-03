@@ -85,10 +85,11 @@ from data.event_calendar import EventCalendar
 from executor.alpaca_client import Bar, BarSeries, OptionChain, OptionContract
 from executor.checklist import ChecklistResult, evaluate
 from executor.iv_rank import (
+    MONEYNESS_BUCKET_PCT,
     STRIKE_BUCKET_SIZE,
     IvRankStore,
-    dte_tenor_key,
-    strike_bucket,
+    moneyness_bucket,
+    moneyness_tenor_key,
     tenor_key,
 )
 from executor.snapshot_builder import SnapshotResult, build_snapshot
@@ -720,6 +721,12 @@ def _iv_contract_for_arm(
 #: 2026-10-03, R4), so the plan cannot drift from the soak that writes the series.
 TENOR_STRIKE_BUCKET = STRIKE_BUCKET_SIZE
 
+#: RULED 2026-10-03 (operator): the ROLLING tenor key's strike axis is
+#: moneyness-relative at this width, not absolute dollars. Same single-constant
+#: discipline as ``TENOR_STRIKE_BUCKET`` above — the plan reads the width from
+#: ``executor.iv_rank`` so it cannot drift from the soak that writes the series.
+TENOR_MONEYNESS_BUCKET_PCT = MONEYNESS_BUCKET_PCT
+
 
 def _tenor_key_for(
     contract: OptionContract,
@@ -727,6 +734,7 @@ def _tenor_key_for(
     *,
     mode: str,
     dte_bucket_days: int,
+    spot: float | None = None,
 ) -> str:
     """The IV-rank series key T5 reads, per the rulebook's ``tenor_key_mode``.
 
@@ -735,6 +743,14 @@ def _tenor_key_for(
     contract's own expiry rather than from the chain's far expiry, because a chain
     with a March LEAPS leg and a Friday weekly would otherwise put arm B's 0DTE
     reading under a 150-day key and never warm up.
+
+    RULED 2026-10-03 (operator, key schema): ``spot`` is REQUIRED for the rolling mode,
+    because the strike axis is moneyness-relative (``strike/spot - 1``, bucketed at 2%
+    — ``MONEYNESS_BUCKET_PCT``). The dollar axis it replaced rotated with spot, so the
+    key of an ATM contract walked off its own series every time SPY moved a few percent
+    and no tenor could reach ``MIN_OBSERVATIONS``. A missing spot is refused rather than
+    defaulted: falling back to the dollar axis would write the plan under a key schema
+    the soak no longer writes, and T5 would sit in warmup forever with no error.
     """
     if mode == "expiry":
         return tenor_key(
@@ -750,11 +766,18 @@ def _tenor_key_for(
         return tenor_key(
             expiry=contract.expiry, right=contract.right, strike=contract.strike
         )
+    if spot is None:
+        raise ValueError(
+            "spot is required for the rolling (moneyness) tenor key: the strike axis is "
+            "bucketed relative to spot, so without it the key cannot be built at all"
+        )
     dte = max((expiry_day - day).days, 0)
-    return dte_tenor_key(
+    return moneyness_tenor_key(
         dte=dte,
         right=contract.right,
-        strike_bucket=strike_bucket(contract.strike, TENOR_STRIKE_BUCKET),
+        moneyness_bucket=moneyness_bucket(
+            contract.strike, spot, TENOR_MONEYNESS_BUCKET_PCT
+        ),
         dte_bucket_days=dte_bucket_days,
     )
 
@@ -811,7 +834,11 @@ def _iv_rank_for_direction(
             "contract": contract.symbol,
         }
     key = _tenor_key_for(
-        contract, day, mode=tenor_key_mode, dte_bucket_days=dte_bucket_days
+        contract,
+        day,
+        mode=tenor_key_mode,
+        dte_bucket_days=dte_bucket_days,
+        spot=spot,
     )
     result = store.iv_rank(
         contract.implied_volatility,

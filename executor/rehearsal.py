@@ -454,6 +454,7 @@ def _tenor_key(
     right: str,
     strike: float,
     dte_bucket_days: int,
+    spot: float,
 ) -> str:
     """The rulebook's chosen tenor key — by calling the executor's own function.
 
@@ -463,6 +464,11 @@ def _tenor_key(
     store the executor cannot read — a green run over a store nobody queries. That is
     not hypothetical: the first cut of this helper omitted the executor's
     ``max(dte, 0)`` clamp and blew up on the fixture chain's 0DTE contract.
+
+    RULED 2026-10-03 (operator, key schema): the rolling key is moneyness-relative, so
+    ``spot`` is threaded through here for the same reason it is required at the
+    executor's call site — a fixture that seeded a different strike axis than the soak
+    writes would again be a warm store nobody queries.
 
     The tiny ``OptionContract`` shell exists only to satisfy the executor's signature;
     the fields used are exactly the ones it reads.
@@ -480,7 +486,9 @@ def _tenor_key(
         latest_quote=None,
         latest_trade=None,
     )
-    return _tenor_key_for(shell, day, mode=mode, dte_bucket_days=dte_bucket_days)
+    return _tenor_key_for(
+        shell, day, mode=mode, dte_bucket_days=dte_bucket_days, spot=spot
+    )
 
 
 def seed_iv_store(
@@ -511,34 +519,40 @@ def seed_iv_store(
     # width, both taken from the rulebook rather than restated here.
     mode = rules.checklist.t5_options_chain.tenor_key_mode
     bucket = rules.checklist.t5_options_chain.dte_bucket_days
-    keys: dict[str, str] = {}
+    keys: dict[str, OptionContract] = {}
     for contract in chain.contracts:
         key = _tenor_key(mode, day=day, expiry=contract.expiry, right=contract.right,
-                         strike=contract.strike, dte_bucket_days=bucket)
-        keys.setdefault(key, contract.symbol)
+                         strike=contract.strike, dte_bucket_days=bucket, spot=spot)
+        keys.setdefault(key, contract)
     written = 0
-    for key in keys:
+    for key, contract in keys.items():
         for i in range(days):
             as_of = day - dt.timedelta(days=days - i)
             # A history centred ABOVE the chain's 0.18 IV, so the current observation
             # lands in the lower part of the distribution and the rank is inside arm C's
             # ratified iv_rank_max=50 ceiling instead of pinned at 100.
+            #
+            # The provenance columns come off the CONTRACT, not by splitting the key.
+            # The old dollar axis made that parse possible (`20260117-call-700.00`), the
+            # moneyness axis does not (`mte0-call-mny-2.00` splits into five fields, and
+            # the third is not a float). Parsing a key to recover its own provenance was
+            # always a shortcut; it just used to be a survivable one.
             store.record(
                 underlying="SPY",
                 as_of=as_of,
                 tenor=key,
                 iv=round(0.20 + 0.03 * math.sin(i / 3.0), 6),
                 source="rehearsal_fixture",
-                expiry=key.split("-")[0],
-                right=key.split("-")[1],
-                strike=float(key.split("-")[2]),
+                expiry=contract.expiry,
+                right=contract.right,
+                strike=contract.strike,
             )
             written += 1
     conn.commit()
     ranks: dict[str, float | None] = {}
     for contract in chain.contracts:
         key = _tenor_key(mode, day=day, expiry=contract.expiry, right=contract.right,
-                         strike=contract.strike, dte_bucket_days=bucket)
+                         strike=contract.strike, dte_bucket_days=bucket, spot=spot)
         ranks[key] = store.iv_rank(
             contract.implied_volatility or 0.18, "SPY", key, as_of=day
         ).rank
@@ -546,12 +560,18 @@ def seed_iv_store(
     # calendar advances must NOT mint a new tenor every session. Raw integer DTE did
     # exactly that, which is why the rolling series could never reach MIN_OBSERVATIONS
     # — it was a series of length 1 wearing a series' name.
+    #
+    # Spot is held FIXED across the offsets on purpose. Under the moneyness axis a moving
+    # spot is the normal case and the key is supposed to survive it — that is the whole
+    # ruling — so this measures the DTE axis alone, and the moneyness axis's own
+    # stability is pinned in tests/test_iv_rank.py.
     churn: list[str] = []
     if chain.contracts:
         sample = chain.contracts[0]
         churn = [
             _tenor_key(mode, day=day + dt.timedelta(days=offset), expiry=sample.expiry,
-                       right=sample.right, strike=sample.strike, dte_bucket_days=bucket)
+                       right=sample.right, strike=sample.strike, dte_bucket_days=bucket,
+                       spot=spot)
             for offset in range(0, 2 * bucket + 1)
         ]
     return store, {
