@@ -43,7 +43,9 @@ from __future__ import annotations
 import datetime as dt
 import os
 import sqlite3
-from collections.abc import Iterable, Sequence
+import threading
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -167,11 +169,27 @@ class BarCache:
         self._now = now or (lambda: dt.datetime.now(dt.UTC))
         # check_same_thread=False because the server is multi-threaded: uvicorn runs
         # sync endpoints on a worker pool and the cache is one long-lived, shared
-        # handle by design. Python's sqlite3 is built with SERIALIZED threading
-        # (SQLITE_THREADSAFE=1) unless the interpreter was compiled otherwise, so the
-        # connection serialises itself; busy_timeout covers the other-process case
-        # (the executor's own scripts touching the same file), and WAL keeps a
-        # reader from blocking the writer.
+        # handle by design. busy_timeout covers the other-process case (the executor's
+        # own scripts touching the same file), and WAL keeps a reader from blocking the
+        # writer.
+        #
+        # check_same_thread=False is NECESSARY but NOT SUFFICIENT, and the U2 browser
+        # smoke found out which one it was not sufficient about. A sqlite3 Connection
+        # is not safe for concurrent use even when the C library is compiled SERIALIZED
+        # (which this one is: sqlite3.threadsafety == 3): SERIALIZED protects the
+        # database handle, while CPython's Connection object still shares one statement
+        # cache and one implicit-transaction state across threads. Interleaved
+        # execute()/fetchall() from a worker pool therefore hands a reader another
+        # thread's half-stepped rows — reproduced at 24 HTTP 500s per 1200 concurrent
+        # requests, all of them `IndexError` or silently short result sets (a 300-bar
+        # read coming back with 138). So every use of the connection goes through
+        # _db() below, which holds an RLock for the duration of the statement.
+        #
+        # The lock is deliberately NOT held across a network fetch: bars() calls
+        # _fetch() outside any _db() block, so one slow Alpaca request cannot block a
+        # chart read. RLock rather than Lock because the write paths call the read
+        # helpers.
+        self._lock = threading.RLock()
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode = WAL")
@@ -181,10 +199,17 @@ class BarCache:
         #: Number of HTTP fetches this cache instance has issued. Tests assert on it.
         self.fetch_calls = 0
 
+    @contextmanager
+    def _db(self) -> Iterator[sqlite3.Connection]:
+        """The one supported way to touch :attr:`conn`: serialized, see __init__."""
+        with self._lock:
+            yield self.conn
+
     # -- lifecycle -------------------------------------------------------------
 
     def close(self) -> None:
-        self.conn.close()
+        with self._lock:
+            self.conn.close()
 
     def __enter__(self) -> BarCache:
         return self
@@ -205,15 +230,17 @@ class BarCache:
             clauses.append("timeframe = ?")
             params.append(timeframe)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        row = self.conn.execute(f"SELECT COUNT(*) AS n FROM bars{where}", params).fetchone()
+        with self._db() as conn:
+            row = conn.execute(f"SELECT COUNT(*) AS n FROM bars{where}", params).fetchone()
         return int(row["n"])
 
     def last_cached(self, symbol: str, timeframe: str) -> dt.datetime | None:
         """Newest bar start held for ``(symbol, timeframe)``, or ``None`` if empty."""
-        row = self.conn.execute(
-            "SELECT MAX(t) AS t FROM bars WHERE symbol = ? AND timeframe = ?",
-            (symbol.upper(), timeframe),
-        ).fetchone()
+        with self._db() as conn:
+            row = conn.execute(
+                "SELECT MAX(t) AS t FROM bars WHERE symbol = ? AND timeframe = ?",
+                (symbol.upper(), timeframe),
+            ).fetchone()
         return _parse(row["t"]) if row and row["t"] else None
 
     # -- reads -----------------------------------------------------------------
@@ -235,11 +262,11 @@ class BarCache:
         if end is not None:
             clauses.append("t <= ?")
             params.append(_iso(end))
-        rows = self.conn.execute(
-            f"SELECT * FROM bars WHERE {' AND '.join(clauses)} ORDER BY t ASC", params
-        ).fetchall()
+        with self._db() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM bars WHERE {' AND '.join(clauses)} ORDER BY t ASC", params
+            ).fetchall()
         return [self._to_agg(row) for row in rows]
-
     def series(
         self,
         symbol: str,
@@ -301,18 +328,19 @@ class BarCache:
                     stamp,
                 )
             )
-        self.conn.executemany(
-            """
-            INSERT INTO bars (symbol, timeframe, t, o, h, l, c, v, n, vw, feed, fetched_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (symbol, timeframe, t) DO UPDATE SET
-                o = excluded.o, h = excluded.h, l = excluded.l, c = excluded.c,
-                v = excluded.v, n = excluded.n, vw = excluded.vw,
-                feed = excluded.feed, fetched_at = excluded.fetched_at
-            """,
-            rows,
-        )
-        self.conn.commit()
+        with self._db() as conn:
+            conn.executemany(
+                """
+                INSERT INTO bars (symbol, timeframe, t, o, h, l, c, v, n, vw, feed, fetched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (symbol, timeframe, t) DO UPDATE SET
+                    o = excluded.o, h = excluded.h, l = excluded.l, c = excluded.c,
+                    v = excluded.v, n = excluded.n, vw = excluded.vw,
+                    feed = excluded.feed, fetched_at = excluded.fetched_at
+                """,
+                rows,
+            )
+            conn.commit()
         return len(rows)
 
     @staticmethod
@@ -337,25 +365,27 @@ class BarCache:
         end: dt.datetime | None,
         count: int,
     ) -> None:
-        self.conn.execute(
-            "INSERT INTO fetch_log (symbol, timeframe, feed, start, end, bars, fetched_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                symbol.upper(),
-                timeframe,
-                feed,
-                _iso(start) if start else None,
-                _iso(end) if end else None,
-                count,
-                _iso(self._now()),
-            ),
-        )
-        self.conn.commit()
+        with self._db() as conn:
+            conn.execute(
+                "INSERT INTO fetch_log (symbol, timeframe, feed, start, end, bars, fetched_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    symbol.upper(),
+                    timeframe,
+                    feed,
+                    _iso(start) if start else None,
+                    _iso(end) if end else None,
+                    count,
+                    _iso(self._now()),
+                ),
+            )
+            conn.commit()
 
     def fetch_log(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            "SELECT * FROM fetch_log ORDER BY id DESC LIMIT ?", (int(limit),)
-        ).fetchall()
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT * FROM fetch_log ORDER BY id DESC LIMIT ?", (int(limit),)
+            ).fetchall()
         return [dict(row) for row in rows]
 
     # -- the cache-first read path ---------------------------------------------
@@ -470,10 +500,11 @@ class BarCache:
         ``/api/health`` reports this so the chart's "SIP consolidated" vs "IEX
         partial" badge is backed by the cache rather than by a hopeful constant.
         """
-        rows = self.conn.execute(
-            "SELECT symbol, timeframe, feed, COUNT(*) AS n, MIN(t) AS first, MAX(t) AS last"
-            " FROM bars GROUP BY symbol, timeframe, feed"
-        ).fetchall()
+        with self._db() as conn:
+            rows = conn.execute(
+                "SELECT symbol, timeframe, feed, COUNT(*) AS n, MIN(t) AS first, MAX(t) AS last"
+                " FROM bars GROUP BY symbol, timeframe, feed"
+            ).fetchall()
         by_series: dict[str, dict[str, Any]] = {}
         for row in rows:
             key = f"{row['symbol']}/{row['timeframe']}"

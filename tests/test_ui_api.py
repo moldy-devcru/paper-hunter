@@ -800,16 +800,25 @@ def test_no_database_files_at_all_is_degraded_not_500(bare_client: TestClient) -
 
 
 # ---------------------------------------------------------------------------
-# 6. the placeholder page
+# 6. the static surface
 # ---------------------------------------------------------------------------
 
 
-def test_index_serves_the_u2_placeholder(client: TestClient) -> None:
+def test_index_serves_the_terminal_shell(client: TestClient) -> None:
+    """U2 replaced the placeholder page; the shell is what ships now.
+
+    (``tests/test_ui_static.py`` owns the deep static/vendoring assertions. This one
+    stays here because it is the same "/" the API tests have been asserting on since
+    U1, and a page that stops rendering is a page the API tests would not notice.)
+    """
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
-    assert "U2 pending" in response.text
     assert "paper-hunter terminal" in response.text
+    assert 'src="app.js"' in response.text
+    assert 'id="page-terminal"' in response.text
+    for page in ("terminal", "arms", "ledger", "hunt", "calibration"):
+        assert f'data-page="{page}"' in response.text, page
 
 
 def test_openapi_schema_generates(client: TestClient) -> None:

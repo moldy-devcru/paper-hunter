@@ -4,52 +4,112 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>paper-hunter terminal</title>
-    <style>
-      :root { color-scheme: dark; }
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: #0d0f12;
-        color: #d8dce3;
-        font: 15px/1.6 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-      }
-      main { max-width: 44rem; padding: 2rem; }
-      h1 { font-size: 1.4rem; margin: 0 0 0.25rem; letter-spacing: 0.02em; }
-      .tag { color: #8a93a3; margin: 0 0 1.5rem; }
-      ul { padding-left: 1.1rem; }
-      li { margin: 0.3rem 0; }
-      code { color: #9ad1a5; }
-      .ro { color: #d9a441; }
-      footer { margin-top: 2rem; color: #6c7482; font-size: 0.85rem; }
-    </style>
+    <!-- data: URI so the browser stops asking for a favicon we do not have; a 404 in
+         the console is noise that hides a real error. -->
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+    <!-- Vendored locally on purpose: this is a LAN tool and must work internet-down.
+         See ui/static/vendor/PROVENANCE.md for version + sha256. -->
+    <script src="vendor/lightweight-charts.standalone.production.js"></script>
   </head>
   <body>
-    <main>
-      <h1>paper-hunter terminal</h1>
-      <p class="tag">U2 pending — the backend is up, the chart is not here yet.</p>
-      <p>
-        This server is read-only by construction. Every database is opened
-        <code>file:…?mode=ro</code> and the app has no non-GET routes, so the UI cannot
-        touch the experiment. <span class="ro">The window is a window, not a door.</span>
-      </p>
-      <p>The API is live and documented at <a href="/docs">/docs</a>:</p>
-      <ul>
-        <li><code>GET /api/health</code> — databases, counts, feed provenance</li>
-        <li><code>GET /api/bars?tf=15m</code> — session-aware candles, provenance per bar</li>
-        <li><code>GET /api/indicators?tf=15m&amp;set=ema50,ema200,rsi,macd,bb</code> —
-          computed by <code>executor.indicators</code>, the same code the checklist runs</li>
-        <li><code>GET /api/signals</code> · <code>GET /api/arms</code> · <code>GET /api/trades</code></li>
-        <li><code>GET /api/huntplan</code> · <code>GET /api/noshots</code> ·
-          <code>GET /api/histogram</code></li>
-        <li><code>GET /api/calibration</code> · <code>GET /api/rollup</code></li>
-      </ul>
-      <p>
-        Bars come from <code>data/barcache.db</code>, a cache and not a record: delete it
-        and a re-fetch rebuilds it. Nothing here is worth backing up.
-      </p>
-      <footer>Operation Hunting Blind — read-only research terminal</footer>
-    </main>
+    <nav class="tabbar" id="tabbar">
+      <a href="#/terminal" data-page="terminal">Terminal</a>
+      <a href="#/arms" data-page="arms">Arms</a>
+      <a href="#/ledger" data-page="ledger">Ledger</a>
+      <a href="#/hunt" data-page="hunt">Hunt</a>
+      <a href="#/calibration" data-page="calibration">Calibration</a>
+      <span class="spacer"></span>
+      <span class="stamp" id="tab-stamp">read-only</span>
+    </nav>
+
+    <div id="view">
+      <!-- ================= terminal ================= -->
+      <section id="page-terminal" class="page">
+        <header class="chrome">
+          <span class="symbol" id="symbol">SPY</span>
+
+          <div class="group" role="group" aria-label="timeframe">
+            <span class="glabel">tf</span>
+            <button class="tf" data-tf="5m" aria-pressed="false">5m</button>
+            <button class="tf" data-tf="10m" aria-pressed="false">10m</button>
+            <button class="tf" data-tf="15m" aria-pressed="true">15m</button>
+            <button class="tf" data-tf="30m" aria-pressed="false">30m</button>
+            <button class="tf" data-tf="1h" aria-pressed="false">1h</button>
+            <button class="tf" data-tf="4h" aria-pressed="false">4h</button>
+            <button class="tf" data-tf="1d" aria-pressed="false">1d</button>
+            <button class="tf" data-tf="1w" aria-pressed="false">1w</button>
+            <button class="tf" data-tf="1M" aria-pressed="false">1M</button>
+            <button class="tf" data-tf="1Q" aria-pressed="false">1Q</button>
+          </div>
+
+          <div class="group" role="group" aria-label="indicators">
+            <span class="glabel">overlays</span>
+            <button class="tog" data-ind="ema50" aria-pressed="true">
+              <span class="swatch" style="background:#f0b429"></span>EMA50
+            </button>
+            <button class="tog" data-ind="ema200" aria-pressed="true">
+              <span class="swatch" style="background:#8f7bff"></span>EMA200
+            </button>
+            <button class="tog" data-ind="bb" aria-pressed="true">
+              <span class="swatch" style="background:#3fb9c8"></span>BB(20,2)
+            </button>
+            <button class="tog" data-ind="rsi" aria-pressed="true">
+              <span class="swatch" style="background:#e0a63a"></span>RSI(14)
+            </button>
+            <button class="tog" data-ind="macd" aria-pressed="true">
+              <span class="swatch" style="background:#4c9aff"></span>MACD(12,26,9)
+            </button>
+            <button class="tog" data-ind="volume" aria-pressed="true">
+              <span class="swatch" style="background:#26a69a"></span>VOL
+            </button>
+          </div>
+
+          <div class="group">
+            <span class="prov" id="prov" title="feed provenance of the bars on screen">
+              provenance: —
+            </span>
+          </div>
+
+          <div class="group">
+            <span class="health" title="server health">
+              <span class="dot" id="health-dot"></span>
+              <span id="health-text">health —</span>
+            </span>
+            <span class="stamp" id="updated">never loaded</span>
+          </div>
+        </header>
+
+        <div class="readout" id="readout">
+          <span>hover a candle for OHLCV</span>
+        </div>
+
+        <div class="chart-wrap">
+          <div id="chart"></div>
+          <div class="overlay" id="overlay">
+            <div>
+              <div class="big" id="overlay-title">no data</div>
+              <div class="small" id="overlay-detail"></div>
+            </div>
+          </div>
+        </div>
+
+        <footer class="ro">
+          read-only by construction — every database is opened mode=ro and the app has
+          zero non-GET routes. The window is a window, not a door.
+        </footer>
+      </section>
+
+      <!-- ================= U3 / U4 placeholders ================= -->
+      <section id="page-placeholder" class="page" hidden>
+        <div class="placeholder">
+          <h2 id="ph-title">page</h2>
+          <span class="phase" id="ph-phase">pending</span>
+          <p id="ph-body">not built yet.</p>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="app.js"></script>
   </body>
 </html>

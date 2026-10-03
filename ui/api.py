@@ -1,4 +1,8 @@
-"""FastAPI app for the paper-hunter terminal — Phase U1 (backend, no frontend yet).
+"""FastAPI app for the paper-hunter terminal — U1 backend, U2 static shell.
+
+Static assets (``ui/static/``) are served by four explicit GET routes rather than a
+``StaticFiles`` mount; see :func:`app_script` for why that matters to the read-only
+assertion. No write path reaches any of them.
 
 Read-only by construction
 -------------------------
@@ -66,7 +70,27 @@ from ui.barcache import BarCache, open_cache
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-PLACEHOLDER_PAGE = STATIC_DIR / "index.html"
+INDEX_PAGE = STATIC_DIR / "index.html"
+APP_SCRIPT = STATIC_DIR / "app.js"
+APP_STYLES = STATIC_DIR / "style.css"
+VENDOR_BUNDLE = STATIC_DIR / "vendor" / "lightweight-charts.standalone.production.js"
+#: Retained as an alias for the U1 name; the page it pointed at is now the real one.
+PLACEHOLDER_PAGE = INDEX_PAGE
+
+
+def _static_file(path: Path, media_type: str) -> FileResponse:
+    """Serve one known static file, or a 404 that says which file is missing.
+
+    Named explicitly per file rather than by path parameter: a path parameter would be
+    a directory-walk surface, and this server's whole posture is "the smallest set of
+    routes that can exist".
+    """
+    if not path.exists():  # pragma: no cover - every file ships with the module
+        raise HTTPException(status_code=404, detail=f"{path.name} is missing from the package")
+    # no-cache (revalidate, don't blindly reuse) rather than no-store: this is a local
+    # tool that gets edited, and a browser holding yesterday's app.js after a fix is a
+    # bug report nobody can reproduce. ETag/Last-Modified still make revalidation cheap.
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "no-cache"})
 
 #: The symbol the whole experiment is built on. Every endpoint defaults to it so the
 #: first request in a browser is a useful one.
@@ -573,10 +597,36 @@ configure()
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    """The placeholder page. U2 replaces this with the real terminal."""
-    if not PLACEHOLDER_PAGE.exists():  # pragma: no cover - the file ships with the module
-        raise HTTPException(status_code=404, detail="static/index.html is missing")
-    return FileResponse(PLACEHOLDER_PAGE, media_type="text/html")
+    """The terminal page (U2 replaced the U1 placeholder in the same file)."""
+    return _static_file(INDEX_PAGE, "text/html")
+
+
+@app.get("/app.js", include_in_schema=False)
+def app_script() -> FileResponse:
+    """The ES module. An explicit route rather than a StaticFiles mount, on purpose:
+
+    ``tests/test_ui_api.py::test_app_has_zero_non_get_routes`` treats any route with
+    no method set — which is what ``app.mount()`` produces — as a write-capable hole
+    and fails. A mount of a read-only directory would be harmless, but the assertion
+    exists to make "the UI has no door" a mechanical fact, so the static surface stays
+    explicit and auditable: three named files, one method, no directory walk.
+    """
+    return _static_file(APP_SCRIPT, "text/javascript")
+
+
+@app.get("/style.css", include_in_schema=False)
+def app_styles() -> FileResponse:
+    return _static_file(APP_STYLES, "text/css")
+
+
+@app.get("/vendor/lightweight-charts.standalone.production.js", include_in_schema=False)
+def vendor_bundle() -> FileResponse:
+    """The vendored charting library (Apache-2.0, see ``static/vendor/PROVENANCE.md``).
+
+    Served from the app so the page has zero external references: a LAN tool that
+    reaches for a CDN is a LAN tool that breaks when the internet does.
+    """
+    return _static_file(VENDOR_BUNDLE, "text/javascript")
 
 
 # -- health ------------------------------------------------------------------

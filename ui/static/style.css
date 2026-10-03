@@ -1,0 +1,246 @@
+/* paper-hunter terminal — dark, dense, monospace. One stylesheet, no framework. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0b0d10;
+  --bg-raised: #111419;
+  --bg-sunken: #08090c;
+  --line: #1e232b;
+  --line-bright: #2c333d;
+  --fg: #d7dce4;
+  --fg-dim: #8b95a4;
+  --fg-faint: #5d6674;
+  --accent: #4c9aff;
+  --up: #26a69a;
+  --down: #ef5350;
+  --warn: #d9a441;
+  --ok: #3fb950;
+  --bad: #f85149;
+  --arm-a: #9aa4b2;
+  --arm-b: #e0a63a;
+  --arm-c: #4c9aff;
+  --arm-x: #e05fd0;
+  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px/1.45 var(--mono);
+  overflow: hidden;
+}
+
+/* ---- tab bar ---------------------------------------------------------- */
+
+.tabbar {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  height: 30px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--line);
+}
+
+.tabbar a {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--fg-dim);
+  text-decoration: none;
+  border-right: 1px solid var(--line);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.tabbar a:hover { color: var(--fg); background: #0f1218; }
+.tabbar a.active { color: var(--fg); background: var(--bg-raised); box-shadow: inset 0 -2px 0 var(--accent); }
+.tabbar .spacer { flex: 1; border-right: 0; }
+.tabbar .stamp {
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--fg-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ---- header ----------------------------------------------------------- */
+
+#view { height: calc(100% - 30px); display: flex; flex-direction: column; }
+
+header.chrome {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+}
+
+.symbol {
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+}
+
+.group:first-of-type { border-left: 0; padding-left: 0; }
+.group > .glabel {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+
+button.tf, button.tog {
+  background: #161b22;
+  color: var(--fg-dim);
+  border: 1px solid var(--line-bright);
+  border-radius: 3px;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+}
+
+button.tf:hover, button.tog:hover { color: var(--fg); border-color: #3a434f; }
+button.tf[aria-pressed="true"] { background: #1d3557; color: #cfe3ff; border-color: var(--accent); }
+button.tog[aria-pressed="true"] { background: #1b2a1f; color: #b7e6c2; border-color: #2f5c3a; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 1px;
+  vertical-align: baseline;
+}
+
+/* provenance + health */
+
+.prov {
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  border-left: 2px solid var(--line-bright);
+  padding-left: 8px;
+}
+.prov.sip { border-left-color: var(--ok); }
+.prov.partial { border-left-color: var(--warn); color: var(--warn); }
+.prov.unknown { border-left-color: var(--bad); color: var(--bad); }
+
+.health {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-faint); }
+.dot.ok { background: var(--ok); }
+.dot.degraded { background: var(--warn); }
+.dot.bad { background: var(--bad); }
+
+.stamp { color: var(--fg-faint); font-size: 11px; white-space: nowrap; }
+.stamp.paused { color: var(--warn); }
+
+/* ---- readout ---------------------------------------------------------- */
+
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 4px 10px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--fg-dim);
+  min-height: 22px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.readout b { color: var(--fg); font-weight: 500; }
+.readout .up { color: var(--up); }
+.readout .down { color: var(--down); }
+
+/* ---- chart ------------------------------------------------------------ */
+
+/* A .page is a flex column, because .chart-wrap's `flex: 1` needs a flex parent to
+   grow inside — as a plain block the chart container computes to 0px tall and the
+   terminal renders as a strip of chrome over an empty rectangle.
+   The :not([hidden]) half is load-bearing too: an id-level `display: flex` outranks the
+   UA stylesheet's `[hidden] { display: none }`, so the inactive page has to be excluded
+   explicitly or both pages render at once. */
+#view > .page { display: none; flex: 1 1 auto; flex-direction: column; min-height: 0; }
+#view > .page:not([hidden]) { display: flex; }
+
+.chart-wrap { position: relative; flex: 1 1 0; min-height: 0; }
+#chart { position: absolute; inset: 0; }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--fg-dim);
+  background: rgba(8, 9, 12, 0.82);
+  padding: 24px;
+  z-index: 5;
+}
+.overlay.show { display: flex; }
+.overlay .big { color: var(--fg); font-size: 14px; margin-bottom: 6px; }
+.overlay .small { color: var(--fg-faint); font-size: 11px; max-width: 46rem; }
+
+/* ---- placeholder pages ------------------------------------------------ */
+
+.placeholder {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg-dim);
+  text-align: center;
+  padding: 24px;
+}
+.placeholder h2 { color: var(--fg); font-size: 15px; margin: 0; letter-spacing: 0.06em; }
+.placeholder code { color: var(--accent); }
+.placeholder .phase {
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.placeholder p { margin: 0; max-width: 44rem; }
+
+footer.ro {
+  padding: 4px 10px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-sunken);
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}

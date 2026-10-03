@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from executor.alpaca_client import (
     RateLimiter,
     stock_bars_path,
 )
+from ui.aggregate import AggBar
 from ui.barcache import BarCache
 
 UTC = dt.UTC
@@ -258,3 +260,64 @@ def test_last_cached_and_row_count_are_per_series(cache_path: Path) -> None:
         assert cache.last_cached(SYMBOL, "1Min") == SESSION_OPEN + dt.timedelta(minutes=4)
         assert cache.row_count(symbol=SYMBOL) == 5
         assert cache.row_count(symbol="QQQ") == 0
+
+
+# ---------------------------------------------------------------------------
+# thread safety — the shared connection is a server-wide object
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_reads_return_the_whole_row_set(cache_path: Path) -> None:
+    """One connection, many worker threads, no corruption.
+
+    Found by the U2 browser smoke, not by reasoning: the terminal polls every 45s, a
+    second browser tab doubles that, and uvicorn runs these sync endpoints on a thread
+    pool. A sqlite3 ``Connection`` is not safe for concurrent use even when the C
+    library is SERIALIZED (this one is — ``sqlite3.threadsafety == 3``): SERIALIZED
+    guards the database handle, while CPython's Connection object still shares one
+    statement cache across threads, so interleaved ``execute()``/``fetchall()`` hands
+    a reader another thread's half-stepped rows. Measured before the fix: 24 HTTP 500s
+    per 1200 concurrent requests, and short reads (138 rows where 300 were stored).
+
+    Reads alone are enough to break it, so this test interleaves readers with a writer
+    (the fetch log) and asserts every single read is complete. If this ever fails, the
+    fix is the lock in ``BarCache._db`` — do not "optimize" it away.
+    """
+    count = 300
+    with BarCache(cache_path, client=None) as cache:
+        cache.put(
+            SYMBOL,
+            "1Min",
+            [
+                AggBar(
+                    t=SESSION_OPEN + dt.timedelta(minutes=i),
+                    o=1.0,
+                    h=2.0,
+                    l=0.5,
+                    c=1.5,
+                    v=100.0,
+                    n=1,
+                    vw=1.0,
+                    feed="sip",
+                )
+                for i in range(count)
+            ],
+            feed="sip",
+        )
+
+        def read() -> int:
+            return len(cache.stored(SYMBOL, "1Min", start=SESSION_OPEN, end=SESSION_END))
+
+        def write() -> None:
+            cache._log_fetch(SYMBOL, "1Min", "sip", SESSION_OPEN, SESSION_END, count)
+
+        with ThreadPoolExecutor(max_workers=16) as pool:
+            reads = [pool.submit(read) for _ in range(400)]
+            writes = [pool.submit(write) for _ in range(100)]
+            for future in as_completed(writes):
+                future.result()  # a writer that raised is a failure too
+            lengths = [f.result() for f in as_completed(reads)]
+
+    assert all(n == count for n in lengths), (
+        f"short/corrupt reads under concurrency: {sorted({n for n in lengths if n != count})[:5]}"
+    )
