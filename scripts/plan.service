@@ -1,0 +1,87 @@
+# Pre-market plan — build and journal today's hunt plan.
+#
+# THE FIRST OF THREE MISSING DAILY LEGS. `soak.service`/`soak.timer` already exist and
+# are enabled; the plan / watch / EOD legs do not exist as units at all. These three
+# pairs are what docs/rehearsal/2026-10-03-full-cycle.md §5 calls "the cron trio" and
+# rates NO-GO. This file is one third of that trio. See docs/reviews/2026-10-03-soak-deploy-audit.md
+# for why the live soak currently runs the wrong schema, and docs/runbooks/daily-cycle-timers.md
+# for install/enable.
+#
+# DO NOT `systemctl enable --now` without reading docs/ratification.md first. This job
+# places NO orders (`hunt-plan` never routes an order; `--open-arm-a` is live-mode only
+# and is deliberately NOT passed here), but it WRITES decision rows into the same journal
+# the experiment reads, and every row is stamped with a `strategy_version` that the
+# NO-SHOT baseline is filtered by. A plan written under the wrong rulebook version
+# quietly poisons the version filter it is supposed to be isolated by.
+#
+# Schedule: 09:20 ET, not 08:30 and not 09:30. The brief's pre-market window is
+# 08:30-09:15, and the plan is built from the PRIOR session's settled daily bar plus
+# Alpaca's option chain — 09:20 is inside the window's tail and still clear of the
+# 09:30 open, which matters because `executor/main.py` deliberately SKIPS journalling a
+# plan whose decision is at or after 09:30 ET (a pre-market plan that journals
+# intraday is "intraday machinery", not a plan). Move this earlier, not later.
+#
+# Install:
+#   sudo cp scripts/plan.service scripts/plan.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now plan.timer          # enable, do not start the job
+#   systemctl list-timers plan.timer
+#
+# Dry check with no network and no writes:
+#   sudo -u paper-hunter /opt/paper-hunter/.venv/bin/python -m executor.main \
+#       --dry-run hunt-plan --help
+
+[Unit]
+Description=paper-hunter pre-market hunt plan
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Same deploy root as soak.service. VERIFIED, not assumed: docs/reviews/2026-10-03-soak-deploy-audit.md
+# §2 confirms the live job runs from /opt/paper-hunter and not from any ~/dev worktree,
+# which is exactly why editing a worktree does not change what runs. If this path ever
+# moves, soak.service and paper-hunter-ui.service must move in the same change — there
+# is no single variable holding it today, by convention.
+WorkingDirectory=/opt/paper-hunter
+
+# Optional because the plan needs no credentials to be built, but the chain read does,
+# and a missing file makes the run fail with a readable message rather than a silent
+# no-op. Same two variables, paper only, mode 0640 root:paper-hunter (data/README.md).
+EnvironmentFile=-/etc/paper-hunter/soak.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+User=paper-hunter
+Group=paper-hunter
+ProtectSystem=strict
+# The ONE writable path. The plan JSON and the journal decision rows both land here.
+ReadWritePaths=/opt/paper-hunter/data
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# `--dry-run` is passed EXPLICITLY even though it is the CLI default, because a unit file
+# that depends on a default is a unit file that changes meaning when the default moves.
+# `--open-arm-a` is NOT passed: placing arm A's buy-and-hold order is a live-mode action
+# and is not this job's business.
+#
+# `--db` is REQUIRED, not a convenience. `executor/main.py` writes NO journal rows
+# unless `--db` names one (docs/ratification.md item 14) — so omitting it produces a plan
+# that looks like it ran and leaves no evidence that it did. The default plan path
+# (`data/plans/<date>.json`) is deliberately NOT passed: it is relative, so it resolves
+# under WorkingDirectory, which is correct here and one fewer thing to keep in sync.
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --dry-run --db /opt/paper-hunter/data/journal.db hunt-plan
+
+# The plan reads a chain and an indicator stack; a slow provider is a failed plan, and a
+# plan written after the open is worse than no plan at all.
+TimeoutStartSec=180
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paper-hunter-plan
+
+[Install]
+WantedBy=multi-user.target

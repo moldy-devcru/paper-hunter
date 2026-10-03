@@ -61,6 +61,7 @@ from typing import Any
 from config.loader import DEFAULT_RULES_PATH, Rulebook, load_rules
 from data.event_calendar import EventCalendar
 from executor.alpaca_client import BarSeries
+from executor.flow_gate import POLICIES as FLOW_GATE_POLICIES  # noqa: F401
 from executor.hunt_plan import HuntPlan, build_hunt_plan, summarise, write_hunt_plan
 from executor.indicators import ema
 from executor.noshot import build_noshots, write_noshots
@@ -83,8 +84,23 @@ from executor.watch_loop import (
 
 PLAN_DIR = Path("data/plans")
 
-#: T6 input policies shared by `hunt-plan` and `watch` (see executor/flow_gate.py).
-FLOW_GATE_POLICIES = ("none", "last-confirmed")
+#: `FLOW_GATE_POLICIES` (imported above from `executor.flow_gate`) is the single source
+#: of the accepted T6 policy names.
+#:
+#: FIX 2026-10-03 (Monday readiness): it used to be a hand-copied literal
+#: ``("none", "last-confirmed")`` that had fallen out of date with the module it mirrors.
+#: `executor/flow_gate.py` has accepted four names since R3 was implemented
+#: (``none``/``carry_forward``/``next_day_only``, with ``last-confirmed`` as a deprecated
+#: alias for ``carry_forward``) — and the rulebook's own frozen
+#: ``checklist.t6_flow.intraday_policy`` is ``carry_forward``. So the CLI REJECTED the
+#: ruled policy by name while its own help text advertised it, and any caller following
+#: either the rulebook or `paper-hunter watch --help` got "invalid choice: carry_forward".
+#: It surfaced only because the new `scripts/watch.service` passes the policy explicitly;
+#: the duplicate had been invisible while both callers defaulted around it.
+#:
+#: One implementation, same as the T6 calibration reader/formula mismatch the rehearsal
+#: fixed. Aliased rather than renamed so existing importers of `FLOW_GATE_POLICIES` keep
+#: working, and imported from the module that owns the behaviour rather than re-derived.
 
 #: The session open, ET. A decision journaled before it is the pre-market plan's; one
 #: at or after it is intraday machinery (the watch loop's re-verifications, entries,

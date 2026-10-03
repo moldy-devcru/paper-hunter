@@ -1,0 +1,97 @@
+# Intraday watch loop — the executor's trigger-and-verify leg.
+#
+# THE SECOND OF THREE MISSING DAILY LEGS. Paired with plan.timer at 09:30 ET. See
+# docs/runbooks/daily-cycle-timers.md for install/enable and
+# docs/reviews/2026-10-03-soak-deploy-audit.md for why /opt — not a worktree — is what runs.
+#
+# DO NOT `systemctl enable --now` without reading docs/ratification.md first.
+#
+# *** THIS UNIT IS THE ONE THAT CAN PLACE ORDERS. *** `hunt-plan` never routes an order
+# and `executor.soak` only reads; the watch loop is the leg that calls the router, and it
+# places PAPER orders if and only if `--live` is passed. `--dry-run` below is explicit and
+# must stay that way. Removing it is the single edit in this file that changes what the
+# experiment DOES rather than what it RECORDS, so it is called out here rather than left
+# to a reader to infer from the CLI default.
+#
+# LIFETIME, deliberately not a systemd timeout: the process owns its own clock. It polls
+# every 15s and exits by itself at `--stop-et 16:00`. The timer fires ONCE per session;
+# systemd's job is to start the loop, not to end it. TimeoutStartSec is set to 0 (no
+# limit) because a 90s default that quietly kills a six-hour loop at 09:32 would leave a
+# session that looks armed and watched nothing.
+#
+# NO PLAN IS A HARD FAILURE, and that is correct. `executor/main.py:cmd_watch` raises
+# rather than rebuilding the plan, because the intraday loop is supposed to verify the
+# decision the pre-market agent actually made, not a fresh opinion formed at 09:30.
+# `Restart=on-failure` below will therefore retry a no-plan start a few times and then
+# give up — which is why plan.timer carries `Persistent=true` and fires at 09:20, ten
+# minutes earlier. If this loop dies with "no plan at ...", the answer is to look at
+# plan.service, not to restart this one.
+
+[Unit]
+Description=paper-hunter intraday watch loop (trigger re-verification)
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+After=network-online.target plan.service
+Wants=network-online.target
+
+# A provider hiccup at 09:31 should not cost the session. Bounded, so a plan file that is
+# genuinely missing retries a handful of times and then stops instead of hot-looping for
+# six hours.
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/paper-hunter
+
+EnvironmentFile=-/etc/paper-hunter/soak.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+User=paper-hunter
+Group=paper-hunter
+ProtectSystem=strict
+# Decision rows and the WatchState the loop carries between ticks. Nothing else in the
+# tree is writable, so a bug in this loop cannot reach the rulebook or its own code.
+ReadWritePaths=/opt/paper-hunter/data
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# `--dry-run` EXPLICIT. Read the paragraph at the top before changing this line.
+#
+# `--flow-gate carry_forward` is NOT redundant, and this is the one flag in this file that
+# exists because of a trap rather than a default. `hunt-plan` defaults `--flow-gate` to
+# `None`, which makes it fall through to the rulebook's `checklist.t6_flow.intraday_policy`
+# (RULED 2026-10-03, R3: `carry_forward`). `watch` defaults it to the STRING `"none"`,
+# which is truthy, so the same fallthrough never happens: a `watch` invocation that omits
+# the flag silently hands T6 no gate at all. Omitting it here would resurrect exactly the
+# rehearsal's finding 3 (IV rank and the flow gate dropped between the CLI and the loop)
+# in a new disguise. Pinning it here is a deliberate trade: the policy is now stated in
+# the unit file instead of inherited invisibly from the rulebook, so a rulebook change to
+# the policy will NOT be picked up until this line is changed too. That is a louder
+# failure than silent drift, which is the right way round.
+#
+# `--ivrank` is passed explicitly rather than relying on `iv_rank.DEFAULT_DB_PATH`
+# resolving to REPO_ROOT/data/ivrank.db under WorkingDirectory. It happens to resolve
+# correctly, and it is written out anyway: this is the store the loop's T5 re-verification
+# reads, and the reader should not have to prove that to trust it.
+#
+# Flag ORDER matters and is not cosmetic: `--dry-run`/`--db` are GLOBAL (defined on the
+# top-level parser, before the subcommand) while `--ivrank`, `--flow-gate`,
+# `--poll-seconds` and `--stop-et` belong to the `watch` SUBCOMMAND. `--db` after `watch`
+# is rejected with "unrecognized arguments". The split below is the only ordering that
+# parses.
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --dry-run --db /opt/paper-hunter/data/journal.db watch --ivrank /opt/paper-hunter/data/ivrank.db --poll-seconds 15 --stop-et 16:00 --flow-gate carry_forward
+
+# No TimeoutStartSec: the loop's own `--stop-et` ends it.
+TimeoutStartSec=0
+
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paper-hunter-watch
+
+[Install]
+WantedBy=multi-user.target

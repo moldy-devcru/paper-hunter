@@ -1,0 +1,33 @@
+# Daily intraday watch timer — 09:30 ET, weekdays.
+#
+# Paired with watch.service. This timer fires ONCE and gets out of the way: the loop's
+# own `--stop-et 16:00` ends it, not systemd. Do not convert this into an
+# `OnUnitActiveSec` cadence — that would start a second copy of a loop that is already
+# running, and two loops sharing one WatchState would double every decision row.
+#
+# 09:30 ET is the open, and it is deliberately ten minutes AFTER plan.timer's 09:20. The
+# order is the whole point: the intraday loop verifies the decision the pre-market agent
+# made, so the artifact has to exist first. There is no `Requires=plan.service` here and
+# that omission is intentional — the timer for plan.service is a separate unit with a
+# separate trigger, so a dependency here would not order anything, and a real dependency
+# would mean a failed plan prevents the loop from starting at all, which turns "your plan
+# broke" into "your session silently did not run". The loop already fails loudly and
+# readably on a missing plan.
+
+[Unit]
+Description=Start the paper-hunter intraday watch loop once per weekday at 09:30 ET
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+
+[Timer]
+OnCalendar=Mon..Fri 09:30:00 America/New_York
+# Persistent here is about the OPPOSITE failure from plan.timer's. Here a missed start is
+# not a missed session — the loop is time-boxed, so starting it at 11:00 would watch a
+# partial session and journal NO_TRADE rows for a window it never saw. Persistent=true
+# would do that. So this timer does NOT catch up, and a laptop that was asleep at 09:30
+# gets no watch loop that day: an honest empty session rather than a fabricated one.
+Persistent=false
+AccuracySec=30s
+Unit=watch.service
+
+[Install]
+WantedBy=timers.target

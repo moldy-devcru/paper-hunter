@@ -1,0 +1,31 @@
+# Daily EOD timer — 16:15 ET, weekdays.
+#
+# Paired with eod.service. 16:15 ET is the brief's stated EOD cadence.
+#
+# Why 16:15 and not 16:00: `scripts/soak.timer`'s own header records that Alpaca's
+# consolidated SIP bars are not queryable until roughly 15 minutes after the requested
+# `end`, so a bar pulled immediately at the close can legitimately come back without the
+# session's own bar. 16:15 against a 15:30 hard close is 45 minutes of margin — the same
+# reason soak.timer sits at 17:30 rather than "at close", and the same reason this is not
+# scheduled tighter against the close to catch the market sooner.
+#
+# Persistent=true IS set here, unlike on watch.timer, because the two jobs fail
+# differently. A missed EOD run leaves a session with no ledger row, and the counterfactual
+# ledger is append-only — the row cannot be reconstructed later, because reconstructing it
+# means recomputing a decision from state that has since changed. A catch-up run rebuilds
+# it from the same journal and chain, so it is genuinely better than nothing. watch.timer
+# inverts that: a late loop watches a partial session and writes NO_TRADE rows for a window
+# it never saw, so a fabricated partial is worse than an honest gap.
+
+[Unit]
+Description=Run the paper-hunter EOD pass once per weekday at 16:15 ET
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+
+[Timer]
+OnCalendar=Mon..Fri 16:15:00 America/New_York
+Persistent=true
+AccuracySec=60s
+Unit=eod.service
+
+[Install]
+WantedBy=timers.target
