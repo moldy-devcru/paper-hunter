@@ -25,7 +25,8 @@ from executor.iv_backfill import (
     DEFAULT_LADDER_RANGE_PCT,
     DEFAULT_RETRY_BASE_SECONDS,
     FEED_FLOOR,
-    FORBIDDEN_COOLDOWN_SECONDS,
+    OPTIONS_END_BACKOFF_MINUTES,
+    RETRYABLE_STATUS,
     AlpacaIvSource,
     BackfillReport,
     IvBackfillError,
@@ -34,6 +35,7 @@ from executor.iv_backfill import (
     ladder_strikes,
     observations_for_session,
     occ_symbol,
+    options_end_iso,
     plan_sessions,
     run_backfill,
     select_expiry,
@@ -441,36 +443,55 @@ def _clock_with_steps(steps):
     return clock, state
 
 
-def test_transient_403_is_retried_and_succeeds():
+def test_opra_403_is_terminal_not_retried():
+    """The disguised 403 fails in ONE call.
+
+    `f2614da` believed this was a burst throttle and spent a 180s doubling ladder on it.
+    The investigation (`docs/reviews/2026-10-03-opra-403-investigation.md`) root-caused it
+    as a 15-minute recency gate on `end` and refuted the throttle: the rate-limit budget
+    never dipped, 403s did not consume budget, and a same-second A/B on `end` alone gave
+    403 vs 200. So retrying it is sleeping in front of an answer that cannot change.
+    """
     slept: list[float] = []
     clock, _ = _clock_with_steps([])
     source = AlpacaIvSource(
-        _FlakyClient(403, fail_times=2),
+        _FlakyClient(403, fail_times=99),
+        sleep=slept.append,
+        clock=clock,
+        min_interval_seconds=0.0,
+    )
+    with pytest.raises(AlpacaAPIError):
+        source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
+    assert source.calls == 1             # one call, no retries
+    assert slept == []                   # and, critically, no 180s cooldown sleep
+    assert source.retries == 0
+    assert source.refusals == 1          # but it is still COUNTED, not swallowed
+
+
+def test_403_is_not_in_the_retryable_set():
+    """Pins the classification itself, so re-adding 403 fails a test rather than a run."""
+    assert 403 not in RETRYABLE_STATUS
+    # The genuinely transient ones stay retryable.
+    assert {429, 500, 502, 503, 504} <= RETRYABLE_STATUS
+
+
+def test_transient_429_is_retried_and_succeeds():
+    """A 429 genuinely can clear on its own, so it still ramps on the short base."""
+    slept: list[float] = []
+    clock, _ = _clock_with_steps([])
+    source = AlpacaIvSource(
+        _FlakyClient(429, fail_times=2),
         sleep=slept.append,
         clock=clock,
         min_interval_seconds=0.0,
     )
     series = source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
     assert series is not None
-    assert source.calls == 3 and source.retries == 2 and source.cooldowns == 2
-    # The first retry waits FORBIDDEN_COOLDOWN_SECONDS, not the 5s a 429 would get:
-    # recovery from this 403 was measured at ~2 minutes, so a short ramp would just burn
-    # attempts. This assertion is the reason those two numbers are different constants.
-    assert slept[0] == FORBIDDEN_COOLDOWN_SECONDS
-
-
-def test_429_uses_the_short_ramp_not_the_403_cooldown():
-    slept: list[float] = []
-    clock, _ = _clock_with_steps([])
-    source = AlpacaIvSource(
-        _FlakyClient(429, fail_times=1),
-        sleep=slept.append,
-        clock=clock,
-        min_interval_seconds=0.0,
-    )
-    source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
-    assert slept[0] == DEFAULT_RETRY_BASE_SECONDS
-    assert source.cooldowns == 0          # a 429 is not the misleading entitlement error
+    assert source.calls == 3 and source.retries == 2
+    assert source.refusals == 0          # a 429 is not the misleading entitlement error
+    # Plain doubling from the short base: 5s then 10s. There is no second, longer ramp
+    # left in the file for a status we no longer consider recoverable.
+    assert slept == [DEFAULT_RETRY_BASE_SECONDS, DEFAULT_RETRY_BASE_SECONDS * 2]
 
 
 def test_unretryable_status_is_not_retried():
@@ -491,7 +512,7 @@ def test_retries_are_bounded_then_the_error_surfaces():
     slept: list[float] = []
     clock, _ = _clock_with_steps([])
     source = AlpacaIvSource(
-        _FlakyClient(403, fail_times=99),
+        _FlakyClient(503, fail_times=99),
         max_retries=2,
         sleep=slept.append,
         clock=clock,
@@ -500,7 +521,7 @@ def test_retries_are_bounded_then_the_error_surfaces():
     with pytest.raises(AlpacaAPIError):
         source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
     assert source.calls == 3             # 1 attempt + 2 retries, then it gives up
-    assert len(slept) == 2               # 30s, then 60s — and then it stops
+    assert len(slept) == 2               # 5s, then 10s — and then it stops
 
 
 def test_requests_are_paced_to_the_minimum_interval():
@@ -509,7 +530,7 @@ def test_requests_are_paced_to_the_minimum_interval():
     slept: list[float] = []
 
     source = AlpacaIvSource(
-        _FlakyClient(403, fail_times=0),
+        _FlakyClient(429, fail_times=0),
         min_interval_seconds=1.2,
         sleep=slept.append,
         clock=lambda: now[0],
@@ -522,3 +543,48 @@ def test_requests_are_paced_to_the_minimum_interval():
     now[0] = 120.0                       # plenty of time elapsed
     source.option_daily_bars(["A"], start="s", end="e")
     assert len(slept) == 1               # nothing to wait for
+
+
+# ---------------------------------------------------------------------------
+# the options recency clamp
+# ---------------------------------------------------------------------------
+#
+# Alpaca's free tier refuses `/v1beta1/options/bars` whose `end` is within the last 15
+# minutes, and disguises that as `OPRA agreement is not signed`. The route takes no `feed`
+# parameter, so `end` is the only lever. This is what made every prior backfill 403 on its
+# very first options call: the run sent `end = <today>T23:59:59Z`, which is always inside
+# the window. Root cause and the A/B that proves it:
+# docs/reviews/2026-10-03-opra-403-investigation.md
+
+
+def test_options_end_is_never_inside_the_recency_window():
+    """The invariant, stated once: no clock value can produce an unanswerable `end`."""
+    for minute in range(0, 60):
+        now = dt.datetime(2026, 10, 3, 21, minute, tzinfo=dt.UTC)
+        sent = dt.datetime.fromisoformat(options_end_iso(dt.date(2026, 10, 3), now=now))
+        assert sent <= now - dt.timedelta(minutes=OPTIONS_END_BACKOFF_MINUTES)
+        # 20 minutes of clearance against a 15-minute gate, so the guard is not
+        # exactly-on-the-boundary in the other direction either.
+        assert sent <= now - dt.timedelta(minutes=15)
+
+
+def test_options_end_clamps_only_when_end_is_today():
+    """A backfill window ending in the past is untouched by the clock."""
+    now = dt.datetime(2026, 10, 3, 21, 40, tzinfo=dt.UTC)
+    # end is 100 days ago: end-of-day is already far outside the window, so it stands.
+    assert options_end_iso(dt.date(2026, 6, 25), now=now) == "2026-06-25T23:59:59Z"
+    # end IS today: end-of-day would be inside the gate, so the clock wins.
+    assert options_end_iso(dt.date(2026, 10, 3), now=now) == "2026-10-03T21:20:00Z"
+
+
+def test_options_end_is_in_the_past_for_every_end_date_including_tomorrow():
+    """A caller asking for a future `end` (e.g. a soak) cannot ask for the future either."""
+    now = dt.datetime(2026, 10, 3, 21, 40, tzinfo=dt.UTC)
+    sent = options_end_iso(dt.date(2026, 12, 31), now=now)
+    assert sent == "2026-10-03T21:20:00Z"
+
+
+def test_options_end_defaults_to_the_real_clock_and_still_clamps():
+    """No injected clock: the production path is the one that must not 403."""
+    sent = dt.datetime.fromisoformat(options_end_iso(dt.date.today()))
+    assert sent <= dt.datetime.now(dt.UTC) - dt.timedelta(minutes=OPTIONS_END_BACKOFF_MINUTES)

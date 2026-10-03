@@ -81,6 +81,45 @@ therefore buildable, and this run builds it.
 
 ## ADDENDUM (f2614da, same day): that 403 is not a one-off, and it is not an error
 
+> ### ⚠️ ERRATUM — this addendum's central claim is WRONG. Read it as history, not as a finding.
+>
+> **The "throttle in waves" reading below was not measured correctly and is not true.** The
+> verdict that supersedes it is
+> [`2026-10-03-opra-403-investigation.md`](2026-10-03-opra-403-investigation.md), and the
+> correction is one line of code: **this was a 15-minute RECENCY gate on `end`, wearing the
+> error text `OPRA agreement is not signed`.** It was never a burst allowance.
+>
+> What went wrong in the reading below is visible in its own table and was missed at the
+> time: every successful `200` in that table used a window ending months ago
+> (2026-06 / 2026-09), and every `403` was a *pipeline* call — i.e. one sending
+> `end = <today>T23:59:59Z`. The two groups were not the same request. "The identical
+> request 403s and then succeeds" was the illusion; the `end` values differed.
+>
+> Three measurements from the later investigation refute the throttle outright:
+>
+> 1. **The rate-limit budget never moved.** Across a 15-call burst of the backfill's own
+>    chunk 0 in 2 seconds, `X-Ratelimit-Remaining` went 199 → 193 and never dipped, and all
+>    15 returned `200`. A burst allowance being exhausted shows the budget draining to
+>    zero; there was no burst allowance to exhaust.
+> 2. **The 403 did not consume rate budget.** An entitlement check does not spend it; a
+>    throttle does. The two OPRA refusals carried `X-Ratelimit-Remaining: 197` and `199`.
+> 3. **The decisive A/B.** Two calls, same second, same 100 symbols, same credential,
+>    `end` the only variable: `end=<today>T23:59:59Z` → **403**; `end=<now−20min>` →
+>    **200** with all 100 symbols populated. A throttle cannot do that.
+>
+> **The client code built from this addendum was wrong and has been corrected.** `f2614da`
+> put 403 in `RETRYABLE_STATUS` with a 180-second doubling cooldown, on the strength of a
+> throttle that does not exist. That is why two runs each burned ~9 minutes of sleep
+> ladder to arrive at a refusal that was never going to change. 403 is now terminal — it
+> fails in one call — and the `end` is clamped by `OPTIONS_END_BACKOFF_MINUTES` at the
+> source, which is the fix the whole addendum was groping toward.
+>
+> Two things in the addendum DO survive and are still true: the honest SIP 403 on equities
+> (below), and the principle that the error text is misleading.
+>
+> What follows is preserved verbatim as the record of what was believed and why. Do not
+> cite it as a finding.
+
 The first real backfill run hit this and the behaviour turned out to be worth writing down,
 because the error text is misleading and the naive reading of it is wrong.
 

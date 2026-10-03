@@ -1,0 +1,3808 @@
+{
+  "start": "2025-08-19",
+  "end": "2026-10-03",
+  "sessions_seen": 283,
+  "sessions_written": 92,
+  "observations_written": 342,
+  "api_calls": 27,
+  "retries": 0,
+  "refusals": 0,
+  "bands_seen": [
+    [
+      "C",
+      90,
+      180,
+      283
+    ]
+  ],
+  "tenor_key_counts": {
+    "20251121-call-630.00": 2,
+    "mte91-call-mny+0.00": 81,
+    "20251121-put-630.00": 2,
+    "mte91-put-mny+0.00": 90,
+    "20251121-call-625.00": 1,
+    "20251121-put-625.00": 1,
+    "20251121-call-635.00": 1,
+    "20251121-put-635.00": 1,
+    "20251128-call-635.00": 3,
+    "20251128-put-635.00": 1,
+    "20251128-put-640.00": 2,
+    "20251128-call-640.00": 1,
+    "20251219-call-650.00": 3,
+    "20251219-put-650.00": 3,
+    "20251219-call-655.00": 2,
+    "20251219-put-655.00": 2,
+    "20260116-call-655.00": 4,
+    "20260116-put-655.00": 4,
+    "20260116-call-660.00": 1,
+    "20260116-put-660.00": 1,
+    "20260130-put-680.00": 3,
+    "20260130-call-680.00": 2,
+    "20260130-put-675.00": 2,
+    "20260130-call-675.00": 1,
+    "20260220-call-660.00": 1,
+    "20260220-put-660.00": 1,
+    "20260220-call-655.00": 2,
+    "20260220-put-655.00": 2,
+    "20260220-call-645.00": 1,
+    "20260220-put-645.00": 1,
+    "20260220-call-650.00": 1,
+    "20260220-put-650.00": 1,
+    "20260227-call-660.00": 1,
+    "20260227-put-660.00": 1,
+    "20260227-call-670.00": 2,
+    "20260227-put-670.00": 2,
+    "20260227-call-675.00": 1,
+    "20260227-put-675.00": 1,
+    "20260320-call-675.00": 2,
+    "20260320-put-675.00": 2,
+    "20260320-call-670.00": 2,
+    "20260320-put-670.00": 2,
+    "20260320-call-665.00": 1,
+    "20260320-put-665.00": 1,
+    "20260417-call-690.00": 2,
+    "20260417-put-690.00": 2,
+    "20260417-call-685.00": 3,
+    "20260417-put-685.00": 3,
+    "20260515-call-690.00": 1,
+    "20260515-put-690.00": 1,
+    "20260515-put-685.00": 2,
+    "20260515-call-675.00": 2,
+    "20260515-put-675.00": 2,
+    "20260529-put-675.00": 1,
+    "20260529-call-680.00": 1,
+    "20260529-put-680.00": 2,
+    "20260529-call-685.00": 1,
+    "20260529-put-685.00": 2,
+    "20260717-call-685.00": 1,
+    "20260717-put-685.00": 1,
+    "20260717-call-690.00": 1,
+    "20260717-put-690.00": 1,
+    "20260717-call-695.00": 1,
+    "20260717-put-695.00": 1,
+    "20260717-call-700.00": 1,
+    "20260717-put-700.00": 1,
+    "20260717-call-705.00": 1,
+    "20260717-put-705.00": 1,
+    "20260731-call-710.00": 3,
+    "20260731-put-710.00": 3,
+    "20260731-call-715.00": 2,
+    "20260731-put-715.00": 2,
+    "20260821-call-735.00": 1,
+    "20260821-put-735.00": 1,
+    "20260821-call-730.00": 1,
+    "20260821-put-730.00": 1,
+    "20260821-call-740.00": 2,
+    "20260821-put-740.00": 3,
+    "20260918-call-750.00": 1,
+    "20260918-put-750.00": 1,
+    "20260918-put-745.00": 2,
+    "20260918-put-735.00": 1,
+    "20260918-call-745.00": 1,
+    "20261016-call-745.00": 1,
+    "20261016-put-745.00": 1,
+    "20261016-call-750.00": 2,
+    "20261016-put-750.00": 2,
+    "20261016-call-755.00": 1,
+    "20261016-put-755.00": 1,
+    "20261016-call-740.00": 1,
+    "20261016-put-740.00": 1,
+    "20261030-call-735.00": 1,
+    "20261030-put-735.00": 1,
+    "20261030-call-740.00": 2,
+    "20261030-put-740.00": 2,
+    "20261030-call-730.00": 1,
+    "20261030-put-730.00": 1,
+    "20261030-call-745.00": 1,
+    "20261030-put-745.00": 1,
+    "20261120-call-770.00": 1,
+    "20261120-put-770.00": 1,
+    "20261120-call-765.00": 3,
+    "20261120-put-765.00": 3,
+    "20261120-call-760.00": 1,
+    "20261120-put-760.00": 1,
+    "20261218-call-760.00": 3,
+    "20261218-put-760.00": 3,
+    "20261218-call-755.00": 1,
+    "20261218-put-755.00": 1,
+    "20261218-call-750.00": 1,
+    "20261218-put-750.00": 1
+  },
+  "origin_counts": {
+    "backfill": 342
+  },
+  "sessions": [
+    {
+      "session": "2025-08-19",
+      "spot": 631.2,
+      "expiry": "2025-11-21",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251121-call-630.00",
+        "20251121-put-630.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-20",
+      "spot": 629.52,
+      "expiry": "2025-11-21",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251121-call-630.00",
+        "20251121-put-630.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-21",
+      "spot": 627.0,
+      "expiry": "2025-11-21",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251121-call-625.00",
+        "20251121-put-625.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-22",
+      "spot": 636.63,
+      "expiry": "2025-11-21",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251121-call-635.00",
+        "20251121-put-635.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-25",
+      "spot": 633.83,
+      "expiry": "2025-11-28",
+      "requested": 18,
+      "with_bar": 7,
+      "written": 4,
+      "keys": [
+        "20251128-call-635.00",
+        "20251128-put-635.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-26",
+      "spot": 636.48,
+      "expiry": "2025-11-28",
+      "requested": 20,
+      "with_bar": 12,
+      "written": 2,
+      "keys": [
+        "20251128-call-635.00",
+        "mte91-call-mny+0.00"
+      ],
+      "skips": {
+        "no_put_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2025-08-27",
+      "spot": 637.93,
+      "expiry": "2025-11-28",
+      "requested": 18,
+      "with_bar": 13,
+      "written": 2,
+      "keys": [
+        "20251128-put-640.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2025-08-28",
+      "spot": 640.19,
+      "expiry": "2025-11-28",
+      "requested": 18,
+      "with_bar": 13,
+      "written": 4,
+      "keys": [
+        "20251128-call-640.00",
+        "20251128-put-640.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-08-29",
+      "spot": 636.37,
+      "expiry": "2025-11-28",
+      "requested": 20,
+      "with_bar": 10,
+      "written": 2,
+      "keys": [
+        "20251128-call-635.00",
+        "mte91-call-mny+0.00"
+      ],
+      "skips": {
+        "no_put_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2025-09-02",
+      "spot": 631.66,
+      "expiry": "2025-12-05",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-03",
+      "spot": 635.08,
+      "expiry": "2025-12-05",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-04",
+      "spot": 640.39,
+      "expiry": "2025-12-05",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-05",
+      "spot": 638.53,
+      "expiry": "2025-12-05",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-08",
+      "spot": 640.1,
+      "expiry": "2025-12-12",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-09",
+      "spot": 641.58,
+      "expiry": "2025-12-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-10",
+      "spot": 643.43,
+      "expiry": "2025-12-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-11",
+      "spot": 648.78,
+      "expiry": "2025-12-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-12",
+      "spot": 648.56,
+      "expiry": "2025-12-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-15",
+      "spot": 652.02,
+      "expiry": "2025-12-19",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251219-call-650.00",
+        "20251219-put-650.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-09-16",
+      "spot": 651.12,
+      "expiry": "2025-12-19",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251219-call-650.00",
+        "20251219-put-650.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-09-17",
+      "spot": 650.31,
+      "expiry": "2025-12-19",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251219-call-650.00",
+        "20251219-put-650.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-09-18",
+      "spot": 653.35,
+      "expiry": "2025-12-19",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251219-call-655.00",
+        "20251219-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-09-19",
+      "spot": 656.59,
+      "expiry": "2025-12-19",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20251219-call-655.00",
+        "20251219-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-09-22",
+      "spot": 659.69,
+      "expiry": "2025-12-26",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-23",
+      "spot": 656.1,
+      "expiry": "2025-12-26",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-24",
+      "spot": 654.01,
+      "expiry": "2025-12-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-25",
+      "spot": 651.0,
+      "expiry": "2025-12-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-26",
+      "spot": 654.73,
+      "expiry": "2025-12-26",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-29",
+      "spot": 656.57,
+      "expiry": "2026-01-02",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-09-30",
+      "spot": 659.04,
+      "expiry": "2026-01-02",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-01",
+      "spot": 661.28,
+      "expiry": "2026-01-02",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-02",
+      "spot": 662.05,
+      "expiry": "2026-01-02",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-03",
+      "spot": 662.04,
+      "expiry": "2026-01-02",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-06",
+      "spot": 664.41,
+      "expiry": "2026-01-09",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-07",
+      "spot": 661.95,
+      "expiry": "2026-01-09",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-08",
+      "spot": 665.89,
+      "expiry": "2026-01-09",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-09",
+      "spot": 663.97,
+      "expiry": "2026-01-09",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-10",
+      "spot": 646.02,
+      "expiry": "2026-01-09",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-13",
+      "spot": 655.93,
+      "expiry": "2026-01-16",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260116-call-655.00",
+        "20260116-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-14",
+      "spot": 655.13,
+      "expiry": "2026-01-16",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260116-call-655.00",
+        "20260116-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-15",
+      "spot": 658.04,
+      "expiry": "2026-01-16",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260116-call-660.00",
+        "20260116-put-660.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-16",
+      "spot": 653.56,
+      "expiry": "2026-01-16",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260116-call-655.00",
+        "20260116-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-17",
+      "spot": 657.27,
+      "expiry": "2026-01-16",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260116-call-655.00",
+        "20260116-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-20",
+      "spot": 664.1,
+      "expiry": "2026-01-23",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-21",
+      "spot": 664.09,
+      "expiry": "2026-01-23",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-22",
+      "spot": 660.64,
+      "expiry": "2026-01-23",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-23",
+      "spot": 664.56,
+      "expiry": "2026-01-23",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-24",
+      "spot": 669.99,
+      "expiry": "2026-01-23",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-10-27",
+      "spot": 677.89,
+      "expiry": "2026-01-30",
+      "requested": 20,
+      "with_bar": 14,
+      "written": 2,
+      "keys": [
+        "20260130-put-680.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2025-10-28",
+      "spot": 679.69,
+      "expiry": "2026-01-30",
+      "requested": 20,
+      "with_bar": 19,
+      "written": 4,
+      "keys": [
+        "20260130-call-680.00",
+        "20260130-put-680.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-29",
+      "spot": 680.02,
+      "expiry": "2026-01-30",
+      "requested": 22,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20260130-call-680.00",
+        "20260130-put-680.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-10-30",
+      "spot": 672.54,
+      "expiry": "2026-01-30",
+      "requested": 20,
+      "with_bar": 12,
+      "written": 2,
+      "keys": [
+        "20260130-put-675.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2025-10-31",
+      "spot": 674.75,
+      "expiry": "2026-01-30",
+      "requested": 20,
+      "with_bar": 12,
+      "written": 4,
+      "keys": [
+        "20260130-call-675.00",
+        "20260130-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-03",
+      "spot": 676.01,
+      "expiry": "2026-02-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-04",
+      "spot": 668.0,
+      "expiry": "2026-02-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-05",
+      "spot": 670.32,
+      "expiry": "2026-02-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-06",
+      "spot": 663.12,
+      "expiry": "2026-02-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-07",
+      "spot": 663.78,
+      "expiry": "2026-02-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-10",
+      "spot": 674.13,
+      "expiry": "2026-02-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-11",
+      "spot": 675.68,
+      "expiry": "2026-02-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-12",
+      "spot": 676.05,
+      "expiry": "2026-02-13",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-13",
+      "spot": 664.84,
+      "expiry": "2026-02-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-14",
+      "spot": 664.73,
+      "expiry": "2026-02-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-11-17",
+      "spot": 658.53,
+      "expiry": "2026-02-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260220-call-660.00",
+        "20260220-put-660.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-18",
+      "spot": 653.0,
+      "expiry": "2026-02-20",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260220-call-655.00",
+        "20260220-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-19",
+      "spot": 655.53,
+      "expiry": "2026-02-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260220-call-655.00",
+        "20260220-put-655.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-20",
+      "spot": 645.53,
+      "expiry": "2026-02-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260220-call-645.00",
+        "20260220-put-645.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-21",
+      "spot": 651.97,
+      "expiry": "2026-02-20",
+      "requested": 18,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260220-call-650.00",
+        "20260220-put-650.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-24",
+      "spot": 661.56,
+      "expiry": "2026-02-27",
+      "requested": 20,
+      "with_bar": 19,
+      "written": 4,
+      "keys": [
+        "20260227-call-660.00",
+        "20260227-put-660.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-25",
+      "spot": 667.78,
+      "expiry": "2026-02-27",
+      "requested": 20,
+      "with_bar": 20,
+      "written": 4,
+      "keys": [
+        "20260227-call-670.00",
+        "20260227-put-670.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-26",
+      "spot": 672.39,
+      "expiry": "2026-02-27",
+      "requested": 20,
+      "with_bar": 19,
+      "written": 4,
+      "keys": [
+        "20260227-call-670.00",
+        "20260227-put-670.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-11-28",
+      "spot": 676.06,
+      "expiry": "2026-02-27",
+      "requested": 22,
+      "with_bar": 18,
+      "written": 4,
+      "keys": [
+        "20260227-call-675.00",
+        "20260227-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-01",
+      "spot": 672.98,
+      "expiry": "2026-03-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-02",
+      "spot": 674.22,
+      "expiry": "2026-03-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-03",
+      "spot": 676.56,
+      "expiry": "2026-03-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-04",
+      "spot": 677.05,
+      "expiry": "2026-03-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-05",
+      "spot": 678.34,
+      "expiry": "2026-03-06",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-08",
+      "spot": 676.3,
+      "expiry": "2026-03-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-09",
+      "spot": 675.72,
+      "expiry": "2026-03-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-10",
+      "spot": 680.2,
+      "expiry": "2026-03-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-11",
+      "spot": 681.78,
+      "expiry": "2026-03-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-12",
+      "spot": 674.45,
+      "expiry": "2026-03-13",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-15",
+      "spot": 673.43,
+      "expiry": "2026-03-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260320-call-675.00",
+        "20260320-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-16",
+      "spot": 671.59,
+      "expiry": "2026-03-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260320-call-670.00",
+        "20260320-put-670.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-17",
+      "spot": 664.2,
+      "expiry": "2026-03-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260320-call-665.00",
+        "20260320-put-665.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-18",
+      "spot": 669.22,
+      "expiry": "2026-03-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260320-call-670.00",
+        "20260320-put-670.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-19",
+      "spot": 675.28,
+      "expiry": "2026-03-20",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260320-call-675.00",
+        "20260320-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2025-12-22",
+      "spot": 679.49,
+      "expiry": "2026-03-27",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-23",
+      "spot": 682.6,
+      "expiry": "2026-03-27",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-24",
+      "spot": 685.0,
+      "expiry": "2026-03-27",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-26",
+      "spot": 684.93,
+      "expiry": "2026-03-27",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-29",
+      "spot": 682.49,
+      "expiry": "2026-04-03",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-30",
+      "spot": 681.65,
+      "expiry": "2026-04-03",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2025-12-31",
+      "spot": 676.6,
+      "expiry": "2026-04-03",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-02",
+      "spot": 677.84,
+      "expiry": "2026-04-03",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-05",
+      "spot": 682.36,
+      "expiry": "2026-04-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-06",
+      "spot": 686.42,
+      "expiry": "2026-04-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-07",
+      "spot": 684.2,
+      "expiry": "2026-04-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-08",
+      "spot": 684.13,
+      "expiry": "2026-04-10",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-09",
+      "spot": 688.66,
+      "expiry": "2026-04-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-12",
+      "spot": 689.74,
+      "expiry": "2026-04-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260417-call-690.00",
+        "20260417-put-690.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-01-13",
+      "spot": 688.36,
+      "expiry": "2026-04-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260417-call-690.00",
+        "20260417-put-690.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-01-14",
+      "spot": 684.98,
+      "expiry": "2026-04-17",
+      "requested": 22,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20260417-call-685.00",
+        "20260417-put-685.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-01-15",
+      "spot": 686.84,
+      "expiry": "2026-04-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260417-call-685.00",
+        "20260417-put-685.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-01-16",
+      "spot": 686.27,
+      "expiry": "2026-04-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260417-call-685.00",
+        "20260417-put-685.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-01-20",
+      "spot": 672.3,
+      "expiry": "2026-04-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-21",
+      "spot": 680.06,
+      "expiry": "2026-04-24",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-22",
+      "spot": 683.61,
+      "expiry": "2026-04-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-23",
+      "spot": 683.86,
+      "expiry": "2026-04-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-26",
+      "spot": 687.33,
+      "expiry": "2026-05-01",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-27",
+      "spot": 690.07,
+      "expiry": "2026-05-01",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-28",
+      "spot": 690.0,
+      "expiry": "2026-05-01",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-29",
+      "spot": 688.63,
+      "expiry": "2026-05-01",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-01-30",
+      "spot": 686.58,
+      "expiry": "2026-05-01",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-02",
+      "spot": 689.99,
+      "expiry": "2026-05-08",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-03",
+      "spot": 684.15,
+      "expiry": "2026-05-08",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-04",
+      "spot": 680.84,
+      "expiry": "2026-05-08",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-05",
+      "spot": 672.34,
+      "expiry": "2026-05-08",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-06",
+      "spot": 685.24,
+      "expiry": "2026-05-08",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-09",
+      "spot": 688.54,
+      "expiry": "2026-05-15",
+      "requested": 20,
+      "with_bar": 19,
+      "written": 4,
+      "keys": [
+        "20260515-call-690.00",
+        "20260515-put-690.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-02-10",
+      "spot": 686.72,
+      "expiry": "2026-05-15",
+      "requested": 20,
+      "with_bar": 17,
+      "written": 2,
+      "keys": [
+        "20260515-put-685.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-02-11",
+      "spot": 686.57,
+      "expiry": "2026-05-15",
+      "requested": 20,
+      "with_bar": 17,
+      "written": 2,
+      "keys": [
+        "20260515-put-685.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-02-12",
+      "spot": 675.96,
+      "expiry": "2026-05-15",
+      "requested": 22,
+      "with_bar": 21,
+      "written": 4,
+      "keys": [
+        "20260515-call-675.00",
+        "20260515-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-02-13",
+      "spot": 676.43,
+      "expiry": "2026-05-15",
+      "requested": 20,
+      "with_bar": 18,
+      "written": 4,
+      "keys": [
+        "20260515-call-675.00",
+        "20260515-put-675.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-02-17",
+      "spot": 677.53,
+      "expiry": "2026-05-22",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-18",
+      "spot": 680.94,
+      "expiry": "2026-05-22",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-19",
+      "spot": 679.14,
+      "expiry": "2026-05-22",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-20",
+      "spot": 684.06,
+      "expiry": "2026-05-22",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-02-23",
+      "spot": 677.07,
+      "expiry": "2026-05-29",
+      "requested": 22,
+      "with_bar": 19,
+      "written": 2,
+      "keys": [
+        "20260529-put-675.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-02-24",
+      "spot": 681.99,
+      "expiry": "2026-05-29",
+      "requested": 22,
+      "with_bar": 19,
+      "written": 4,
+      "keys": [
+        "20260529-call-680.00",
+        "20260529-put-680.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-02-25",
+      "spot": 687.75,
+      "expiry": "2026-05-29",
+      "requested": 20,
+      "with_bar": 16,
+      "written": 4,
+      "keys": [
+        "20260529-call-685.00",
+        "20260529-put-685.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-02-26",
+      "spot": 683.93,
+      "expiry": "2026-05-29",
+      "requested": 22,
+      "with_bar": 18,
+      "written": 2,
+      "keys": [
+        "20260529-put-685.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-02-27",
+      "spot": 680.64,
+      "expiry": "2026-05-29",
+      "requested": 20,
+      "with_bar": 16,
+      "written": 2,
+      "keys": [
+        "20260529-put-680.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-03-02",
+      "spot": 681.03,
+      "expiry": "2026-06-05",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-03",
+      "spot": 675.03,
+      "expiry": "2026-06-05",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-04",
+      "spot": 679.79,
+      "expiry": "2026-06-05",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-05",
+      "spot": 676.0,
+      "expiry": "2026-06-05",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-06",
+      "spot": 667.14,
+      "expiry": "2026-06-05",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-09",
+      "spot": 672.98,
+      "expiry": "2026-06-12",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-10",
+      "spot": 671.9,
+      "expiry": "2026-06-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-11",
+      "spot": 671.06,
+      "expiry": "2026-06-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-12",
+      "spot": 660.87,
+      "expiry": "2026-06-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-13",
+      "spot": 657.13,
+      "expiry": "2026-06-12",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-16",
+      "spot": 663.81,
+      "expiry": "2026-06-19",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-17",
+      "spot": 665.56,
+      "expiry": "2026-06-19",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-18",
+      "spot": 656.27,
+      "expiry": "2026-06-19",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-19",
+      "spot": 654.66,
+      "expiry": "2026-06-19",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-20",
+      "spot": 645.3,
+      "expiry": "2026-06-19",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-23",
+      "spot": 652.08,
+      "expiry": "2026-06-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-24",
+      "spot": 649.89,
+      "expiry": "2026-06-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-25",
+      "spot": 653.51,
+      "expiry": "2026-06-26",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-26",
+      "spot": 641.84,
+      "expiry": "2026-06-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-27",
+      "spot": 630.89,
+      "expiry": "2026-06-26",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-30",
+      "spot": 628.79,
+      "expiry": "2026-07-03",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-03-31",
+      "spot": 647.06,
+      "expiry": "2026-07-03",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-01",
+      "spot": 651.94,
+      "expiry": "2026-07-03",
+      "requested": 18,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-02",
+      "spot": 652.52,
+      "expiry": "2026-07-03",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-06",
+      "spot": 655.61,
+      "expiry": "2026-07-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-07",
+      "spot": 655.9,
+      "expiry": "2026-07-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-08",
+      "spot": 672.6,
+      "expiry": "2026-07-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-09",
+      "spot": 676.48,
+      "expiry": "2026-07-10",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-10",
+      "spot": 676.04,
+      "expiry": "2026-07-10",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-13",
+      "spot": 682.64,
+      "expiry": "2026-07-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260717-call-685.00",
+        "20260717-put-685.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-14",
+      "spot": 690.96,
+      "expiry": "2026-07-17",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260717-call-690.00",
+        "20260717-put-690.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-15",
+      "spot": 696.41,
+      "expiry": "2026-07-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260717-call-695.00",
+        "20260717-put-695.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-16",
+      "spot": 698.12,
+      "expiry": "2026-07-17",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260717-call-700.00",
+        "20260717-put-700.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-17",
+      "spot": 706.56,
+      "expiry": "2026-07-17",
+      "requested": 20,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260717-call-705.00",
+        "20260717-put-705.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-20",
+      "spot": 705.15,
+      "expiry": "2026-07-24",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-21",
+      "spot": 700.53,
+      "expiry": "2026-07-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-22",
+      "spot": 707.63,
+      "expiry": "2026-07-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-23",
+      "spot": 704.88,
+      "expiry": "2026-07-24",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-24",
+      "spot": 710.34,
+      "expiry": "2026-07-24",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-04-27",
+      "spot": 711.57,
+      "expiry": "2026-07-31",
+      "requested": 20,
+      "with_bar": 18,
+      "written": 4,
+      "keys": [
+        "20260731-call-710.00",
+        "20260731-put-710.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-28",
+      "spot": 708.1,
+      "expiry": "2026-07-31",
+      "requested": 22,
+      "with_bar": 21,
+      "written": 4,
+      "keys": [
+        "20260731-call-710.00",
+        "20260731-put-710.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-29",
+      "spot": 707.99,
+      "expiry": "2026-07-31",
+      "requested": 22,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20260731-call-710.00",
+        "20260731-put-710.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-04-30",
+      "spot": 715.04,
+      "expiry": "2026-07-31",
+      "requested": 22,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20260731-call-715.00",
+        "20260731-put-715.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-01",
+      "spot": 717.02,
+      "expiry": "2026-07-31",
+      "requested": 22,
+      "with_bar": 21,
+      "written": 4,
+      "keys": [
+        "20260731-call-715.00",
+        "20260731-put-715.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-04",
+      "spot": 714.39,
+      "expiry": "2026-08-07",
+      "requested": 20,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-05",
+      "spot": 720.12,
+      "expiry": "2026-08-07",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-06",
+      "spot": 730.13,
+      "expiry": "2026-08-07",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-07",
+      "spot": 727.89,
+      "expiry": "2026-08-07",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-08",
+      "spot": 733.9,
+      "expiry": "2026-08-07",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-11",
+      "spot": 735.57,
+      "expiry": "2026-08-14",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-12",
+      "spot": 734.46,
+      "expiry": "2026-08-14",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-13",
+      "spot": 738.57,
+      "expiry": "2026-08-14",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-14",
+      "spot": 744.4,
+      "expiry": "2026-08-14",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-15",
+      "spot": 735.44,
+      "expiry": "2026-08-14",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-18",
+      "spot": 734.93,
+      "expiry": "2026-08-21",
+      "requested": 22,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20260821-call-735.00",
+        "20260821-put-735.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-19",
+      "spot": 730.03,
+      "expiry": "2026-08-21",
+      "requested": 22,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20260821-call-730.00",
+        "20260821-put-730.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-20",
+      "spot": 737.51,
+      "expiry": "2026-08-21",
+      "requested": 24,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260821-call-740.00",
+        "20260821-put-740.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-21",
+      "spot": 738.98,
+      "expiry": "2026-08-21",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20260821-call-740.00",
+        "20260821-put-740.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-05-22",
+      "spot": 741.88,
+      "expiry": "2026-08-21",
+      "requested": 22,
+      "with_bar": 17,
+      "written": 2,
+      "keys": [
+        "20260821-put-740.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-05-26",
+      "spot": 746.81,
+      "expiry": "2026-08-28",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-27",
+      "spot": 746.68,
+      "expiry": "2026-08-28",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-28",
+      "spot": 750.8,
+      "expiry": "2026-08-28",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-05-29",
+      "spot": 752.67,
+      "expiry": "2026-08-28",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-01",
+      "spot": 754.72,
+      "expiry": "2026-09-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-02",
+      "spot": 755.74,
+      "expiry": "2026-09-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-03",
+      "spot": 750.44,
+      "expiry": "2026-09-04",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-04",
+      "spot": 753.27,
+      "expiry": "2026-09-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-05",
+      "spot": 733.83,
+      "expiry": "2026-09-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-08",
+      "spot": 735.49,
+      "expiry": "2026-09-11",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-09",
+      "spot": 733.34,
+      "expiry": "2026-09-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-10",
+      "spot": 721.77,
+      "expiry": "2026-09-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-11",
+      "spot": 734.04,
+      "expiry": "2026-09-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-12",
+      "spot": 738.01,
+      "expiry": "2026-09-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-15",
+      "spot": 751.03,
+      "expiry": "2026-09-18",
+      "requested": 22,
+      "with_bar": 20,
+      "written": 4,
+      "keys": [
+        "20260918-call-750.00",
+        "20260918-put-750.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-06-16",
+      "spot": 746.55,
+      "expiry": "2026-09-18",
+      "requested": 24,
+      "with_bar": 20,
+      "written": 2,
+      "keys": [
+        "20260918-put-745.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-06-17",
+      "spot": 737.23,
+      "expiry": "2026-09-18",
+      "requested": 22,
+      "with_bar": 18,
+      "written": 2,
+      "keys": [
+        "20260918-put-735.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {
+        "no_call_bar_at_nearest_strike": 1
+      }
+    },
+    {
+      "session": "2026-06-18",
+      "spot": 744.89,
+      "expiry": "2026-09-18",
+      "requested": 22,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20260918-call-745.00",
+        "20260918-put-745.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-06-22",
+      "spot": 742.55,
+      "expiry": "2026-09-25",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-23",
+      "spot": 731.76,
+      "expiry": "2026-09-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-24",
+      "spot": 731.42,
+      "expiry": "2026-09-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-25",
+      "spot": 732.48,
+      "expiry": "2026-09-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-26",
+      "spot": 727.18,
+      "expiry": "2026-09-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-29",
+      "spot": 739.16,
+      "expiry": "2026-10-02",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-06-30",
+      "spot": 744.92,
+      "expiry": "2026-10-02",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-01",
+      "spot": 743.91,
+      "expiry": "2026-10-02",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-02",
+      "spot": 742.94,
+      "expiry": "2026-10-02",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-06",
+      "spot": 749.42,
+      "expiry": "2026-10-09",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-07",
+      "spot": 745.86,
+      "expiry": "2026-10-09",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-08",
+      "spot": 743.55,
+      "expiry": "2026-10-09",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-09",
+      "spot": 749.85,
+      "expiry": "2026-10-09",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-10",
+      "spot": 753.08,
+      "expiry": "2026-10-09",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-13",
+      "spot": 747.31,
+      "expiry": "2026-10-16",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261016-call-745.00",
+        "20261016-put-745.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-14",
+      "spot": 749.97,
+      "expiry": "2026-10-16",
+      "requested": 22,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20261016-call-750.00",
+        "20261016-put-750.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-15",
+      "spot": 752.94,
+      "expiry": "2026-10-16",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261016-call-755.00",
+        "20261016-put-755.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-16",
+      "spot": 748.86,
+      "expiry": "2026-10-16",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261016-call-750.00",
+        "20261016-put-750.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-17",
+      "spot": 741.45,
+      "expiry": "2026-10-16",
+      "requested": 24,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20261016-call-740.00",
+        "20261016-put-740.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-20",
+      "spot": 740.25,
+      "expiry": "2026-10-23",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-21",
+      "spot": 746.43,
+      "expiry": "2026-10-23",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-22",
+      "spot": 745.56,
+      "expiry": "2026-10-23",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-23",
+      "spot": 736.35,
+      "expiry": "2026-10-23",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-24",
+      "spot": 737.1,
+      "expiry": "2026-10-23",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-07-27",
+      "spot": 737.26,
+      "expiry": "2026-10-30",
+      "requested": 22,
+      "with_bar": 17,
+      "written": 4,
+      "keys": [
+        "20261030-call-735.00",
+        "20261030-put-735.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-28",
+      "spot": 739.03,
+      "expiry": "2026-10-30",
+      "requested": 22,
+      "with_bar": 20,
+      "written": 4,
+      "keys": [
+        "20261030-call-740.00",
+        "20261030-put-740.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-29",
+      "spot": 727.65,
+      "expiry": "2026-10-30",
+      "requested": 22,
+      "with_bar": 18,
+      "written": 4,
+      "keys": [
+        "20261030-call-730.00",
+        "20261030-put-730.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-30",
+      "spot": 739.85,
+      "expiry": "2026-10-30",
+      "requested": 22,
+      "with_bar": 21,
+      "written": 4,
+      "keys": [
+        "20261030-call-740.00",
+        "20261030-put-740.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-07-31",
+      "spot": 745.18,
+      "expiry": "2026-10-30",
+      "requested": 22,
+      "with_bar": 22,
+      "written": 4,
+      "keys": [
+        "20261030-call-745.00",
+        "20261030-put-745.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-03",
+      "spot": 755.79,
+      "expiry": "2026-11-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-04",
+      "spot": 769.42,
+      "expiry": "2026-11-06",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-05",
+      "spot": 767.88,
+      "expiry": "2026-11-06",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-06",
+      "spot": 766.66,
+      "expiry": "2026-11-06",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-07",
+      "spot": 771.34,
+      "expiry": "2026-11-06",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-10",
+      "spot": 771.12,
+      "expiry": "2026-11-13",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-11",
+      "spot": 768.65,
+      "expiry": "2026-11-13",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-12",
+      "spot": 770.58,
+      "expiry": "2026-11-13",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-13",
+      "spot": 775.95,
+      "expiry": "2026-11-13",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-14",
+      "spot": 774.42,
+      "expiry": "2026-11-13",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-17",
+      "spot": 770.76,
+      "expiry": "2026-11-20",
+      "requested": 24,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20261120-call-770.00",
+        "20261120-put-770.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-18",
+      "spot": 765.55,
+      "expiry": "2026-11-20",
+      "requested": 24,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20261120-call-765.00",
+        "20261120-put-765.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-19",
+      "spot": 767.16,
+      "expiry": "2026-11-20",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261120-call-765.00",
+        "20261120-put-765.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-20",
+      "spot": 760.71,
+      "expiry": "2026-11-20",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261120-call-760.00",
+        "20261120-put-760.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-21",
+      "spot": 763.82,
+      "expiry": "2026-11-20",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261120-call-765.00",
+        "20261120-put-765.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-08-24",
+      "spot": 761.58,
+      "expiry": "2026-11-27",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-25",
+      "spot": 764.01,
+      "expiry": "2026-11-27",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-26",
+      "spot": 764.18,
+      "expiry": "2026-11-27",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-27",
+      "spot": 769.19,
+      "expiry": "2026-11-27",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-28",
+      "spot": 767.44,
+      "expiry": "2026-11-27",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-08-31",
+      "spot": 765.15,
+      "expiry": "2026-12-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-01",
+      "spot": 759.89,
+      "expiry": "2026-12-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-02",
+      "spot": 763.26,
+      "expiry": "2026-12-04",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-03",
+      "spot": 771.25,
+      "expiry": "2026-12-04",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-04",
+      "spot": 768.28,
+      "expiry": "2026-12-04",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-08",
+      "spot": 764.06,
+      "expiry": "2026-12-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-09",
+      "spot": 760.51,
+      "expiry": "2026-12-11",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-10",
+      "spot": 755.95,
+      "expiry": "2026-12-11",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-11",
+      "spot": 762.4,
+      "expiry": "2026-12-11",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-14",
+      "spot": 759.0,
+      "expiry": "2026-12-18",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261218-call-760.00",
+        "20261218-put-760.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-09-15",
+      "spot": 755.51,
+      "expiry": "2026-12-18",
+      "requested": 24,
+      "with_bar": 6,
+      "written": 4,
+      "keys": [
+        "20261218-call-755.00",
+        "20261218-put-755.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-09-16",
+      "spot": 752.18,
+      "expiry": "2026-12-18",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261218-call-750.00",
+        "20261218-put-750.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-09-17",
+      "spot": 760.71,
+      "expiry": "2026-12-18",
+      "requested": 22,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261218-call-760.00",
+        "20261218-put-760.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-09-18",
+      "spot": 761.69,
+      "expiry": "2026-12-18",
+      "requested": 24,
+      "with_bar": 4,
+      "written": 4,
+      "keys": [
+        "20261218-call-760.00",
+        "20261218-put-760.00",
+        "mte91-call-mny+0.00",
+        "mte91-put-mny+0.00"
+      ],
+      "skips": {}
+    },
+    {
+      "session": "2026-09-21",
+      "spot": 773.5,
+      "expiry": "2026-12-25",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-22",
+      "spot": 773.38,
+      "expiry": "2026-12-25",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-23",
+      "spot": 767.81,
+      "expiry": "2026-12-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-24",
+      "spot": 767.18,
+      "expiry": "2026-12-25",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-25",
+      "spot": 771.35,
+      "expiry": "2026-12-25",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-28",
+      "spot": 765.61,
+      "expiry": "2027-01-01",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-29",
+      "spot": 764.2,
+      "expiry": "2027-01-01",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-09-30",
+      "spot": 762.63,
+      "expiry": "2027-01-01",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-10-01",
+      "spot": 763.99,
+      "expiry": "2027-01-01",
+      "requested": 22,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    },
+    {
+      "session": "2026-10-02",
+      "spot": 769.64,
+      "expiry": "2027-01-01",
+      "requested": 24,
+      "with_bar": 0,
+      "written": 0,
+      "keys": [],
+      "skips": {
+        "no_contract_with_a_bar": 1
+      }
+    }
+  ]
+}

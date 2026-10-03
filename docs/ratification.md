@@ -2,8 +2,9 @@
 
 **Status:** DRAFT — unsigned by the operator. Sections (b) and the delegation note in
 (a) carry operator rulings dated **2026-10-02**; section (e) and ruling **E1** were
-drafted 2026-10-03 after the frozen-rule rulings debate and are **awaiting operator
-signature**. **Date:** _(fill in when signed)_ **Operator:** _(mads)_
+drafted 2026-10-03 after the frozen-rule rulings debate, **revised the same day** once the
+T5 backfill landed (which withdrew (e)'s structural reason and changed one of E1's
+prediction statuses), and are **awaiting operator signature**. **Date:** _(fill in when signed)_ **Operator:** _(mads)_
 
 > **Delegation note — 2026-10-02.** The operator explicitly delegated the *technical
 > interpretations* in section (a): he was told there are 55 judgment calls the code had
@@ -150,8 +151,8 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/backfill_flow.py:364`** — the contract is built by *parsing the OCC symbol back* rather than by remembering what we asked for, so strike/right/expiry in the row come from the same parser the live path uses. ([source](../executor/backfill_flow.py#L364))
 - [ ] **`executor/backfill_flow.py:559`** — the message keeps the exception type and text (Alpaca's HTTP status and body are the whole diagnosis — see the feasibility note's §5), and the run continues. ([source](../executor/backfill_flow.py#L559))
 - [ ] **`executor/backfill_flow.py:634`** — the honest-empty rule, inherited from the live soak. ([source](../executor/backfill_flow.py#L634))
-- [ ] **`executor/iv_backfill.py:307`** — this is a **reconstruction of a listing calendar, not a record of one.** Alpaca serves no point-in-time chain, so the calendar cannot be read back for a past session. ([source](../executor/iv_backfill.py#L307))
-- [ ] **`executor/iv_backfill.py:363`** — $1-wide is SPY's listed near-ATM spacing, and the width is sized to the GATE rather than to caution -- see DEFAULT_LADDER_RANGE_PCT for why that is 0.75% and not 3%. ([source](../executor/iv_backfill.py#L363))
+- [ ] **`executor/iv_backfill.py:350`** — this is a **reconstruction of a listing calendar, not a record of one.** Alpaca serves no point-in-time chain, so the calendar cannot be read back for a past session. ([source](../executor/iv_backfill.py#L350))
+- [ ] **`executor/iv_backfill.py:406`** — $1-wide is SPY's listed near-ATM spacing, and the width is sized to the GATE rather than to caution -- see DEFAULT_LADDER_RANGE_PCT for why that is 0.75% and not 3%. ([source](../executor/iv_backfill.py#L406))
 
 <!-- END GENERATED: INTERPRETATION INVENTORY -->
 
@@ -382,12 +383,16 @@ rulebook edit because `Rulebook.fingerprint()` hashes raw file bytes. The baseli
 `1.4.0-draft` is therefore isolable with a version filter, exactly as R7 did it: nothing
 is deleted, and rows written under `1.3.0-draft` stay on disk and stay readable.
 
-**What is deliberately NOT done here.** Section (e) item 1 still describes the strike-axis
-rotation as "queued for the next pre-registration cycle", which this ruling resolves.
-Rewriting (e) — and (f) — waits for the backfill build, because the rewrite has to state
-**real** observation counts for the new schema, not hopes. Until then a reader of (e)
-sees a pre-window record of the finding as queued, and a reader of this section sees the
-ruling; both are true, and the reconciliation lands with the numbers.
+**What was deliberately NOT done here, and has since been done.** When this ruling was
+entered, section (e) item 1 still described the strike-axis rotation as "queued for the next
+pre-registration cycle", and (e)/(f) were left alone on purpose: the rewrite has to state
+**real** observation counts for the new schema, not hopes, and those counts did not exist
+yet. **The backfill has since run (`a988b40`: 342 rows, 0 refusals, arm C PASS) and the
+reconciliation has landed.** Section (e) item 1 is now written as *fixed under R8, verified
+warm at 78 put / 68 call observations, with the density caveat stated*, and (e) carries a
+*Revision record* withdrawing its structural reason in the same voice it was written in.
+Section (f) is revised alongside it. Nothing in this ruling moved; only the document that
+recorded the open question has been closed against real numbers.
 
 ---
 
@@ -579,9 +584,15 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
       where the real soak series begins, that the seam is visible in the store rather than
       papered over, and that no proxy row can reach a real SPY rank (two independent guards:
       the flag and the `VIX` underlying key).
-- [ ] **IV warmup actually reached.** `MIN_OBSERVATIONS = 60`. If the soak's ATM tenor keys
-      are still in warmup at window start, T5 reports PENDING and **blocks**. Decide now
-      whether to open the window in that state (honest, T5 simply cannot pass) or to wait.
+- [x] **IV warmup actually reached — for arm C, achieved; for arm B, unreachable by design.**
+      `MIN_OBSERVATIONS = 60`. **Arm C reads PASS** on the ruled moneyness keys (78 put / 68
+      call observations, `source=bars_bs_inversion`, `origin=backfill`, per R9), so T5 no
+      longer blocks arm C at window open. **Arm B reads PENDING and will stay there:** its
+      band is 0 DTE, Black-Scholes vega is identically zero at expiry, and the solver refuses
+      zero-DTE outright — arm B warms on **live soak only**, ≥ 60 sessions (≈ 2027-01-23 from
+      window open). Its `window.arm_b_gate` is armed and opens on the count, with no new
+      ruling. *Re-verify both through the production reader before the window; a PASS backed
+      by a count nobody re-read is not a PASS.*
 - [x] ~~**Which tenor T5 reads**~~ — **RULED 2026-10-03 (R4): the rolling
       `dte_tenor_key`**, bucket 7 days, both arms. *Consequence ratified the same day
       (R7): the 28 deployed raw-DTE rows are orphaned, the store is not rewritten, and
@@ -627,12 +638,20 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
 
 ---
 
-## (e) Empty-window pre-commitment — RULED 2026-10-03, drafted by the lead
+## (e) Empty-window pre-commitment — DRAFTED 2026-10-03, REVISED 2026-10-03, AWAITING OPERATOR SIGNATURE
 
-> **Drafted 2026-10-03, awaiting operator signature.** This is section (e), added after
-> the `2026-10-03` frozen-rule rulings debate. It is frozen-rule territory, so the text
-> below is exact and the operator ratifies it as written or not at all — it is not
-> "lead-ratified under delegation" the way section (a) is. Signature line at the bottom.
+> **Drafted 2026-10-03, revised the same day after the T5 backfill, still awaiting operator
+> signature.** This is section (e), added after the `2026-10-03` frozen-rule rulings debate. It
+> is frozen-rule territory, so the text below is exact and the operator ratifies it as written
+> or not at all — it is not "lead-ratified under delegation" the way section (a) is. Signature
+> line at the bottom.
+>
+> **Why it carries a revision, stated up front rather than applied silently.** The structural
+> reason this section originally led with — *arm C cannot trade in this window at all, and
+> therefore P(trade) ≈ 0 deterministically* — **is withdrawn. It is false.** Rulings R8/R9 and
+> the completed backfill (`a988b40`, 342 rows, 0 refusals) put arm C's T5 warm on a real IV
+> series. The base-rate reason survives and now carries the section alone. See *Revision
+> record* at the bottom, which is part of this section and not an appendix to it.
 
 **The one thing this section closes.** Every other control in this document defends
 against *editing* the rules — version bumps, monthly review only, journaled seams. None of
@@ -642,33 +661,30 @@ response would destroy the only asset this experiment has that a normal trading 
 does not. **This is the only pre-commitment that closes it, which is why it is written
 before any results exist rather than after.**
 
-**An empty window is the designed outcome, for two independent reasons. Both are stated
-here so neither can be discovered later and mistaken for good news.**
+**An empty window is the designed outcome, for one reason. It is stated here so it cannot be
+discovered later and mistaken for good news.**
 
-**(1) Structural — arm C cannot trade in this window at all.** This is deterministic, not
-probabilistic:
+**(1) Base rate — the checklist almost never fires, and the window is built around that fact
+rather than hoping against it.** Arm C fires on **5 of 5,522** SPY sessions in 22.7 years.
+P(at least one qualifying day in a 60-session window) = **5.3%**; P(empty) = **94.7%**
+(`docs/reviews/2026-10-03-gate-base-rates.md`). Expected trade count over the window:
+**~0.05**. In plain terms: one qualifying day, if one occurs at all, is a ~5% event. The
+rulebook's own line on arm B — *"weeks with zero trades is the system working"* — is not a
+special condition to be relieved of. It is the expected output.
 
-- T5 is a blocking condition on arm C's frozen checklist (`arms.C.checklist`).
-- T5 reports **PENDING** when `iv_rank` is undefined, and PENDING *blocks*:
-  `checklist.evaluate` computes `fire = not any(blocking and status != "PASS")`.
-- An IV rank needs `MIN_OBSERVATIONS = 60` observations in the tenor key.
-- The window is 60 sessions and opens `2026-11-02`; the tenor series has not warmed.
-
-Therefore **P(arm C takes a position in this window) ≈ 0, deterministically.** This is
-stronger than the base rate below and it is the *first* reason, because it is structural
-rather than statistical.
-
-**(2) Base rate — even with T5 resolved, the checklist almost never fires.** Arm C fires
-on **5 of 5,522** SPY sessions in 22.7 years. P(at least one qualifying day in a
-60-session window) = **5.3%**; P(empty) = **94.7%**
-(`docs/reviews/2026-10-03-gate-base-rates.md`).
-
-> **A note on why 5.3% is an upper bound, so the number is not misquoted later.** That
-> measurement scored T5 with a Cboe VIX percentile-rank *proxy* (its own Limitations §2)
-> to get a per-gate marginal. Production T5 does not read a VIX proxy — it reads the SPY
-> option IV series for the arm's own traded tenor, and that series is not warm. So the
-> proxy figure describes what the checklist would do *if* T5 resolved. It is a ceiling,
-> not a forecast.
+> **A note on the measurement's one soft input, which is now load-bearing rather than
+> decorative.** The 5.3% / 94.7% figure scored T5 with a Cboe VIX percentile-rank **proxy**
+> (its own Limitations §2), because at the time T5 had no series to read. **That proxy is now
+> retired** — arm C's T5 reads a real SPY IV series. The base-rate measurement has **not** been
+> re-run against it, so T5's marginal inside the joint rate is an assumption carried forward
+> from a stand-in. Under the proxy, T5 recorded **zero sole-vetoes** — it never vetoed a day
+> that everything else passed — which is why its 55% pass rate cannot move the joint rate much.
+> **That argument is weaker now than it was**, because "T5 does no filtering" was itself
+> measured with a substitute, and the real T5 could bind on days the proxy let through. So:
+> **94.7% is the best available estimate, not a re-measured number and not a floor.** What
+> survives untouched is the qualitative claim it supports and the order of magnitude — one
+> qualifying day per few thousand sessions is not sensitive to one gate's marginal. Anyone
+> quoting a sharper number than that is quoting something this document does not support.
 
 **The pre-commitment:**
 
@@ -680,14 +696,43 @@ on **5 of 5,522** SPY sessions in 22.7 years. P(at least one qualifying day in a
 >
 > **Queued for the next pre-registration cycle (v2 design), explicitly NOT for mid-flight
 > amendment:**
-> 1. **T5's tenor key rotates with spot.** `dte_tenor_key` embeds a `$5` strike bucket, so
->    the key changes as SPY moves — the same failure R4 fixed on the *DTE* axis, still live
->    on the *strike* axis. Measured on real SPY closes: **no key has reached 60
->    observations since 2020** (best 54). Affects arm B too. Candidate fix is
->    moneyness-relative bucketing; it changes what T5 measures, so it needs its own
->    ratification entry and version seam.
+> 1. **T5's tenor key rotates with spot — FIXED under R8, verified warm, not closed.**
+>    *The original finding, retained for the record:* `dte_tenor_key` embedded a `$5` strike
+>    bucket, so the key changed as SPY moved — the same failure R4 fixed on the *DTE* axis,
+>    still live on the *strike* axis. Measured on real SPY closes: **no key reached 60
+>    observations since 2020** (best 54). R8 moved the rolling key's strike axis to
+>    2%-of-spot moneyness buckets (`mte<dte>-<side>-mny<bucket>`), and R9 ruled that backfilled
+>    observations count toward the frozen 60. Those rulings are the authority for what follows
+>    and are not re-litigated here.
+>
+>    **What the store now holds**, read through the production reader:
+>    `mte91-put-mny+0.00` **78** observations, `mte91-call-mny+0.00` **68**, floor
+>    `MIN_OBSERVATIONS = 60`, every row `source=bars_bs_inversion` / `origin=backfill`.
+>    **Arm C's T5 reads PASS.** (Raw distinct-session counts before the 365-day lookback and
+>    the proxy-row exclusion are 90 put / 81 call; the reader's numbers are the ones that
+>    count.)
+>
+>    **The caveat that has to travel with those numbers, because they are short.** They are
+>    roughly **30% of the 261/key the offline arithmetic predicted**, and the shortfall is a
+>    **contract-reconstruction fidelity limit, not a fetch failure**: 191 of 283 sessions
+>    wrote nothing at all (`no_contract_with_a_bar` — 0 of ~21 requested contracts returned a
+>    bar), and sessions that did resolve averaged 3.3 contracts with a bar. The ladder is a
+>    *reconstruction*, since Alpaca serves no point-in-time chain, so it asks for strikes
+>    around spot that were frequently never listed or never traded — and **a bar is not a
+>    backfilled guess**. So this is a **warm series with a real margin over the floor, not a
+>    full-density series**. Any later argument about T5's sensitivity, decay, or distribution
+>    has to reason from 78/68, not from the 261 the arithmetic hoped for.
+>
+>    **The expiry-keyed audit series is still rotation-limited, by design.** The parallel `$5`
+>    expiry-keyed keys (`20260116-put-655.00` and its siblings) are the exact-contract audit
+>    trail for the approximation, and they top out at **3–4 sessions** against the same floor
+>    of 60 — every absolute-strike key dies with its expiry. That is precisely why they are
+>    audit-only and not a gate input. If that ever changes it needs its own ruling, the way
+>    R8 got one.
 > 2. **T1, T2 and T5 are redundant** at daily resolution — zero sole-vetoes, 100% pass
->    given the others pass. T4 does nearly all the filtering.
+>    given the others pass. T4 does nearly all the filtering. (Re-measured only under the T5
+>    proxy; the T5 half of this row is now carried by the real series, and the row is queued
+>    for re-measurement in v2 for that reason.)
 > 3. **T2b vs T3b friction** — the outsider review argues these charge twice for one
 >    observation. Both are binding, so neither is removable without weakening confluence.
 >
@@ -697,48 +742,158 @@ on **5 of 5,522** SPY sessions in 22.7 years. P(at least one qualifying day in a
 **Journal/UI wording.** The correct note on an empty session is: *"base rate predicts 0.05
 trades per window; 0 trades is unremarkable."* Not *"checklist is too tight."*
 
+**Revision record — why reason (1) changed, in the words of the claim being withdrawn.** The
+first draft of this section gave two reasons for the expected-empty outcome. Reason (1) was
+**structural**: T5 is a blocking condition on arm C's frozen checklist, PENDING blocks,
+`checklist.evaluate` computes `fire = not any(blocking and status != "PASS")`, an IV rank
+needs 60 observations in the tenor key, and the tenor series had not warmed — therefore
+**P(arm C takes a position in this window) ≈ 0, deterministically**, and that was ranked above
+the base rate because it is structural rather than statistical. **That claim is withdrawn: it
+is false.** R8 moved the key off the rotating strike axis, R9 made backfilled observations
+countable, and the completed backfill cleared the floor on both ruled keys. **Arm C is
+gate-capable and can trade.** What remains is the base rate, which is an expectation and not
+a certainty.
+
+The withdrawal was made **pre-window, with no trades taken and no results to fit** — which is
+the only moment a claim like this can be retracted without contaminating anything. It is
+recorded here in the same voice as the original, because a pre-commitment that quietly loses a
+clause is not a pre-commitment, it is a draft. **What did not change: the pre-commitment
+block above, which is in force verbatim and independently of either reason. Even if the base
+rate were exactly wrong, the no-mid-flight-loosening rule and its reasoning still stand on
+their own.**
+
 **Operator signature:** ______________________  **Date:** ____________
 
 ---
 
 ---
 
-## (f) E1 — November window scope — DRAFTED 2026-10-03, AWAITING OPERATOR RULING
+## (f) E1 — November window scope — DRAFTED 2026-10-03, REVISED 2026-10-03, AWAITING OPERATOR RULING
 
 > **This is a draft, not a ruling.** Both the lead and the outside reviewer independently
 > converged on it, which is why it is written as exact text rather than a recommendation.
 > The operator rules on it. It is placed in the frozen document so that it is signed
 > **before the window opens** — the whole value of an escalation is that it cannot be
 > reverse-engineered from results.
-
-**The finding.** The November window opens arms A and C. Arm C cannot trade in it: T5 is
-blocking, PENDING blocks, the IV rank needs 60 observations, and 21 weekdays separate this
-document from the window. Section (e) gives the arithmetic. The consequence is that the
-window's pre-registered predictions largely cannot be evaluated.
-
-**Escalated for ruling, with exact text:**
-
-> **E1(a) — Predictions 2 and 3 are NOT EVALUABLE IN THIS WINDOW.** Prediction 2 (arm B
-> is structurally negative-EV as an asset class) and prediction 3 (arm C tracks arm A with
-> leverage-amplified variance) both require trades that cannot occur. They are **deferred
-> to the next pre-registration cycle (v2)**, where T5 is warm and the arms can act. Their
-> criteria are **unchanged** — deferred, not rewritten to fit what the window produced.
 >
+> **Revised 2026-10-03 after the T5 backfill.** The reviewer's structural argument — arm C
+> cannot trade, therefore nothing is evaluable — **no longer holds, and the revision changes
+> the reasoning and one prediction's status, not the deferrals.** Recorded here pre-window,
+> with no results in hand.
+
+**The finding, as it now stands.** The window opens arms A and C (`window.arms = [A, C]`),
+with arm B held behind `window.arm_b_gate` — `armed_pending_warmup`, opening automatically
+when a tenor the plan reads reaches `MIN_OBSERVATIONS`, with no new ruling needed. **Arm C is
+now gate-capable:** its T5 reads PASS on a real, backfilled IV series, so nothing structurally
+prevents it from trading. What is left is arithmetic: the measured base rate is ~0.05 trades
+per window, so **arm C almost certainly will not trade either** — for a completely different
+reason than the one this section originally recorded. A window with no arm-C trade can no
+longer be read as "the gate was blocking" and it also cannot be read as "the gate was fine and
+nothing came along"; **the journal cannot tell those two stories apart, and a reader who is
+not told that will pick whichever one flatters the conclusion they wanted.**
+
+**Prediction by prediction, reassessed against the current state:**
+
+**Prediction 1 — arm A finishes the window positive in expectation.** **Unchanged, and it is
+now the window's one confidently scored comparison.** It needs no gate, no feed and no
+warmup, and over 60 sessions it yields an answer with ~95% confidence of existing at all.
+Nothing in the backfill touches it. *(Listed so the record shows it was re-read rather than
+assumed.)*
+
+**Prediction 2 — arm B is structurally negative-EV as an asset class. STILL NOT EVALUABLE.
+The deferral stands and the criterion is unchanged; the reason is now a different reason, and
+the difference matters for what happens next.**
+
+- *It was deferred because* T5 could not reach `MIN_OBSERVATIONS = 60` in the tenor key
+  before the window by any route: the absolute-strike key rotated with spot and backfill hit
+  the identical wall (feasibility study §2b/§5 — ≤ 22 observations inside the frozen 1y
+  lookback, best case). Arm B's warmup was **impossible before the window**.
+- *It is deferred because* **arm B's band is 0 DTE.** Black-Scholes vega is identically zero
+  at expiry, so a 0-DTE daily print does not determine a volatility, and the inversion solver
+  refuses zero-DTE contracts outright. **Arm B's T5 therefore cannot be backfilled at all, at
+  any depth of history** — that is the instrument, not a data gap. It warms on **live soak
+  only**, at roughly one observation per session: **≥ 60 live sessions, which the feasibility
+  arithmetic puts at ≈ 2027-01-23 measured from window open.** Live rows recorded before
+  window open would pull that earlier, and the gate opens **on the observation count, not the
+  calendar** — so this is a warm-up arithmetic, not a date, and nobody should be tempted to
+  treat a particular Monday as the trigger.
+- **A second, independent blocker, recorded so the first is not mistaken for the whole
+  story:** arm B also carries **T6**, which arm C does not. T6 is `calibration_pending` until
+  N is frozen at the first monthly review on ≥ 20 soak sessions (§(c)), and a PENDING gate
+  blocks. **A warm T5 alone would not open arm B before that freeze.**
+
+**Escalated for ruling, prediction 2:**
+
+> **E1(a-i) — Prediction 2 is NOT EVALUABLE IN THIS WINDOW.** It requires arm B trades, and
+> arm B cannot take one: its T5 warms on live soak alone (0 DTE, zero vega, no backfill
+> possible) at ≈ 60 sessions from window open, and its T6 is `calibration_pending` until the
+> first monthly review. It is **deferred to the next pre-registration cycle (v2)**. Its
+> criterion is **unchanged** — deferred, not rewritten to fit what the window produced. No new
+> ruling is required for arm B to open if its series warms: `window.arm_b_gate` is already
+> armed for exactly that.
+
+**Prediction 3 — arm C tracks arm A with leverage-amplified variance. NOW EVALUABLE IN
+PRINCIPLE AND UNDERPOWERED — and the honest status is neither "deferred" nor "tested."**
+
+**Escalated for ruling, prediction 3:**
+
+> **E1(a-ii) — Prediction 3 is EVALUABLE IN PRINCIPLE AND NOT POWERED.** Arm C is
+> gate-capable: its T5 reads PASS on a real series, so a trade is mechanically possible in
+> this window. It is not *expected* — the measured base rate is 5 of 5,522 sessions, ≈ 0.05
+> trades per 60-session window. **A zero-trade window therefore cannot distinguish "arm C
+> tracks arm A with leverage-amplified variance" from "arm C never fired": the two are
+> identical in the journal.** The prediction is neither confirmed nor refuted by a quiet
+> window; it is **inconclusive by construction, and is recorded as inconclusive rather than as
+> a pass.** Its criterion is **unchanged**. One further honesty note, so a lucky trade is not
+> oversold either: **if exactly one arm-C trade occurs, that is a single position, and one
+> position cannot establish variance amplification.** It yields a directional observation and
+> is recorded as *not the pre-registered test* — the same rule that keeps a lucky window from
+> being cited as confirmation applies to a lucky trade.
+
+**Prediction 4 — trade frequency under hunting discipline; *"if we're trading weekly, the
+rules were not frozen tight enough."* THE VACUITY CONCERN SURVIVES, and it survives for a
+sharper reason than before.**
+
+- *Originally:* the checklist could not fire at all, so an empty window satisfied prediction 4
+  without testing anything.
+- *Now:* the gate **can** fire and the window is still almost certainly empty, so the same
+  vacuity arrives by a different road — and it is arguably worse for interpretation, because
+  **a quiet window is now consistent with two incompatible stories**: the gates are correctly
+  frozen and the base rate is simply what it is, or something is silently preventing arm C
+  from trading. The window's own output cannot separate those. **The claim "< 2 trades/month"
+  is satisfied by zero trades and by one; the only informative branch is the weekly-trading
+  one, and §(e) forbids reacting to it anyway.** Recording prediction 4 as passed would hand a
+  later reader a result that appears to support both stories at once.
+
+**Escalated for ruling, prediction 4:**
+
 > **E1(b) — Prediction 4's in-window result is recorded as VACUOUS, not confirmatory.**
-> Prediction 4 falsifies itself if "the rules were not frozen tight enough"; an empty
-> window satisfies that test without testing anything. It is recorded as *not run*, so a
-> later reader cannot cite "the rules passed prediction 4" as support.
+> Prediction 4 falsifies itself if "the rules were not frozen tight enough"; an empty window
+> satisfies that test without testing anything, and now satisfies it without even being
+> evidence that the gate *tried*. It is recorded as *not run*, so a later reader cannot cite
+> "the rules passed prediction 4" as support.
+
+**Escalated for ruling, the window's purpose:**
+
+> **E1(c) — The window's stated purpose is amended** to: **score arm A against cash at ~95%
+> confidence; treat arm C as a live-capable arm that is expected *not* to fire; and keep
+> collecting mechanism evidence** — NO-SHOT rows, the IV series (whose live-provenance rows
+> gradually replace the backfilled ones inside the frozen lookback), and the flow baseline that
+> freezes T6's N. This is a legitimate thing to run and worth running, but it is a *different*
+> experiment than the brief described, and the difference should be on the record before day
+> one rather than discovered on it.
 >
-> **E1(c) — The window's stated purpose is amended** to: **score arm A against cash, and
-> collect mechanism evidence** — NO-SHOT rows, the IV series, T6's flow baseline. This is a
-> legitimate thing to run and worth running, but it is a *different* experiment than the
-> one the brief described, and the difference should be on the record before day one rather
-> than discovered on it.
+> **One correction to the original wording of this clause, made because it was wrong rather
+> than merely stale:** T6's flow baseline is **arm B's**, and arm C carries T1–T5 only — T6 is
+> not an arm-C mechanism input at all. The baseline is collected because it is what freezes N
+> at the first monthly review, not because anything in this window reads it. Listing it
+> alongside arm C's evidence overstated what arm C does.
 
 **What E1 does NOT do.** It does not change a threshold, a gate, or a rule. It does not
-extend or shorten the window. It does not alter what arm A does. It is a statement about
-what the window can and cannot conclude — which is exactly the kind of claim that is
-cheap to make now and impossible to make honestly later.
+extend or shorten the window. It does not alter what arm A does. It does not remove or re-arm
+any arm — in particular it does **not** touch `window.arm_b_gate`, which stays armed on its
+own terms. It is a statement about what the window can and cannot conclude — which is exactly
+the kind of claim that is cheap to make now and impossible to make honestly later.
 
 **Operator signature:** ______________________  **Date:** ____________
 

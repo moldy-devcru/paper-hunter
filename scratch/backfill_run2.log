@@ -1,0 +1,23 @@
+bands from config/rules.example.yaml: (('B', 0, 0), ('C', 90, 180))
+Traceback (most recent call last):
+  File "/home/hunter/dev/ph-debate/scripts/backfill_iv_rank.py", line 201, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/hunter/dev/ph-debate/scripts/backfill_iv_rank.py", line 149, in main
+    report = run_backfill(
+             ^^^^^^^^^^^^^
+  File "/home/hunter/dev/ph-debate/executor/iv_backfill.py", line 737, in run_backfill
+    series = source.option_daily_bars(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hunter/dev/ph-debate/executor/iv_backfill.py", line 266, in option_daily_bars
+    return self.client.get_option_daily_bars(symbols, start=start, end=end, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hunter/dev/ph-debate/executor/alpaca_client.py", line 1205, in get_option_daily_bars
+    payload = self._get(
+              ^^^^^^^^^^
+  File "/home/hunter/dev/ph-debate/executor/alpaca_client.py", line 998, in _get
+    return self.transport.get_json(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/hunter/dev/ph-debate/executor/alpaca_client.py", line 235, in get_json
+    raise AlpacaAPIError(exc.code, _api_message(raw), path=url) from None
+executor.alpaca_client.AlpacaAPIError: alpaca HTTP 403 (https://data.alpaca.markets/v1beta1/options/bars: OPRA agreement is not signed)
