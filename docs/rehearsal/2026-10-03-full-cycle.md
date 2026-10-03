@@ -10,6 +10,13 @@ mechanical path works; the blockers are data readiness, not broken code.
 > **data readiness only**: T5's IV-rank warm-up and T6's `N` both need sessions of soak
 > history that have not accumulated yet, and R4's keying change restarts the IV warm-up
 > from zero (see the addendum). Addendum two closed findings 8 and 9.
+>
+> **Addendum four (2026-10-03 01:38 EDT).** The two items this report left open after
+> addendum three are now **operator-ratified and encoded** — R6 (arm C's entry window is
+> declared, 09:45–15:30 ET) and R7 (the 28 raw-DTE IV rows are orphaned by design; no
+> re-keying, no migration, no deletion). **The NO-GO verdict above is unchanged**: R7
+> confirms item 9 is calendar-bound rather than fixable, and neither ruling adds a
+> single session of soak history. See the addendum at the end of this document.
 
 Reproduce:
 
@@ -347,3 +354,91 @@ open in November, the soak has to be accumulating under the new keying **now**, 
 60 sessions at one observation per session per tenor is the whole cost of it. The
 pre-R4 rows are not a partial head start; they are unreachable history, and re-keying
 them would only make the store look warmer than it is (see addendum three).
+
+---
+
+## Addendum four — 2026-10-03 01:38 EDT: the last two open items, ruled and encoded
+
+mads, shown what addendum three left open, said *"good with your recs"*. Both are
+recorded in [`docs/ratification.md`](../ratification.md) as **operator-ratified,
+accepting the lead's recommendation** — the recommendation was mine, the ruling his.
+Nothing in this addendum rewrites the sections above it; the NO-GO verdict and the
+data-readiness tables stand as written.
+
+### Open item 1 — the 28 deployed IV rows. **RESOLVED: orphaned by design (R7).**
+
+§4 reported 28 rows, 28 tenor keys, all from 2026-10-02, one observation each, under the
+raw-DTE keying R4 replaced. The three options on the table were re-key them, delete them,
+or leave them.
+
+**Ruled: leave them, and never read them.** The store is untouched — no migration script,
+no `DELETE`, no backfill. Under `tenor_key_mode: dte_tenor_key` those keys are simply
+never looked up again, and the T5 series for the bucket keys starts from zero and warms
+from the next soak session.
+
+The cost is unchanged from what addendum three said and is accepted explicitly: **arm
+B's T5 warm-up restarts from zero.** Re-keying would have looked like a head start and
+would not have been one — 28 singleton observations spread across 28 different keys is
+not a prefix of any bucket series, and a warm-looking store is worse than an honestly
+cold one, because it moves the blocker somewhere nobody is looking at it.
+
+**Effect on the checklist:** item 9 stays **NO-GO**, and it was never going to be
+otherwise. 60 sessions of soak is calendar-bound. Under R5 that means the window opens
+with **A + C** and B inert, which is the designed behaviour for a cold store rather than
+a fault to patch.
+
+### Open item 2 — arm C had no entry window. **RESOLVED: declared, 09:45–15:30 ET (R6).**
+
+R2 ruled that a green plan arms the watch loop "on the entry window alone". For arm B
+that phrase had a referent; for arm C it did not, because arm C declared no
+`entry.window_et` and the code fell back to the whole session (09:30–16:00). §4's
+consequence was the real problem: arm C is the arm R1's roll can leave past its roll
+trigger, so an unbounded arm-C window decided how long a stale-roll position could sit
+unsatisfied.
+
+**Ruled: arm C declares `entry.window_et: 09:45–15:30 ET`, inclusive on both ends.**
+Encoded as:
+
+- `config/rules.example.yaml` — `arms.C.entry.window_et`, and the strategy version moves
+  `1.1.0-draft` → `1.2.0-draft` (status stays **DRAFT**, T6 stays
+  `calibration_pending`).
+- `config/loader.py` — the field is **required**, so a rulebook missing it fails to load
+  rather than silently falling back.
+- `executor/position_manager.py` — `arm_entry_window_open(arm, now, rules)` is now the
+  single definition of "inside the entry window", used by both arms' governors and by
+  the watch loop's R2 arming path, so the two cannot disagree. A missing window reads
+  **CLOSED**, not whole-session.
+- `executor/watch_loop.py` — `_green_cell_armed` reads the same helper, so R2 arms arm C
+  on a real boundary.
+- `executor/hunt_plan.py` — arm C's `arm_c_criteria` carries `entry_window_et`, so a
+  journalled cell explains its own timing.
+
+**The window bounds new entries, and nothing else.** R1's roll is not window-gated: a
+position already past its roll trigger is managed whenever the loop runs, including
+after 15:30, because a leg that cannot be rolled until the next morning is a different
+risk from one that is never rolled. The exits ladder is evaluated before any window
+question, and the exemption is pinned by tests rather than left to a reader's trust: a
+roll fires at 09:30, 11:00 and 15:45, while a new arm C entry at 09:35 or 15:45 is
+vetoed by name. The one judgment call inside the ruling — the roll exemption — is
+recorded as an `# INTERPRETATION:` in `position_manager._arm_c_entry` and in the
+ratification inventory.
+
+### Verification
+
+A new rehearsal stage, **`arm-c-window`**, runs the same tick twice in the same world
+with only the clock changed: 10:20 ET (inside) and 15:45 ET (outside). It fails if the
+inside tick is blocked by the window, if the outside tick enters, or if the outside tick
+neither enters nor says why — the last clause is there so the stage cannot pass by
+testing nothing.
+
+```
+[PASS] arm-c-window
+       arm C window 09:45-15:30 ET: inside 10:20 ET 1 TRADE / 0 VETO,
+       outside 15:45 ET 0 TRADE / 1 VETO
+         inside TRADE SPY20270216C00490835
+         outside VETO entry_window: entry window 09:45-15:30 ET is closed at 15:45:00 ET
+```
+
+All 17 stages pass, full pytest and `ruff check` are clean, and §5 changes only in this
+sense: **no new gate, no cleared gate.** Item 9 remains the same NO-GO it was an hour
+ago, for the same reason.
