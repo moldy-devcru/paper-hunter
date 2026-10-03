@@ -124,7 +124,22 @@ DEFAULT_SLACK_DAYS = 45
 #: moneyness bucket plus a margin, so the nearest-to-spot survivor is found even when the
 #: close sits between strikes. See ``zero_dte_symbols`` for why the step is a parameter.
 DEFAULT_STRIKE_STEP = 1.0
-DEFAULT_LADDER_RANGE_PCT = 3.0
+#: How wide a strike ladder to fetch around spot.
+#:
+#: This started at 3.0% and was cut to 0.75% for a reason that is worth more than the
+#: constant: **the gate reads NEAREST-TO-SPOT** inside the DTE band (``soak.
+#: arm_contract_for_band``, mirrored from ``hunt_plan._iv_contract_for_arm``). On a $1
+#: strike grid nearest-to-spot is at most $0.50 away, which at SPY's price is well under
+#: 0.1% — so the tenor key it produces is ``mny0.00`` on EVERY session, verified by
+#: enumerating a year of plans, not assumed.
+#:
+#: A ±3% ladder therefore bought 50 chunks of requests to populate buckets the gate never
+#: reads, against a feed that allows roughly ten requests per burst. The ladder is not
+#: there to cover the moneyness axis; it is there so that when the nearest strike has no
+#: bar there is a NEXT strike to fall back on. Ten ATM strikes is ample for that and is
+#: 15 chunks instead of 50. Widen it with ``--range-pct`` if a future gate reads a
+#: non-ATM bucket.
+DEFAULT_LADDER_RANGE_PCT = 0.75
 
 #: SPY daily closes come back split/dividend-adjusted (``adjustment="all"``). That is the
 #: consistent choice against a Black-Scholes model that carries dividends as a yield: an
@@ -183,9 +198,14 @@ class IvSource(Protocol):
 #: is how a transient 403 becomes a self-inflicted ban. Retries are counted and reported, so
 #: a run that leaned on twenty of them is visibly a worse run than one that needed none.
 RETRYABLE_STATUS = frozenset({403, 429, 500, 502, 503, 504})
-DEFAULT_MAX_RETRIES = 4
+DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BASE_SECONDS = 5.0
-FORBIDDEN_COOLDOWN_SECONDS = 30.0
+#: A 403 gets a LONG cooldown before retrying, because recovery was measured at ~2 minutes
+#: of IDLE and a short ramp just burns attempts — worse, actively retrying may keep the
+#: window from clearing. 180s doubling, three attempts, is 21 minutes of patience for a
+#: chunk, which is why :data:`DEFAULT_LADDER_RANGE_PCT` is tight: fewer chunks is fewer
+#: places to spend it.
+FORBIDDEN_COOLDOWN_SECONDS = 180.0
 DEFAULT_MIN_INTERVAL_SECONDS = 1.2
 
 
