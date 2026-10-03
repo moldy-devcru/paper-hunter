@@ -126,7 +126,7 @@ line, and that code is the source of truth if the two ever disagree.
 
 - [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
 - [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
-- [ ] **`executor/main.py:513`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L513))
+- [ ] **`executor/main.py:660`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L660))
 
 ### other (5)
 

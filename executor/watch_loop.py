@@ -792,7 +792,7 @@ def _entry_evaluation(
 
 
 def _arm_c_contract(cell: ArmPlan, snapshot: WatchSnapshot) -> OrderLeg | None:
-    """First live call meeting arm C's entry criteria (90-180 DTE, delta >= 0.80).
+    """First live contract meeting arm C's entry criteria (90-180 DTE, delta >= 0.80).
 
     Re-derived from the live chain rather than trusted from the plan — the same
     discipline as arm B's strike. Premium is capped at 50% of the bankroll; if the
@@ -800,18 +800,30 @@ def _arm_c_contract(cell: ArmPlan, snapshot: WatchSnapshot) -> OrderLeg | None:
     "no_candidate" veto fires, because "no affordable contract" is a veto with a
     reason, not a silent skip.
     """
-    entry = cell.watch.arm_c_criteria
+    # FIX (2026-10-03, full-cycle rehearsal): the attribute is ``arm_c_criteria``
+    # (only ``to_dict()`` spells it ``arm_c_criteria``), so this line raised
+    # AttributeError on every arm C entry attempt.
+    entry = cell.watch.arm_criteria
     bankroll = float(entry.get("bankroll_usd", 0.0)) or 0.0
-    max_premium = float(entry.get("premium_pct_max", 0.5)) * bankroll
+    # FIX (2026-10-03, full-cycle rehearsal): the criteria dict the plan writes is
+    # keyed ``premium_pct_of_bankroll_max``; this read ``premium_pct_max``, which the
+    # plan never writes, so the cap silently defaulted to 0.5 and the ``max_premium``
+    # below was zero. The DTE band and the delta floor are read from the plan's own
+    # criteria too, so the live selection is driven by the rulebook rather than by
+    # literals repeated here (the shipped values are unchanged: 90-180 DTE, delta 0.80).
+    max_premium = float(entry.get("premium_pct_of_bankroll_max", 0.5)) * bankroll
+    dte_min = int(entry.get("dte_min", 90))
+    dte_max = int(entry.get("dte_max", 180))
+    delta_min = float(entry.get("delta_min", 0.80))
     candidates: list[tuple[float, OrderLeg]] = []
     for contract in snapshot.chain or ():
-        if contract.right != "call":
+        if contract.right != cell.direction:
             continue
         dte = _dte_from_expiry(contract.expiry, snapshot)
-        if dte is None or not (90 <= dte <= 180):
+        if dte is None or not (dte_min <= dte <= dte_max):
             continue
         delta = contract.greeks.delta if contract.greeks else None
-        if delta is None or delta < 0.80:
+        if delta is None or delta < delta_min:
             continue
         price = contract_price(contract)
         if price is None or price * 100.0 > max_premium or max_premium <= 0:
@@ -934,6 +946,8 @@ def run_loop(
     clock: Callable[[], dt.datetime] | None = None,
     tick_hook: Callable[[TickResult], None] | None = None,
     max_snapshot_age_seconds: float = DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
+    iv_rank: float | None = None,
+    flow_gate: Any | None = None,
 ) -> list[TickResult]:
     """Poll :func:`run_once` until the stop time, ``max_ticks``, or an error.
 
@@ -943,6 +957,14 @@ def run_loop(
     14:55 should not silently end the session, and it must not be swallowed either —
     the errors surface in the returned results and, when a journal is attached, the
     caller can write them.
+
+    ``iv_rank`` and ``flow_gate`` are forwarded to every tick's re-verification. FIX
+    (2026-10-03, full-cycle rehearsal): they were accepted by :func:`run_once` and NOT
+    forwarded here, so the CLI path re-verified every cell with ``iv_rank=None`` and no
+    flow gate — T5 and T6 both evaluate PENDING on a missing read, and both are
+    blocking for arm B, so the loop could never enter a position no matter what the
+    caller knew. A parameter that is accepted and dropped is worse than one that does
+    not exist.
 
     Returns every tick result, so a whole session's reasoning is inspectable after the
     fact rather than only in the journal.
@@ -968,6 +990,8 @@ def run_loop(
                 manager=manager,
                 calendar=calendar,
                 max_snapshot_age_seconds=max_snapshot_age_seconds,
+                iv_rank=iv_rank,
+                flow_gate=flow_gate,
             )
         except Exception as exc:  # noqa: BLE001 - a tick must not kill the session
             message = f"tick error at {to_et(now).isoformat(timespec='seconds')}: {exc}"

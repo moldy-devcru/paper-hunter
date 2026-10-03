@@ -40,12 +40,19 @@ catalyst clause in the brief.
 Brief drafted, awaiting operator ratification of thresholds and open decisions. See
 [`docs/brief.md`](docs/brief.md).
 
+The full daily cycle has been rehearsed end to end offline (no network, no orders, no
+writes outside a temp dir): [`docs/rehearsal/2026-10-03-full-cycle.md`](docs/rehearsal/2026-10-03-full-cycle.md).
+Verdict: the mechanics work, the deployment is **not** ready — T6's multiplier is
+unreviewed, the IV store needs 60 sessions of warm-up before T5 can resolve, and four
+operator questions are open. Reproduce with `scripts/rehearse.sh`.
+
 ## Layout (planned)
 
 ```
 docs/brief.md      — the pre-registered experiment spec
 docs/ui-design.md  — the read-only terminal's design spec (5 pages, GET-only)
 docs/ui-runbook.md — how to reach/restart the terminal, and how it stays read-only
+docs/rehearsal/ — full-cycle dry rehearsals (offline; run `scripts/rehearse.sh`)
 executor/          — deterministic checklist evaluator + Alpaca paper orders
 journal/           — append-only decision ledger + NO-SHOT log
 analysis/          — weekly rollups, counterfactual scoring

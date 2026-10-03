@@ -81,6 +81,9 @@ from executor.watch_loop import (
 
 PLAN_DIR = Path("data/plans")
 
+#: T6 input policies shared by `hunt-plan` and `watch` (see executor/flow_gate.py).
+FLOW_GATE_POLICIES = ("none", "last-confirmed")
+
 
 class CliError(RuntimeError):
     """Anything that stops the run, with a message meant for a human."""
@@ -234,6 +237,26 @@ def build_parser() -> argparse.ArgumentParser:
     plan_cmd.add_argument(
         "--spot", type=float, default=None, help="override the reference spot price"
     )
+    plan_cmd.add_argument(
+        "--ivrank",
+        default=None,
+        help=(
+            "IV-rank store path, so T5 has a rank to read (default: the store's own "
+            "path). FIX 2026-10-03: hunt-plan previously passed no store, so T5 was "
+            "PENDING in every cell and every plan was NO_TRADE by construction."
+        ),
+    )
+    plan_cmd.add_argument(
+        "--flow-gate",
+        choices=FLOW_GATE_POLICIES,
+        default="none",
+        help=(
+            "T6 input policy. 'none' (default) hands the plan no flow gate, which is "
+            "the pre-2026-10-03 behaviour. 'last-confirmed' reads the newest "
+            "flow_baseline row dated before the session — an OPEN OPERATOR QUESTION, "
+            "not a settled mechanic (see executor/flow_gate.py)"
+        ),
+    )
 
     watch_cmd = sub.add_parser("watch", help="intraday trigger loop")
     watch_cmd.add_argument(
@@ -243,6 +266,33 @@ def build_parser() -> argparse.ArgumentParser:
     watch_cmd.add_argument("--poll-seconds", type=float, default=15.0)
     watch_cmd.add_argument("--stop-et", default="16:00")
     watch_cmd.add_argument("--ticks", type=int, default=None, help="stop after N ticks")
+    watch_cmd.add_argument(
+        "--ivrank",
+        default=None,
+        help="IV-rank store path (default: the store's own path)",
+    )
+    watch_cmd.add_argument(
+        "--iv-rank",
+        type=float,
+        default=None,
+        help=(
+            "IV rank to re-verify T5 with. Omit to read the store for the call-side ATM "
+            "tenor; the value is printed every session so the journal's T5 can be tied "
+            "to it"
+        ),
+    )
+    watch_cmd.add_argument(
+        "--flow-gate",
+        choices=FLOW_GATE_POLICIES,
+        default="none",
+        help="T6 input policy; see executor/flow_gate.py. Default 'none' = no gate.",
+    )
+    watch_cmd.add_argument(
+        "--flow-side",
+        choices=("call", "put"),
+        default="call",
+        help="which trade side the T6 gate is read for when --flow-gate is used",
+    )
 
     eod_cmd = sub.add_parser("eod", help="end of day: mark, enforce, journal, NO-SHOTs")
     eod_cmd.add_argument("--plan", default=None)
@@ -302,6 +352,88 @@ def _open_db(path: str | None) -> Any:
     return init_db(path)
 
 
+def _iv_store(path: str | None) -> Any:
+    """Open the IV-rank store read-only, or return ``None`` if there is nothing to open.
+
+    # FIX (2026-10-03, full-cycle rehearsal): ``hunt-plan`` and ``watch`` never opened
+    # the store, so T5 evaluated PENDING on every cell ("iv_rank unavailable") and arm
+    # B could not fire from the CLI under any market conditions. PENDING is honest but
+    # it is also blocking, so an unwired input is a silent strategy halt.
+
+    Read-only on purpose: a missing store returns ``None`` instead of creating an empty
+    database, so a mistyped path cannot leave behind a file that looks like history.
+    """
+    from executor.iv_rank import DEFAULT_DB_PATH, IvRankStore
+
+    target = Path(path) if path else Path(DEFAULT_DB_PATH)
+    if not target.exists():
+        return None
+    import sqlite3
+
+    conn = sqlite3.connect(f"file:{target}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return IvRankStore(conn)
+
+
+def _flow_gate(args: argparse.Namespace, conn: Any, rules: Rulebook, day: dt.date) -> Any:
+    """T6's gate for this run, or ``None`` under the ``--flow-gate none`` policy.
+
+    Prints the read (source session, ratio, status) because "which session did T6 read"
+    is the first question anyone will ask of a journal row that hinges on this gate.
+    """
+    policy = getattr(args, "flow_gate", "none")
+    if policy == "none" or conn is None:
+        return None
+    from executor.flow_gate import flow_gate_from_journal
+
+    t6 = rules.checklist.t6_flow
+    multiplier = None if t6.multiplier.calibration_pending else float(t6.multiplier.value)
+    read = flow_gate_from_journal(
+        conn,
+        as_of=day,
+        side=getattr(args, "flow_side", "call"),
+        multiplier=multiplier,
+        lookback_days=t6.baseline_lookback_days,
+    )
+    print(read.summary_line())
+    return read.gate
+
+
+def _watch_iv_rank(
+    args: argparse.Namespace, plan: HuntPlan, rules: Rulebook
+) -> tuple[float | None, str]:
+    """The IV rank ``watch`` re-verifies T5 with, and where it came from.
+
+    Precedence: ``--iv-rank`` (the operator states it), else the rank the pre-market
+    plan already recorded for the B/call cell, else the newest ranked observation in the
+    store. The value and its source are printed once per session, so a journal row's T5
+    can be tied to a number rather than to an absence.
+    """
+    if getattr(args, "iv_rank", None) is not None:
+        return float(args.iv_rank), "--iv-rank (operator supplied)"
+    for cell in plan.arms:
+        value = cell.snapshot_dict.get("iv_rank")
+        if cell.arm == "B" and cell.direction == "call" and isinstance(value, (int, float)):
+            return float(value), "plan cell B/call (hunt-plan --ivrank)"
+    store = _iv_store(getattr(args, "ivrank", None))
+    if store is None:
+        return None, "no IV store"
+    try:
+        observations = store.observations(rules.strategy.symbol)
+    except Exception as exc:  # noqa: BLE001 - a broken store must not stop the session
+        return None, f"IV store unreadable ({exc})"
+    if not observations:
+        return None, "IV store has no observations"
+    ranked = [o for o in observations if o.rank is not None]
+    if not ranked:
+        return None, (
+            f"IV store has {len(observations)} observation(s) but no tenor has reached "
+            f"MIN_OBSERVATIONS — T5 cannot be evaluated until the history warms up"
+        )
+    best = max(ranked, key=lambda o: (o.as_of, o.tenor_key))
+    return float(best.rank), f"IV store tenor {best.tenor_key} as of {best.as_of}"
+
+
 def _router(args: argparse.Namespace, rules: Rulebook) -> Any:
     """The order router for this run. Dry run never reads a credential."""
     if args.dry_run:
@@ -326,19 +458,21 @@ def cmd_hunt_plan(args: argparse.Namespace, now: dt.datetime) -> int:
     client = AlpacaClient.from_env()
     provider = AlpacaWatchData(client)
     calendar = _calendar(rules)
+    conn = _open_db(args.db)
     plan = build_hunt_plan(
         data=provider,
         rules=rules,
         day=day,
         calendar=calendar,
         spot=args.spot,
+        iv_store=_iv_store(getattr(args, "ivrank", None)),
+        flow_gate=_flow_gate(args, conn, rules, day),
     )
     out = Path(args.out) if args.out else PLAN_DIR / f"{day.isoformat()}.json"
     write_plan_file(plan, out)
     print(summarise(plan))
     print(f"\nplan written: {out} (sha256 {hashlib.sha256(out.read_bytes()).hexdigest()[:12]})")
 
-    conn = _open_db(args.db)
     if conn is not None:
         ids = write_hunt_plan(conn, plan)
         print(f"journaled {len(ids)} plan decision(s): {sorted(ids)}")
@@ -398,6 +532,17 @@ def cmd_watch(args: argparse.Namespace, now: dt.datetime) -> int:
     conn = _open_db(args.db)
     sink = _sink(conn, rules)
     state = WatchState.initial(day=day, plan=plan, rules=rules)
+    iv_rank, iv_source = _watch_iv_rank(args, plan, rules)
+    flow_gate = _flow_gate(args, conn, rules, day)
+    if iv_rank is None:
+        print(
+            "warning: no IV rank for T5 re-verification (no --iv-rank, and the plan "
+            "cells carry none) — T5 evaluates PENDING and blocks every arm B/C entry; "
+            "pass --iv-rank, or re-run hunt-plan with --ivrank so the store is read",
+            file=sys.stderr,
+        )
+    else:
+        print(f"T5 iv_rank={iv_rank:.2f} (source: {iv_source})")
     results = run_loop(
         provider=provider,
         rules=rules,
@@ -408,6 +553,8 @@ def cmd_watch(args: argparse.Namespace, now: dt.datetime) -> int:
         poll_seconds=args.poll_seconds,
         stop_at_et=args.stop_et,
         max_ticks=args.ticks,
+        iv_rank=iv_rank,
+        flow_gate=flow_gate,
     )
     for result in results:
         line = (

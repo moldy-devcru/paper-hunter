@@ -36,7 +36,13 @@ from executor.watch_loop import (
     run_once,
     trigger_fired,
 )
-from tests.fixtures_synthetic import series_from, synthetic_daily_payload, zero_dte_chain
+from tests.fixtures_synthetic import (
+    _chain,
+    make_contract,
+    series_from,
+    synthetic_daily_payload,
+    zero_dte_chain,
+)
 
 ET = dt.timezone(dt.timedelta(hours=-4))
 LONG = 260
@@ -716,3 +722,114 @@ def test_the_loop_can_use_a_manager_with_a_persistent_sink(rules, series):
     )
     assert len(sink.records) == result.journaled >= 1
     assert sink.records[-1].kind == "STOP"
+
+
+# ---------------------------------------------------------------------------
+# arm C's live contract selection (found broken by the full-cycle rehearsal)
+# ---------------------------------------------------------------------------
+
+
+def _arm_c_chain(*, expiry: str, dte_ok: bool, ask: float, delta: float = 0.85):
+    """One call in the entry band, so selection is decided by the caps, not the pool."""
+    return _chain(
+        "SPY",
+        [
+            make_contract(
+                symbol=f"SPY{expiry}C00450000",
+                underlying="SPY",
+                expiry=expiry,
+                strike=450.0,
+                right="call",
+                ask=ask,
+                delta=delta,
+            )
+        ],
+    )
+
+
+def _arm_c_cell(rules, **criteria_overrides):
+    """An arm C/call cell carrying the criteria the plan writes for the live selector."""
+    criteria = {
+        "right": "call",
+        "dte_min": 90,
+        "dte_max": 180,
+        "delta_min": 0.80,
+        "bankroll_usd": 10000.0,
+        "premium_pct_of_bankroll_max": 0.50,
+        "max_concurrent_positions": 1,
+        **criteria_overrides,
+    }
+    return ArmPlan(
+        arm="C",
+        direction="call",
+        checklist=evaluate(passing_snapshot(), rules, "call", "C"),
+        decision_kind="NO_TRADE",
+        conviction=1,
+        triggers=(TriggerPrice("T1", 630.0, "above", "FAIL", "close above the fast EMA"),),
+        watch=WatchLevels(close=625.0, arm_criteria=criteria),
+        reasoning="fixture arm C cell for the live selector",
+        snapshot_dict={},
+    )
+
+
+def test_the_plan_writes_the_keys_the_arm_c_selector_reads(rules, series):
+    """Regression (full-cycle rehearsal, 2026-10-03): the selector read
+    ``premium_pct_max`` and the plan wrote ``premium_pct_of_bankroll_max``, and neither
+    side carried the bankroll — so the cap evaluated to $0 and arm C could never select
+    a contract, silently. ``max_premium <= 0`` was in the skip condition, so nothing
+    even complained."""
+    from executor.hunt_plan import StaticMarketData, build_hunt_plan
+
+    plan = build_hunt_plan(
+        data=StaticMarketData(series=series, chain=None),
+        rules=rules,
+        day=DAY + dt.timedelta(days=3),
+        spot=series.bars[-1].c,
+    )
+    cell = next(c for c in plan.arms if c.arm == "C" and c.direction == "call")
+    criteria = cell.watch.arm_criteria
+    assert criteria["bankroll_usd"] == rules.arms.C.bankroll_usd
+    assert criteria["premium_pct_of_bankroll_max"] == rules.arms.C.entry.premium_pct_of_bankroll_max
+    # ...and the attributes the selector touches exist on the dataclass at all: it read
+    # ``arm_c_criteria`` (only ``to_dict()`` spells it that way), which raised
+    # AttributeError on the first arm C entry attempt of every session.
+    assert isinstance(cell.watch.arm_criteria, dict)
+
+
+def test_arm_c_selects_the_cheapest_contract_inside_the_premium_cap(rules, series):
+    expiry = "20270115"  # ~135 DTE from DAY — inside the 90-180 band
+    chain = _arm_c_chain(expiry=expiry, dte_ok=True, ask=30.0)
+    cell = _arm_c_cell(rules)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=625.0, daily=series, chain=chain
+    )
+    leg = watch_loop._arm_c_contract(cell, snapshot)
+    assert leg is not None, "arm C selected nothing from a qualifying chain"
+    assert leg.symbol == "SPY20270115C00450000"
+    assert leg.qty == 1 and leg.side == "buy"
+
+
+def test_arm_c_refuses_a_contract_over_the_premium_cap(rules, series):
+    """The same call at $600 premium is over the 50% of a $10k bankroll, and must be
+    refused with a reason rather than bought."""
+    expiry = "20270115"
+    chain = _arm_c_chain(expiry=expiry, dte_ok=True, ask=600.0)
+    cell = _arm_c_cell(rules)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=625.0, daily=series, chain=chain
+    )
+    assert watch_loop._arm_c_contract(cell, snapshot) is None
+
+
+def test_arm_c_selection_follows_the_rulebook_dte_band(rules, series):
+    """DTE and delta are read from the plan's criteria, so changing the rulebook changes
+    the selection instead of leaving 90/180/0.80 hard-coded in two places."""
+    expiry = "20270115"
+    chain = _arm_c_chain(expiry=expiry, dte_ok=True, ask=30.0, delta=0.50)
+    tight = _arm_c_cell(rules, delta_min=0.80)
+    loose = _arm_c_cell(rules, delta_min=0.40)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=625.0, daily=series, chain=chain
+    )
+    assert watch_loop._arm_c_contract(tight, snapshot) is None
+    assert watch_loop._arm_c_contract(loose, snapshot) is not None

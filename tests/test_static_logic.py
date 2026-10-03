@@ -553,6 +553,55 @@ P90_META = {
 }
 
 
+N_META = {
+    "status": "sufficient",
+    "value": 2.681,
+    "n_call": 1.157,
+    "n_put": 4.024,
+    "samples": 76,
+    "sessions_considered": 64,
+    "sessions_qualified": 38,
+    "sessions_needed": 20,
+    "threshold_pct": 3.0,
+    "method": "P90 of per-session trade-side deep-OTM 0DTE volume divided by that session's "
+    "trailing 20-session baseline mean (dimensionless)",
+    "excluded": [
+        {"date": "2026-07-06", "side": "call", "reason": "short_baseline", "detail": "..."},
+        {"date": "2026-07-07", "side": "put", "reason": "short_baseline", "detail": "..."},
+        {"date": "2026-10-02", "side": "call", "reason": "no_ratio", "detail": "..."},
+    ],
+    "notes": ["side asymmetry note"],
+}
+
+
+def test_proposed_n_is_a_ratio_and_is_never_reported_as_frozen() -> None:
+    """T6 compares volume to N x baseline_mean, so the panel's headline number has to
+    be the P90 of the RATIOS. The volume P90 stays in its own block as a chart line."""
+    out = run_js("M.proposedN(" + js(N_META) + ")")
+    assert out["value"] == pytest.approx(2.681)
+    assert out["callValue"] == pytest.approx(1.157)
+    assert out["putValue"] == pytest.approx(4.024)
+    assert out["sessionsQualified"] == 38 and out["sessionsConsidered"] == 64
+    assert out["thresholdPct"] == 3.0
+    assert out["frozen"] is False, "reading the page must never imply the freeze happened"
+    assert out["enough"] is True
+
+
+def test_proposed_n_counts_excluded_samples_by_reason() -> None:
+    """The store is append-only, so excluded sessions are a permanent fact about the
+    sample; the panel has to be able to say how many and why."""
+    out = run_js("M.proposedN(" + js(N_META) + ")")
+    assert out["excludedCount"] == 3
+    assert out["excludedByReason"] == {"short_baseline": 2, "no_ratio": 1}
+
+
+def test_proposed_n_before_any_qualifying_session_is_honestly_empty() -> None:
+    out = run_js("M.proposedN(" + js({"status": "no_data", "value": None}) + ")")
+    assert out["value"] is None and out["status"] == "no_data" and out["enough"] is False
+    out2 = run_js("M.proposedN(null)")
+    assert out2["value"] is None and out2["excludedCount"] == 0
+
+
 def test_percentile_matches_the_servers_linear_interpolation_convention() -> None:
     """The panel's P90 must be the server's P90. numpy's convention: position
     (n-1)*q, then interpolate between the two neighbours."""

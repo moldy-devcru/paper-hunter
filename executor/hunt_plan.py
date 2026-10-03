@@ -614,6 +614,11 @@ def _watch_levels(
             "dte_min": entry.dte.min,
             "dte_max": entry.dte.max,
             "delta_min": entry.delta_min,
+            # FIX (2026-10-03, full-cycle rehearsal): the watch loop's live arm C
+            # selection reads the bankroll from here to apply the premium cap. The
+            # dict did not carry it, so ``_arm_c_contract`` computed a max premium of
+            # 0 and could never select a contract.
+            "bankroll_usd": rules.arms.C.bankroll_usd,
             "premium_pct_of_bankroll_max": entry.premium_pct_of_bankroll_max,
             "roll_delta_below": rules.arms.C.exits.roll.trigger.delta_below,
             "roll_dte_below": rules.arms.C.exits.roll.trigger.dte_below,

@@ -64,6 +64,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from analysis import rollup
 from config.loader import DEFAULT_RULES_PATH, RulesError, load_rules
 from executor import indicators
+from executor.calibration import flow_calibration
 from ui import aggregate
 from ui.aggregate import AggBar
 from ui.barcache import BarCache, open_cache
@@ -1581,7 +1582,16 @@ def calibration(
     limit: Annotated[int, Query(ge=1, le=2000)] = 120,
     underlying: Annotated[str, Query()] = "SPY",
 ) -> dict[str, Any]:
-    """The T6 story: flow rows, the forming P90, IV history, pending calibrations."""
+    """The T6 story: flow rows, the proposed N, the volume P90 line, IV history,
+    pending calibrations.
+
+    FIX (2026-10-03, full-cycle rehearsal): the panel used to report its "P90" as
+    ``deep_otm_total_volume`` and label it as the forming N. T6 evaluates
+    ``today_volume >= N * baseline_mean``, so the multiplier must be **dimensionless**;
+    a percentile of contract counts is a good chart line and the wrong constant. The
+    volume percentile is still here (the chart draws a line through the series with
+    it) but it is labelled as volume, and ``n`` carries the ratified ratio proposal.
+    """
     flow: list[dict[str, Any]] = []
     pending: list[str] = []
     rulebook_version: str | None = None
@@ -1590,9 +1600,19 @@ def calibration(
         "value": None,
         "sessions": 0,
         "sessions_needed": 20,
-        "method": "linear-interpolation percentile of per-session deep-OTM total volume",
-        "note": "T6's N is frozen before the window opens; this line is the P90 of what "
-        "we have collected so far and moves until the baseline is complete.",
+        "method": (
+            "linear-interpolation percentile of per-session deep-OTM total volume — a "
+            "CHART LINE in contract counts, not the frozen N"
+        ),
+        "note": "T6's N is a multiplier on the 20-session baseline mean and is read off "
+        "the ratio distribution (see the proposed-N block); this line is the volume "
+        "distribution the panel draws, and it moves until the baseline is complete.",
+    }
+    n_block: dict[str, Any] = {
+        "status": "no_data",
+        "value": None,
+        "method": "",
+        "note": "",
     }
     with ctx.journal() as (conn, note):
         if conn is not None and _has_table(conn, "flow_baseline"):
@@ -1600,6 +1620,8 @@ def calibration(
                 "SELECT * FROM flow_baseline ORDER BY date DESC LIMIT ?", (limit,)
             ).fetchall()
             history = list(reversed(rows))
+            proposal = flow_calibration(history)
+            n_block = proposal.to_dict()
             for row in history:
                 flow.append(
                     {
@@ -1668,6 +1690,7 @@ def calibration(
         "flow": flow,
         "flow_sessions": len(flow),
         "p90": p90,
+        "n": n_block,
         "distance_histogram": by_distance,
         "ivrank": {
             "series": iv_series,

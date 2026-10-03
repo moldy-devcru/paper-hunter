@@ -604,6 +604,40 @@ export function flowVolume(flow, p90Meta, { window = BASELINE_SESSIONS } = {}) {
 }
 
 /**
+ * The proposed T6 multiplier (`N`) from `/api/calibration`'s `n` block.
+ *
+ * The volume P90 above is a chart line in contract counts. T6 does not compare a
+ * contract count to anything: it evaluates `today_volume >= N * baseline_mean`, so N
+ * has to be a *ratio*, and it is the P90 of the per-session ratios
+ * (docs/ratification.md section (c)). The two numbers are different quantities and the
+ * panel says which is which rather than showing a single ambiguous "P90".
+ */
+export function proposedN(nMeta) {
+  const meta = nMeta || {};
+  const excluded = (meta.excluded || []).filter((e) => e && e.reason);
+  const byReason = {};
+  for (const e of excluded) byReason[e.reason] = (byReason[e.reason] || 0) + 1;
+  return {
+    status: meta.status || "no_data",
+    value: isNum(meta.value) ? meta.value : null,
+    callValue: isNum(meta.n_call) ? meta.n_call : null,
+    putValue: isNum(meta.n_put) ? meta.n_put : null,
+    samples: isNum(meta.samples) ? meta.samples : 0,
+    sessionsConsidered: isNum(meta.sessions_considered) ? meta.sessions_considered : 0,
+    sessionsQualified: isNum(meta.sessions_qualified) ? meta.sessions_qualified : 0,
+    sessionsNeeded: isNum(meta.sessions_needed) ? meta.sessions_needed : 20,
+    thresholdPct: isNum(meta.threshold_pct) ? meta.threshold_pct : null,
+    formula: meta.method || "",
+    excludedCount: excluded.length,
+    excludedByReason: byReason,
+    notes: (meta.notes || []).filter((n) => typeof n === "string"),
+    // Nothing is ever frozen by reading this page. It says "proposed" and means it.
+    frozen: false,
+    enough: meta.status === "sufficient",
+  };
+}
+
+/**
  * The 1pp distance buckets the soak stores -> paired call/put bars with the working
  * threshold marked.
  *

@@ -19,6 +19,7 @@ import { getJSON } from "./net.js";
 import { esc, vol, DASH, isNum } from "./format.js";
 import {
   flowVolume,
+  proposedN,
   distanceHistogram,
   ivHistory,
   windowChecklist,
@@ -54,11 +55,17 @@ function teardownCharts() {
 
 function renderFlow(payload) {
   const model = flowVolume(payload.flow, payload.p90);
-  const head = `<div class="plan-meta">${model.sessions} session(s) recorded · N=${esc(
+  const n = proposedN(payload.n);
+  const nText = n.value == null ? DASH : `${n.value.toFixed(3)}x baseline`;
+  const head = `<div class="plan-meta">${model.sessions} session(s) recorded · baseline N=${esc(
     model.sessionsNeeded,
-  )} · P90 <b class="${esc(model.p90Status === "defined" ? "up" : "pending")}">${esc(
+  )} · volume P90 <b class="${esc(model.p90Status === "defined" ? "up" : "pending")}">${esc(
     model.p90Status,
-  )}</b> · percentile: ${esc(model.p90Method)}</div>`;
+  )}</b> (chart line, contract counts) · <b>proposed multiplier N</b>: <b class="${
+    n.enough ? "up" : "pending"
+  }">${esc(nText)}</b> from ${esc(n.sessionsQualified)}/${esc(
+    n.sessionsConsidered,
+  )} qualifying session(s), <b>status=${esc(n.status)}</b>, not frozen</div>`;
 
   if (model.empty) {
     el("calib-flow").innerHTML =
@@ -84,7 +91,20 @@ function renderFlow(payload) {
     <div><span>trailing mean (${esc(model.sessionsNeeded)}-session)</span><b>${vol(
       model.baselineMeanLatest,
     )}</b></div>
-    <div><span>P90</span><b>${vol(model.p90Value)}</b></div>
+    <div><span>volume P90 (chart line)</span><b>${vol(model.p90Value)}</b></div>
+    <div><span>proposed N (P90 of ratios)</span><b>${nText}</b></div>
+    <div><span>proposed N call / put</span><b>${
+      n.callValue == null ? DASH : `${n.callValue.toFixed(3)}x`
+    } / ${n.putValue == null ? DASH : `${n.putValue.toFixed(3)}x`}</b></div>
+    <div><span>excluded samples</span><b>${esc(n.excludedCount)}${
+      Object.keys(n.excludedByReason).length
+        ? ` (${esc(
+            Object.entries(n.excludedByReason)
+              .map(([reason, count]) => `${reason}: ${count}`)
+              .join(", "),
+          )})`
+        : ""
+    }</b></div>
     <div><span>latest session</span><b>${esc(last.date)}</b></div>
     <div><span>spot range</span><b>${vol(first.sessionSpot)} → ${vol(last.sessionSpot)}</b></div>
     <div><span>holes / delayed</span><b>${model.holes} / ${
@@ -122,7 +142,7 @@ function renderFlow(payload) {
        <span class="lg"><i style="background:#8f7bff"></i>trailing ${esc(
          model.sessionsNeeded,
        )}-session mean</span>
-       <span class="lg"><i class="dashed" style="background:#e05fd0"></i>P90 (${esc(
+       <span class="lg"><i class="dashed" style="background:#e05fd0"></i>volume P90 (${esc(
          model.p90Status,
        )})</span>
      </div>` +

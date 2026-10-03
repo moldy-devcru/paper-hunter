@@ -211,6 +211,40 @@ def _write_flow_rows(path: Path, count: int) -> None:
     conn.close()
 
 
+def _write_rated_flow_rows(path: Path) -> None:
+    """20 fully-baselined sessions whose ratios ramp 1.0x .. 2.9x on both sides."""
+    conn = init_db(path)
+    for i in range(20):
+        day = dt.date(2026, 8, 3) + dt.timedelta(days=i)
+        ratio = 1.0 + 0.1 * i
+        baseline = 1_000.0
+        append_flow_baseline(
+            conn,
+            FlowBaselineRow(
+                date=day.isoformat(),
+                underlying=SYMBOL,
+                feed="indicative",
+                is_delayed=True,
+                session_spot=500.0 + i,
+                deep_otm_threshold_pct=3.0,
+                deep_otm_call_volume=baseline * ratio,
+                deep_otm_put_volume=baseline * ratio,
+                deep_otm_total_volume=2 * baseline * ratio,
+                call_volume_by_distance={"4": baseline * ratio},
+                put_volume_by_distance={"4": baseline * ratio},
+                baseline_lookback_days=20,
+                baseline_days=20,
+                baseline_call_mean=baseline,
+                baseline_put_mean=baseline,
+                ratio_call=ratio,
+                ratio_put=ratio,
+                strategy_version="v1.0.0+test",
+                ts=f"{day.isoformat()}T21:00:00Z",
+            ),
+        )
+    conn.close()
+
+
 # ---------------------------------------------------------------------------
 # 1. read-only by construction
 # ---------------------------------------------------------------------------
@@ -709,6 +743,41 @@ def test_calibration_reports_flow_p90_and_pending_values(tmp_path: Path) -> None
     assert payload["pending_calibrations"], "the shipped rulebook has uncalibrated gates"
     assert payload["strategy_version"], "the example rulebook still fingerprints"
     assert payload["ivrank"]["count"] == 0
+
+
+def test_calibration_proposes_a_dimensionless_n_and_never_calls_it_frozen(
+    tmp_path: Path,
+) -> None:
+    """FIX 2026-10-03: the panel used to label a percentile of CONTRACT COUNTS as the
+    forming N. T6 multiplies a baseline mean, so the proposal has to be a ratio — and
+    reading the page must never imply the freeze already happened."""
+    journal = tmp_path / "journal.db"
+    _write_rated_flow_rows(journal)
+    ctx = configure(
+        UISettings(
+            journal_path=journal,
+            ivrank_path=tmp_path / "nope-ivrank.db",
+            barcache_path=tmp_path / "barcache.db",
+        )
+    )
+    try:
+        with TestClient(app) as client:
+            payload = client.get("/api/calibration").json()
+    finally:
+        ctx.close()
+
+    n = payload["n"]
+    assert n["status"] == "sufficient"
+    assert n["sessions_needed"] == 20
+    assert n["sessions_qualified"] == 20
+    # ratios ramp 1.0 .. 2.9 on both sides -> 40 pooled values, P90 at position
+    # 0.9 * 39 = 35.1, i.e. 2.7 + 0.1 * 0.1 = 2.71
+    assert n["value"] == pytest.approx(2.71)
+    assert n["n_call"] == pytest.approx(2.71) and n["n_put"] == pytest.approx(2.71)
+    assert "divided by" in n["method"], "the method has to say it read a RATIO"
+    # the volume P90 is still there, still a chart line, and still labelled as volume
+    assert payload["p90"]["value"] > 1000.0
+    assert "CHART LINE" in payload["p90"]["method"]
 
 
 def test_calibration_p90_is_labelled_forming_before_the_baseline_is_full(
