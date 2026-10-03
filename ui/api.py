@@ -1380,6 +1380,14 @@ def huntplan(
         "count": len(cells),
         "note": note,
         "event_veto": event_veto,
+        # UX PASS 2: the RULEBOOK'S OWN veto kinds, sent whether or not any of them
+        # fired. The all-clear claim on the Hunt page is "none of these specific kinds
+        # was recorded", and a chip that says only "none" cannot be checked against
+        # anything — a reader has no way to know whether the check ran against two kinds
+        # or two hundred. A sibling key rather than a new field inside ``event_veto``:
+        # that dict is an exact-shape assertion in the tests, and its meaning is "what
+        # the day's cells said", whereas this is "what the rulebook would have said".
+        "event_veto_kinds": veto_kinds,
         "event_veto_note": (
             "Derived by matching the rulebook's event_calendar.veto_kinds against each "
             "cell's condition detail text, because a plan cell stores the event veto as "

@@ -46,9 +46,28 @@ const state = { timer: null, inFlight: false, charts: [] };
 // read as dense. `dashCell` mutes it; `cellNum` wraps a real number. Dash-only columns
 // are still shown (hiding a whole column because it is empty moves the layout under the
 // reader mid-poll) but they stop competing for attention.
+// PASS 2: the muted treatment moved into one `dash` class in the stylesheet, so a dash
+// cell here, a dash in an arm line and a dash in a stat subtitle are styled by the same
+// rule instead of by whoever remembered to write `muted`.
 const dashCell = (value) =>
-  `<td class="r num muted" title="no value recorded">${esc(value == null ? DASH : value)}</td>`;
+  `<td class="r num dash" title="no value recorded">${esc(value == null ? DASH : value)}</td>`;
 const cellNum = (html) => `<td class="r num">${html}</td>`;
+
+/**
+ * UX PASS 2 fix #4: what a panel shows when there is nothing to plot.
+ *
+ * Pass 1 gave the blank canvas a sentence inside it, which fixed the "is this broken?"
+ * impression but kept the rectangle — 220px of dashed box holding one line of text, on
+ * a page whose table and fact list were pushed below it. The fix is to give the space
+ * back: render no chart container at all, and let the compact empty state plus the
+ * numbers below it take the room. `charts.js` returns null rather than an empty canvas,
+ * so this is the only place that has to know why.
+ */
+function compactChartState(line, why = "") {
+  return `<div class="chart-state compact"><span>${esc(line)}</span>${
+    why ? `<span class="muted"> — ${esc(why)}</span>` : ""
+  }</div>`;
+}
 
 function teardownCharts() {
   for (const chart of state.charts) {
@@ -96,8 +115,10 @@ function renderFlow(payload) {
   // the top of the tab is the same mistake the Arms and Hunt pages had. It becomes a
   // chip on the status line; the forming case stays a banner because it is a real
   // warning about a number that does not yet mean what it appears to mean.
+  // UX PASS 2 fix #1: the all-clear chip had the same "64/20" ambiguity as the card, so
+  // it names the same two facts in the same order.
   const status = model.complete
-    ? `<span class="chip pass" title="baseline complete (${model.sessions}/${model.sessionsNeeded}) — the P90 is a real line now, and it still moves until N is frozen">baseline complete ${model.sessions}/${model.sessionsNeeded}</span>`
+    ? `<span class="chip pass" title="baseline complete (${model.sessions} sessions against the ${model.sessionsNeeded}-session minimum) — the P90 is a real line now, and it still moves until N is frozen">baseline complete · ${model.sessions} sessions, minimum ${model.sessionsNeeded}</span>`
     : `<div class="banner warn">P90 is <b>forming</b> — ${model.sessions} of ${
         model.sessionsNeeded
       } sessions collected, <b>needs ${model.needs} more</b> before it means anything. ` +
@@ -132,6 +153,10 @@ function renderFlow(payload) {
   // UX PASS 1: the session column is the row identity in every one of these tables, so
   // it freezes with the header — scrolling a 20-session baseline no longer leaves the
   // reader unable to say which row a number belongs to.
+  // PASS 2 fix #5: the closing note moved BELOW the table as a `.panel-note`, and the
+  // note itself was the thing crowding the last row: it sat directly under the tbody
+  // with a few pixels to spare, so the final session line and its caveat read as one
+  // crowded block. A note under a table gets its own block of space and a rule.
   const table = `<table class="grid freeze"><thead><tr><th class="sticky-col">session</th><th class="r">call</th>
     <th class="r">put</th><th class="r">total</th><th class="r">trailing mean</th>
     <th class="r">forming P90</th><th class="r">spot</th></tr></thead><tbody>${
@@ -146,7 +171,7 @@ function renderFlow(payload) {
               ${isNum(point.call) ? cellNum(`<span style="color:${CALL_COLOR}">${vol(point.call)}</span>`) : dashCell(null)}
               ${isNum(point.put) ? cellNum(`<span style="color:${PUT_COLOR}">${vol(point.put)}</span>`) : dashCell(null)}
               ${isNum(point.total) ? cellNum(vol(point.total)) : dashCell(null)}
-              <td class="r num muted">${vol(point.baselineMean)}</td>
+              <td class="r num dash">${vol(point.baselineMean)}</td>
               ${isNum(point.formingP90) ? cellNum(`<span style="color:#e05fd0">${vol(point.formingP90)}</span>`) : dashCell(null)}
               ${isNum(point.sessionSpot) ? cellNum(point.sessionSpot.toFixed(2)) : dashCell(null)}
             </tr>`,
@@ -154,18 +179,16 @@ function renderFlow(payload) {
         .join("")
     }</tbody></table>`;
 
-  el("calib-flow").innerHTML =
-    head + status + facts +
-    // UX PASS 1: the chart container is 220px of nothing when the store has no points
-    // to plot. charts.js returns null rather than an empty canvas, so the panel has to
-    // say why the rectangle is there — a blank chart area reads as a rendering failure,
-    // and on a one-day-old machine that is exactly the wrong impression.
-    `<div class="calib-chart" id="calib-flow-chart"><div class="chart-state" id="calib-flow-state">${
-      model.points.length
-        ? "plotting…"
-        : "nothing to plot — sessions exist but carry no volume"
-    }</div></div>` +
-    `<div class="chart-legend">
+  // UX PASS 2 fix #4: the chart container is only in the markup when there is something
+  // to draw into it. When the store has sessions but no volume (or the chart library is
+  // absent) the panel renders the compact state in its place and the fact list + table
+  // reclaim the 220px, instead of a dashed rectangle holding one sentence. `measured` is
+  // the model's own count of sessions that carry volume, so the chart's presence cannot
+  // disagree with the table's contents.
+  const hasVolume = model.measured > 0;
+  const chartBlock = hasVolume
+    ? `<div class="calib-chart" id="calib-flow-chart"><div class="chart-state" id="calib-flow-state">plotting…</div></div>` +
+      `<div class="chart-legend">
        <span class="lg"><i style="background:${CALL_COLOR}"></i>deep-OTM call volume</span>
        <span class="lg"><i style="background:${PUT_COLOR}"></i>deep-OTM put volume</span>
        <span class="lg"><i style="background:#8f7bff"></i>trailing ${esc(
@@ -174,12 +197,19 @@ function renderFlow(payload) {
        <span class="lg"><i class="dashed" style="background:#e05fd0"></i>volume P90 (${esc(
          model.p90Status,
        )})</span>
-     </div>` +
-    `<div class="plan-meta">the mean line is a short-window mean until session ${
-      model.fullFrom + 1
-    } · forming P90 is recomputed from scratch on every session, so it is a line through what has been collected, not today's value extended backwards</div>` +
-    table;
+     </div>`
+    : compactChartState(
+        "no volume series to plot yet",
+        `${model.sessions} session row(s) recorded, none carrying deep-OTM volume — the numbers are in the table below`,
+      );
 
+  el("calib-flow").innerHTML =
+    head + status + facts + chartBlock + table +
+    `<div class="panel-note">the mean line is a short-window mean until session ${
+      model.fullFrom + 1
+    } · forming P90 is recomputed from scratch on every session, so it is a line through what has been collected, not today's value extended backwards</div>`;
+
+  if (!hasVolume) return;
   const chart = flowVolumeChart(el("calib-flow-chart"), model);
   if (chart) {
     state.charts.push(chart);
@@ -187,10 +217,10 @@ function renderFlow(payload) {
     const placeholder = el("calib-flow-state");
     if (placeholder) placeholder.remove();
   } else {
-    const placeholder = el("calib-flow-state");
-    if (placeholder) {
-      placeholder.textContent = "nothing to plot — the sessions on record carry no volume";
-    }
+    // The library is missing or the model carried no series after all: swap the
+    // reserved canvas for the compact state rather than leaving an empty box.
+    const canvas = el("calib-flow-chart");
+    if (canvas) canvas.replaceWith(compactChartState("no volume series to plot yet"));
   }
 }
 
@@ -322,14 +352,23 @@ function renderIv(payload) {
            : ""
        }. T5 reports PENDING and blocks until this clears.</div>`;
 
+  // UX PASS 2 fix #4, same rule as the flow panel: the 200px canvas exists only when
+  // there is a real chain line to draw into it. A proxy-only warmup is a STATE the
+  // banners above already report in words, so it does not also need a rectangle.
+  const hasReal = model.realCount > 0;
+  const chartBlock = hasReal
+    ? `<div class="calib-chart" id="calib-iv-chart"><div class="chart-state" id="calib-iv-state">plotting…</div></div>`
+    : compactChartState(
+        "no real chain observations to plot",
+        "the proxy seed is warmup, not the chain — it is counted in the table below and does not draw a line",
+      );
+
   el("calib-iv").innerHTML =
     `<div class="plan-meta">${esc(source)} · proxy segments are drawn dashed AND in a
      different colour: colour alone fails a monochrome print, and the seed is not the chain</div>` +
     seamBanner + conflicts + warm +
     `<div class="chart-legend">${legend}</div>` +
-    `<div class="calib-chart" id="calib-iv-chart"><div class="chart-state" id="calib-iv-state">${
-      model.realCount ? "plotting…" : "proxy seed only — no real chain observations yet"
-    }</div></div>` +
+    chartBlock +
     `<table class="grid freeze"><thead><tr><th class="sticky-col">underlying</th><th>tenor key</th>
       <th class="r">real</th><th class="r">proxy</th><th>first</th><th>last</th>
       <th class="r">latest IV</th></tr></thead><tbody>${
@@ -339,21 +378,25 @@ function renderIv(payload) {
               `<tr><td class="sticky-col">${esc(entry.underlying)}${
                 entry.isProxy ? ' <span class="chip pending">proxy seed</span>' : ""
               }</td><td>${esc(entry.tenorKey)}</td><td class="r num">${entry.realPoints}</td>
-               <td class="r num ${entry.proxyPoints ? "" : "muted"}">${entry.proxyPoints}</td>
+               <td class="r num ${entry.proxyPoints ? "" : "dash"}">${entry.proxyPoints}</td>
                <td class="num">${esc(entry.first || DASH)}</td>
                <td class="num">${esc(entry.last || DASH)}</td>
-               <td class="r num">${
+               <td class="r num ${entry.latest && isNum(entry.latest.iv) ? "" : "dash"}">${
                  entry.latest && isNum(entry.latest.iv) ? entry.latest.iv.toFixed(2) : DASH
                }</td></tr>`,
           )
           .join("")
       }</tbody></table>`;
 
+  if (!hasReal) return;
   const chart = ivHistoryChart(el("calib-iv-chart"), model);
   if (chart) {
     state.charts.push(chart);
     const placeholder = el("calib-iv-state");
     if (placeholder) placeholder.remove();
+  } else {
+    const canvas = el("calib-iv-chart");
+    if (canvas) canvas.replaceWith(compactChartState("no real chain observations to plot"));
   }
 }
 
@@ -424,6 +467,14 @@ function renderChecklist(payload) {
  * question T6 asks, and it used to be reachable only by reading a status string buried
  * mid-paragraph in the flow panel. It is derived from the same `n` block the panel
  * renders, not recomputed, so the two can never disagree.
+ *
+ * UX PASS 2 fixes #1 and #2 live here:
+ *   #1 the baseline card read "64/20", which looks like a broken fraction rather than
+ *      64 sessions against a 20-session minimum — the number and its requirement are
+ *      now two labelled facts ("64 sessions" / "minimum 20 · needs 44 more").
+ *   #2 the proposed-N subtitle was long enough to ellipsise, cutting the words that
+ *      carry the caveat. It is shorter now, and `.stat-sub` wraps to two lines rather
+ *      than truncating, so no subtitle on any tab can lose its qualifier again.
  */
 function renderSummary(payload) {
   const flow = flowVolume(payload.flow, payload.p90);
@@ -438,13 +489,14 @@ function renderSummary(payload) {
       label: "calibration",
       value: status,
       tone: status === "sufficient" ? "up" : "pending",
+      word: true,
       sub: n.status === "sufficient" ? `from ${n.samples} sample(s)` : "not enough sessions",
       title: "sufficient = the proposed N can be scored from the sessions on record",
     },
     {
       label: "proposed N",
       value: n.value == null ? DASH : `${n.value.toFixed(3)}x`,
-      sub: "multiplier on the baseline mean, not frozen",
+      sub: "× the baseline mean, not frozen",
       title: "P90 of the per-session ratios; a ratio is dimensionless, a volume P90 is not",
     },
     {
@@ -454,14 +506,23 @@ function renderSummary(payload) {
       title: "sessions that qualified for the ratio distribution, of those considered",
     },
     {
-      label: "baseline",
-      value: `${flow.sessions}/${flow.sessionsNeeded}`,
-      sub: flow.complete ? "complete" : `needs ${flow.needs} more`,
+      // FIX #1: "64/20" was ambiguous — a fraction, a ratio, or a session count? The
+      // sessions are the number; the minimum they have to clear is the subtitle, named
+      // as a minimum rather than left as a second number in the same slot.
+      label: "baseline sessions",
+      value: `${flow.sessions}`,
+      sub: flow.complete
+        ? `minimum ${flow.sessionsNeeded} met`
+        : `minimum ${flow.sessionsNeeded} · needs ${flow.needs} more`,
       tone: flow.complete ? "up" : "pending",
+      title: `${flow.sessions} session(s) recorded against the ${flow.sessionsNeeded}-session baseline minimum`,
     },
     {
       label: "latest session",
       value: last ? last.date : DASH,
+      // PASS 2: a date is a figure, but a short one — the value slot is sized for
+      // money, and a 10-character date at 22px mono crowds the tile's edge.
+      date: true,
       sub: last ? `${vol(last.total)} deep-OTM contracts` : "no sessions yet",
     },
     {

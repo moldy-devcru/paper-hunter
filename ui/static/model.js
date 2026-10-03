@@ -315,8 +315,17 @@ export function conditionChips(cell) {
   });
 }
 
-/** The event-veto banner state, including the case where we could not determine it. */
-export function eventVetoBanner(eventVeto) {
+/**
+ * The event-veto banner state, including the case where we could not determine it.
+ *
+ * UX PASS 2 fix #3: the "clear" case now carries the SPECIFIC kinds the rulebook
+ * declares, because "none of the rulebook's veto kinds" is a claim a reader cannot
+ * check — it does not say which kinds were looked for, so it reads as a reassurance
+ * with no content. Naming them ("none of fomc, cpi recorded") makes the confirmation
+ * falsifiable at a glance, which is the whole point of a safety confirmation: it should
+ * survive being demoted from a banner to a chip.
+ */
+export function eventVetoBanner(eventVeto, { kinds = [] } = {}) {
   const veto = eventVeto || {};
   if (veto.available === false) {
     return {
@@ -330,7 +339,14 @@ export function eventVetoBanner(eventVeto) {
       text: `event veto ACTIVE (${(veto.kinds || []).join(", ")}) — no entries today. ${veto.reason || ""}`,
     };
   }
-  return { level: "ok", text: "event veto: none of the rulebook's veto kinds in any cell today" };
+  const named = kinds.length ? `none of ${kinds.join(", ")} recorded` : null;
+  return {
+    level: "ok",
+    text: named
+      ? `event veto: ${named} in any cell today`
+      : "event veto: none of the rulebook's veto kinds in any cell today",
+    kinds,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -393,15 +409,23 @@ export function mismatchesByArm(flags) {
 // ---------------------------------------------------------------------------
 
 /** Column definitions: which are server-sortable, and how to label them. */
+/**
+ * The ledger's columns, and which of them are NUMBERS.
+ *
+ * PASS 2: `num: true` marks a column whose cells are figures, which is what makes the
+ * alignment decision explicit and table-wide rather than per-cell. The header takes the
+ * same alignment as its column, because a right-aligned number under a left-aligned
+ * header is a misalignment the reader has to reconcile on every row.
+ */
 export const LEDGER_COLUMNS = [
   { key: "id", label: "#", sort: "id" },
   { key: "ts", label: "when", sort: "ts" },
   { key: "arm", label: "arm", sort: "arm" },
   { key: "kind", label: "kind", sort: "kind" },
   { key: "symbol", label: "symbol", sort: "symbol" },
-  { key: "conviction", label: "conv", sort: "conviction" },
+  { key: "conviction", label: "conv", sort: "conviction", num: true },
   { key: "reasoning", label: "reasoning", sort: null },
-  { key: "created_at", label: "written", sort: "created_at" },
+  { key: "created_at", label: "written", sort: "created_at", num: true },
 ];
 
 /** Sort indicator for a column header. `null` sort => not clickable, by design. */
@@ -557,19 +581,28 @@ export function trailingMean(values, window = BASELINE_SESSIONS) {
  * is the server's own verdict (`no_data` / `forming` / `defined`) rather than something
  * re-derived here, and `needs` is the honest "needs N more sessions" count — with one
  * or two rows on screen the page must say the P90 is not a threshold yet.
+ *
+ * KEY NAMES ARE THE WIRE NAMES, not the journal's column names. The endpoint renames
+ * `deep_otm_call_volume` / `deep_otm_put_volume` / `deep_otm_total_volume` to
+ * `call_volume` / `put_volume` / `total_volume` on the way out (see ui/api.py), and this
+ * model read the journal's spelling instead: every volume came back null against a real
+ * store, so the panel drew a table of dashes and no chart while the fixtures in
+ * tests/test_static_logic.py — written from the schema rather than from a response —
+ * passed happily. `test_ui_static.py::test_the_calibration_model_reads_the_wire_key_names`
+ * now pins the two sides together, and the fixtures use the wire shape.
  */
 export function flowVolume(flow, p90Meta, { window = BASELINE_SESSIONS } = {}) {
   const rows = [...(flow || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)));
   const meta = p90Meta || {};
   const sessionsNeeded = isNum(meta.sessions_needed) ? meta.sessions_needed : window;
-  const totals = rows.map((row) => row.deep_otm_total_volume);
+  const totals = rows.map((row) => row.total_volume);
   const mean = trailingMean(totals, sessionsNeeded);
   const forming = percentileSeries(totals, 0.9);
   const points = rows.map((row, i) => ({
     date: row.date,
-    call: isNum(row.deep_otm_call_volume) ? row.deep_otm_call_volume : null,
-    put: isNum(row.deep_otm_put_volume) ? row.deep_otm_put_volume : null,
-    total: isNum(row.deep_otm_total_volume) ? row.deep_otm_total_volume : null,
+    call: isNum(row.call_volume) ? row.call_volume : null,
+    put: isNum(row.put_volume) ? row.put_volume : null,
+    total: isNum(row.total_volume) ? row.total_volume : null,
     baselineMean: mean[i],
     formingP90: forming[i],
     thresholdPct: isNum(row.deep_otm_threshold_pct) ? row.deep_otm_threshold_pct : null,
@@ -946,11 +979,29 @@ export function windowChecklist(payload) {
  * `label` is the noun ("bankroll"), `value` the number, `sub` the muted secondary line
  * that says which slice of the world the number covers. `tone` is the usual up/down/flat
  * class so a card reads at a glance; absent a tone the value is plain foreground.
+ *
+ * PASS 2: `word: true` is for a value that is a WORD rather than a figure — "plan
+ * unavailable", "not open". The 22px mono value slot was built for money and counts, and
+ * a 14-character status word in it either ellipsises or, if the tile were widened to fit
+ * it, shrinks the numbers to match. So a word value takes the sans stack at a size that
+ * fits the slot, and keeps the colour its tone asks for. `date: true` is the middle
+ * case: a date is a figure, but a short one, so it stays mono and steps down a size
+ * instead of wrapping or clipping. The two kinds of value stay distinguishable, which is
+ * the point: a reader can tell a figure from a state without reading it.
  */
-export function statCard({ label, value, sub = "", tone = "", title = "" }) {
+export function statCard({
+  label,
+  value,
+  sub = "",
+  tone = "",
+  title = "",
+  word = false,
+  date = false,
+}) {
+  const kind = word ? " word" : date ? " date" : "";
   return `<div class="stat"${title ? ` title="${esc(title)}"` : ""}>
     <div class="stat-label">${esc(label)}</div>
-    <div class="stat-value ${esc(tone)}">${value == null ? DASH : esc(value)}</div>
+    <div class="stat-value ${esc(tone)}${kind}">${value == null ? DASH : esc(value)}</div>
     ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ""}
   </div>`;
 }

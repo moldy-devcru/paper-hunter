@@ -1,15 +1,65 @@
-/* paper-hunter terminal — dark, dense, monospace. One stylesheet, no framework. */
+/* paper-hunter terminal — dark, dense. One stylesheet, no framework. */
 
 :root {
   color-scheme: dark;
+
+  /* ---- UX PASS 2: the type scale, stated once ----
+     Pass 1 fixed hierarchy (what is big, what is collapsed) and deliberately left the
+     underlying scale alone. This is that scale. Four steps, used everywhere:
+
+       --fs-value  the number you came for. Large enough to read across a desk.
+       --fs-head   a card label or a section head. Small, tracked, uppercase.
+       --fs-body   table cells and prose. The default; 13px, not 11px.
+       --fs-label  muted meta lines: subtitles, footnotes, axis ticks.
+
+     Everything else derives from these four. A fifth size is a bug.
+
+     Two font stacks, and the split is the point. The terminal is a NUMBERS tool:
+     monospace earns its place on anything that has to line up in a column (money,
+     dates, counts, ratios, symbols like T5 / FIRE / HOLD). It does not earn it on
+     running prose, where it costs readability at 13px and buys nothing — a label or a
+     sentence is set in the UI sans and a number beside it stays mono, so the two read
+     as different KINDS of thing rather than as one uniform wall of glyphs. That was the
+     other half of "very dense, compact text": pass 1 gave the numbers weight, this
+     stops the words competing with them. */
+  --fs-value: 22px;
+  /* The value slot's modifiers. A word ("not open"), a date, and a status word are all
+     figures-shaped things that are not figures; each needs its own step inside the slot,
+     and each is named here so the slot's variants are visible rather than scattered. */
+  --fs-value-word: 16px;
+  --fs-value-date: 17px;
+  --fs-mark: 15px;
+  --fs-chrome: 15px;
+  --fs-head: 11px;
+  --fs-body: 13px;
+  --fs-label: 11px;
+  --fs-tick: 10px;
+  /* The value grows with the window: a 22px number on a 2560px monitor is the same
+     optical size as a 22px number on a laptop, which is to say too small on one of them. */
+  --fs-value-lg: 26px;
+  --fs-value-xl: 30px;
+  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* Spacing rhythm: every vertical gap below is a multiple of 4, and the section gap
+     (--sp-section) is deliberately about twice the block gap so a panel reads as a
+     group from whitespace alone rather than from a rule under every heading. */
+  --sp-block: 8px;
+  --sp-section: 22px;
+  --row-pad-y: 6px;
+  --row-pad-x: 8px;
   --bg: #0b0d10;
   --bg-raised: #111419;
   --bg-sunken: #08090c;
   --line: #1e232b;
   --line-bright: #2c333d;
   --fg: #d7dce4;
-  --fg-dim: #8b95a4;
-  --fg-faint: #5d6674;
+  --fg-dim: #98a2b0;
+  /* PASS 2 contrast: the old --fg-faint (#5d6674) measured 3.35:1 on --bg and 3.18:1
+     on --bg-raised — under the 4.5:1 floor for body text, on the colour every muted
+     label, dash cell and footnote used. #7b8694 measures 5.26:1 / 4.99:1 / 5.39:1 on
+     the three page backgrounds and still reads as the quietest ink on the page. */
+  --fg-faint: #7b8694;
   --accent: #4c9aff;
   --up: #26a69a;
   --down: #ef5350;
@@ -20,7 +70,6 @@
   --arm-b: #e0a63a;
   --arm-c: #4c9aff;
   --arm-x: #e05fd0;
-  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 * { box-sizing: border-box; }
@@ -30,10 +79,12 @@ html, body {
   margin: 0;
 }
 
+/* Prose is the UI sans; `.num`, `.stat-value`, chips, tags and axis ticks opt back into
+   mono via `font-family` below. See the type-scale note in :root. */
 body {
   background: var(--bg);
   color: var(--fg);
-  font: 12px/1.45 var(--mono);
+  font: var(--fs-body)/1.5 var(--sans);
   overflow: hidden;
 }
 
@@ -57,7 +108,8 @@ body {
   border-right: 1px solid var(--line);
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-size: 11px;
+  font-size: var(--fs-head);
+  font-weight: 600;
 }
 
 .tabbar a:hover { color: var(--fg); background: #0f1218; }
@@ -68,7 +120,7 @@ body {
   align-items: center;
   padding: 0 12px;
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: var(--fs-label);
   white-space: nowrap;
 }
 
@@ -87,9 +139,10 @@ header.chrome {
 }
 
 .symbol {
-  font-size: 15px;
+  font-size: var(--fs-chrome);
   letter-spacing: 0.06em;
   color: #fff;
+  font-weight: 600;
 }
 
 .group {
@@ -103,7 +156,7 @@ header.chrome {
 .group:first-of-type { border-left: 0; padding-left: 0; }
 .group > .glabel {
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--fs-label);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   margin-right: 2px;
@@ -115,8 +168,8 @@ button.tf, button.tog {
   border: 1px solid var(--line-bright);
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
-  padding: 2px 7px;
+  font-size: var(--fs-label);
+  padding: 3px 8px;
   cursor: pointer;
 }
 
@@ -138,7 +191,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .prov {
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-label);
   white-space: nowrap;
   border-left: 2px solid var(--line-bright);
   padding-left: 8px;
@@ -152,7 +205,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   align-items: center;
   gap: 5px;
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-label);
   white-space: nowrap;
 }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-faint); }
@@ -160,7 +213,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .dot.degraded { background: var(--warn); }
 .dot.bad { background: var(--bad); }
 
-.stamp { color: var(--fg-faint); font-size: 11px; white-space: nowrap; }
+.stamp { color: var(--fg-faint); font-size: var(--fs-label); white-space: nowrap; }
 .stamp.paused { color: var(--warn); }
 
 /* ---- readout ---------------------------------------------------------- */
@@ -172,13 +225,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   padding: 4px 10px;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--line);
-  font-size: 11px;
+  font-size: var(--fs-label);
   color: var(--fg-dim);
-  min-height: 22px;
+  min-height: 24px;
   white-space: nowrap;
   overflow: hidden;
 }
-.readout b { color: var(--fg); font-weight: 500; }
+/* OHLCV values are columns: mono, so they line up under the candle. */
+.readout .num, .readout b { color: var(--fg); font-weight: 500; font-family: var(--mono); }
 .readout .up { color: var(--up); }
 .readout .down { color: var(--down); }
 
@@ -209,8 +263,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   z-index: 5;
 }
 .overlay.show { display: flex; }
-.overlay .big { color: var(--fg); font-size: 14px; margin-bottom: 6px; }
-.overlay .small { color: var(--fg-faint); font-size: 11px; max-width: 46rem; }
+.overlay .big { color: var(--fg); font-size: var(--fs-chrome); margin-bottom: 6px; }
+.overlay .small { color: var(--fg-faint); font-size: var(--fs-label); max-width: 46rem; }
 
 /* ---- placeholder pages ------------------------------------------------ */
 
@@ -225,14 +279,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   text-align: center;
   padding: 24px;
 }
-.placeholder h2 { color: var(--fg); font-size: 15px; margin: 0; letter-spacing: 0.06em; }
+.placeholder h2 { color: var(--fg); font-size: var(--fs-chrome); margin: 0; letter-spacing: 0.06em; }
 .placeholder code { color: var(--accent); }
 .placeholder .phase {
   border: 1px solid var(--warn);
   color: var(--warn);
   border-radius: 3px;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: var(--fs-label);
 }
 .placeholder p { margin: 0; max-width: 44rem; }
 
@@ -242,29 +296,34 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 12px 20px;
+  /* PASS 2 spacing: the bottom padding is what keeps a scrolling table's LAST row off
+     the footer. It was 20px against a 10px footnote; the note needed room of its own. */
+  padding: 12px 14px 34px;
 }
 
+/* Section heads: separated by whitespace, not by a rule. The gap above a head is the
+   section gap and the gap below it is the block gap, so a panel is legible as a group
+   even with every border removed. */
 h3.panel {
-  margin: 14px 0 6px;
-  font-size: 11px;
-  letter-spacing: 0.12em;
+  margin: var(--sp-section) 0 var(--sp-block);
+  font-size: var(--fs-head);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--fg-faint);
-  font-weight: 500;
+  font-weight: 700;
 }
 h3.panel:first-child { margin-top: 0; }
 
 .banner {
-  padding: 5px 8px;
-  margin-bottom: 8px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
   border: 1px solid var(--line-bright);
   border-left-width: 3px;
   border-radius: 3px;
   background: var(--bg-raised);
   color: var(--fg-dim);
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: var(--fs-label);
+  line-height: 1.55;
 }
 .banner.ok { border-left-color: var(--ok); color: #b7e6c2; }
 .banner.warn { border-left-color: var(--warn); color: #f0d8a8; }
@@ -272,8 +331,8 @@ h3.panel:first-child { margin-top: 0; }
 .banner.magenta { border-left-color: var(--arm-x); color: #f5c6ef; }
 .banner b { color: inherit; }
 
-.empty { color: var(--fg-faint); padding: 6px 2px; font-size: 11px; }
-.empty.big { padding: 24px 4px; text-align: center; font-size: 12px; }
+.empty { color: var(--fg-faint); padding: 8px 2px; font-size: var(--fs-label); }
+.empty.big { padding: 24px 4px; text-align: center; font-size: var(--fs-body); }
 .muted { color: var(--fg-faint); }
 
 /* ---- UX pass 1: information hierarchy ----------------------------------
@@ -295,25 +354,27 @@ h3.panel:first-child { margin-top: 0; }
    row reflows to one or two columns on a narrow window instead of squashing. */
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
-  gap: 8px;
-  margin: 0 0 10px;
+  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
+  gap: 10px;
+  margin: 0 0 14px;
 }
 .stat {
   min-width: 0;
-  padding: 6px 10px 7px;
+  padding: 8px 12px 9px;
   background: var(--bg-raised);
   border: 1px solid var(--line);
   border-radius: 4px;
 }
 .stat-label {
   color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-head);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-weight: 700;
 }
 .stat-value {
-  font-size: 22px;
+  font-family: var(--mono);
+  font-size: var(--fs-value);
   line-height: 1.25;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
@@ -324,17 +385,44 @@ h3.panel:first-child { margin-top: 0; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* PASS 2: the summary value scales with the window it is on. A 22px number on a 2560px
+   monitor is the same optical size as a 22px number on a laptop, which is to say it is
+   too small on one of them — and this tab exists to be read across a desk. */
+@media (min-width: 1700px) {
+  .stat-value { font-size: var(--fs-value-lg); }
+}
+@media (min-width: 2200px) {
+  .stat-value { font-size: var(--fs-value-xl); }
+}
 /* A status word rather than a number (arms "not open", calibration
    "calibration_pending") needs to fit the same slot without wrapping into
    three lines at this size. */
-.stat-value.pending { color: var(--warn); font-size: 15px; letter-spacing: 0; }
+.stat-value.pending { color: var(--warn); font-size: var(--fs-mark); letter-spacing: 0; font-family: var(--sans); font-weight: 600; }
+/* PASS 2: a value that is a WORD, not a figure. Sans at the subtitle-ish size so the
+   22px numeric slot keeps meaning "a number", and the tone colour still carries the
+   state (up/down/pending). Wraps if it must — a clipped status word is a lie. */
+.stat-value.word {
+  font-family: var(--sans);
+  font-size: var(--fs-value-word);
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: normal;
+  line-height: 1.3;
+}
+/* A date is a figure, but a short one: it fits the value slot only at this size. */
+.stat-value.date { font-size: var(--fs-value-date); }
 .stat-sub {
   color: var(--fg-faint);
-  font-size: 10px;
-  margin-top: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--fs-label);
+  margin-top: 3px;
+  /* PASS 2 fix #2: a subtitle that ellipsised mid-word was worse than no subtitle —
+     "multiplier on the baseline me…" reads as a rendering bug, and the qualifier it was
+     cutting ("not frozen") is load-bearing. So the subtitle WRAPS, with no clamp at
+     all: the text was shortened until it fits the tile, and if a future value is longer
+     the card grows instead of lying about what it says. Cards in a grid row are already
+     equal height, so an unrestrained wrap costs nothing. */
+  overflow-wrap: break-word;
+  line-height: 1.4;
 }
 
 /* One-line empty state + the "?" that carries the reasoning. */
@@ -343,34 +431,35 @@ h3.panel:first-child { margin-top: 0; }
   align-items: baseline;
   gap: 6px;
   color: var(--fg-dim);
-  font-size: 12px;
-  padding: 8px 2px;
+  font-size: var(--fs-body);
+  padding: 10px 2px;
 }
 .why { position: relative; display: inline-block; }
 .why summary {
   list-style: none;
   cursor: pointer;
-  color: var(--fg-faint);
+  color: var(--fg-dim);
   border: 1px solid var(--line-bright);
   border-radius: 50%;
-  width: 14px;
-  height: 14px;
-  line-height: 12px;
+  width: 16px;
+  height: 16px;
+  line-height: 14px;
   text-align: center;
-  font-size: 10px;
+  font-size: var(--fs-tick);
+  font-weight: 700;
 }
 .why summary::-webkit-details-marker { display: none; }
 .why summary:hover { color: var(--fg); border-color: var(--accent); }
 .why-body {
-  margin-top: 5px;
-  padding: 6px 8px;
-  max-width: 52rem;
+  margin-top: 6px;
+  padding: 8px 10px;
+  max-width: 56rem;
   color: var(--fg-dim);
   background: var(--bg-sunken);
   border: 1px solid var(--line);
   border-radius: 3px;
-  font-size: 11px;
-  line-height: 1.55;
+  font-size: var(--fs-label);
+  line-height: 1.6;
 }
 
 /* Collapsed methodology / integrity block. */
@@ -378,21 +467,21 @@ h3.panel:first-child { margin-top: 0; }
   border: 1px solid var(--line);
   border-radius: 3px;
   background: var(--bg-sunken);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 .disc > summary {
   cursor: pointer;
-  padding: 4px 8px;
+  padding: 6px 10px;
   color: var(--fg-dim);
-  font-size: 11px;
+  font-size: var(--fs-label);
   list-style: none;
 }
 .disc > summary::-webkit-details-marker { display: none; }
 .disc > summary::before { content: "▸ "; color: var(--fg-faint); }
 .disc[open] > summary::before { content: "▾ "; }
 .disc > summary:hover { color: var(--fg); }
-.disc-label { letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
-.disc-hint { color: var(--fg-faint); margin-left: 8px; font-size: 10px; }
+.disc-label { letter-spacing: 0.08em; text-transform: uppercase; font-size: var(--fs-tick); font-weight: 700; }
+.disc-hint { color: var(--fg-faint); margin-left: 8px; font-size: var(--fs-tick); }
 .disc-count {
   display: inline-block;
   margin-left: 6px;
@@ -400,10 +489,11 @@ h3.panel:first-child { margin-top: 0; }
   border-radius: 2px;
   border: 1px solid var(--line-bright);
   color: var(--warn);
-  font-size: 10px;
+  font-size: var(--fs-tick);
+  font-family: var(--mono);
 }
 .disc-count.bad { color: var(--bad); border-color: var(--bad); }
-.disc-body { padding: 2px 8px 8px; font-size: 11px; line-height: 1.5; }
+.disc-body { padding: 2px 10px 10px; font-size: var(--fs-label); line-height: 1.6; }
 .mp-detail.bad { color: var(--bad); }
 .mp-detail.warn { color: var(--warn); }
 
@@ -411,32 +501,35 @@ h3.panel:first-child { margin-top: 0; }
 .fgroup {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 0 8px;
+  gap: 6px;
+  padding: 0 12px;
   border-left: 1px solid var(--line);
 }
 .fgroup:first-of-type { border-left: 0; }
 .fgroup > .glabel {
   color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-head);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-weight: 700;
+  margin-right: 2px;
 }
 .chip-row {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 5px;
-  padding: 4px 12px;
+  gap: 6px;
+  padding: 6px 14px;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--line);
 }
 .chip-row[hidden] { display: none; }
 .chip-label {
   color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-head);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-weight: 700;
   margin-right: 2px;
 }
 button.fchip {
@@ -448,17 +541,35 @@ button.fchip {
 }
 button.fchip:hover { color: #fff; border-color: var(--accent); }
 
+/* Fix #3: the veto all-clear chip is quiet by design, but a safety confirmation is only
+   worth anything if it can be checked — this is the chip's own muted tone, kept
+   readable (it is not below the body-text contrast floor). */
+.chip.veto-clear { color: var(--fg-dim); border-color: var(--line-bright); }
+.plan-meta .why { vertical-align: middle; margin-left: 2px; max-width: 100%; }
+/* Inside the one-line plan-meta the disclosure is inline, so its body needs a width of
+   its own or it shrink-to-fits the whole line. */
+.plan-meta .why-body { max-width: 30rem; }
+
 /* A blank chart rectangle reads as a rendering failure. When there is
-   nothing to plot, the container says so instead of sitting empty. */
+   nothing to plot, the container says so instead of sitting empty — and PASS 2 makes
+   the "nothing" state compact: it collapses to a single line so the table and the fact
+   list below it reclaim the 220px the canvas was holding. */
 .chart-state {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100%;
   color: var(--fg-faint);
-  font-size: 11px;
+  font-size: var(--fs-label);
   border: 1px dashed var(--line-bright);
   border-radius: 3px;
+}
+/* The no-data variant: same words, one line, no reserved rectangle. */
+.chart-state.compact {
+  height: auto;
+  padding: 10px 12px;
+  justify-content: flex-start;
+  font-size: var(--fs-body);
 }
 
 /* Frozen header + row-identity column: on a 20-session baseline, a
@@ -478,9 +589,10 @@ table.freeze th.sticky-col, table.freeze td.sticky-col {
 }
 table.freeze thead th.sticky-col { z-index: 3; }
 table.freeze tbody tr:hover td.sticky-col { background: #0f1218; }
-table.freeze td { padding-top: 5px; padding-bottom: 5px; }
+/* The header cell needs its own opaque background too: a sticky th over a row uses the
+   ROW's background, and a transparent one lets the row's text show through the label. */
 
-.plan-meta { color: var(--fg-faint); font-size: 11px; margin: 2px 0 6px; }
+.plan-meta { color: var(--fg-faint); font-size: var(--fs-label); line-height: 1.5; margin: 4px 0 8px; }
 
 input.field, select.field {
   background: #161b22;
@@ -488,8 +600,8 @@ input.field, select.field {
   border: 1px solid var(--line-bright);
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
-  padding: 2px 6px;
+  font-size: var(--fs-label);
+  padding: 3px 8px;
 }
 input.field:focus, select.field:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 input.field.date { width: 118px; }
@@ -498,52 +610,84 @@ label.glabel {
   align-items: center;
   gap: 4px;
   color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.1em;
+  font-size: var(--fs-head);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
+  font-weight: 700;
 }
 
+/* PASS 2: the row rhythm. Row padding lives in ONE place (the --row-pad-* vars) so a
+   table cannot drift away from the density the rest of the page was set at, and the
+   body size is --fs-body rather than a hardcoded 11px. */
 table.grid, table.mini, table.plan {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: var(--fs-body);
 }
 table.grid th, table.plan th, table.mini th {
   text-align: left;
   color: var(--fg-faint);
-  font-weight: 500;
+  font-weight: 700;
+  font-size: var(--fs-head);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   border-bottom: 1px solid var(--line-bright);
-  padding: 3px 6px;
+  padding: 6px var(--row-pad-x);
   white-space: nowrap;
+  vertical-align: bottom;
 }
 table.grid td, table.mini td, table.plan td {
-  padding: 3px 6px;
+  padding: var(--row-pad-y) var(--row-pad-x);
   border-bottom: 1px solid var(--line);
   vertical-align: top;
+  line-height: 1.5;
 }
+/* Numbers are columns. Right-alignment plus tabular figures means two rows of money
+   can be compared by their digits without the reader tracking a decimal point. */
 th.r, td.r { text-align: right; }
+/* PASS 2: `.num` means MONO, not "right-aligned" — alignment is a decision about the
+   column's content (a count lines up; an id or a ticker is a label and reads better
+   flush left) and is taken per column with `.r`. The font decision is mechanical, so it
+   is mechanical here. */
+.num, td.num, th.num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+/* The last row of a scrolling table needs air under it, or the sticky-header table's
+   final line reads as glued to whatever follows. */
+table.grid tbody tr:last-child td { border-bottom: 1px solid var(--line-bright); }
 th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--fg); }
 th.sorted { color: var(--accent); }
 th.nosort { cursor: default; }
 tr:hover td { background: #0f1218; }
-.num { font-variant-numeric: tabular-nums; }
 .up { color: var(--up); }
 .down { color: var(--down); }
 .flat { color: var(--fg-dim); }
-.reasoning { max-width: 32rem; }
+/* PASS 2: a dash-only cell is the ABSENCE of a measurement and is styled consistently
+   everywhere it appears — table cell, stat subtitle, arm-line value, popup field — by
+   one class rather than by whoever remembered to add `muted`. */
+td.dash, .dash { color: var(--fg-faint); }
+.reasoning { max-width: 34rem; line-height: 1.5; }
 .reasoning span { color: var(--fg-dim); }
 .ref { margin-top: 2px; }
 .ref a { color: var(--arm-x); text-decoration: none; border-bottom: 1px dotted var(--arm-x); }
 .ref a:hover { color: #fff; }
 .ref-unknown { color: var(--fg-faint); }
 
-.arm-tag { padding: 0 4px; border-radius: 2px; border: 1px solid var(--line-bright); }
+.arm-tag {
+  padding: 0 5px;
+  border-radius: 2px;
+  border: 1px solid var(--line-bright);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+}
 .arm-tag.A { color: var(--arm-a); border-color: var(--arm-a); }
 .arm-tag.B { color: var(--arm-b); border-color: var(--arm-b); }
 .arm-tag.C { color: var(--arm-c); border-color: var(--arm-c); }
 .arm-tag.EXCEPTION { color: var(--arm-x); border-color: var(--arm-x); }
-.kind { font-size: 10px; letter-spacing: 0.04em; }
+.kind {
+  font-size: var(--fs-label);
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
 .kind-trade { color: var(--up); }
 .kind-no_trade { color: var(--fg-dim); }
 .kind-stop { color: var(--down); }
@@ -553,11 +697,12 @@ tr:hover td { background: #0f1218; }
 
 .chip {
   display: inline-block;
-  padding: 0 4px;
-  margin: 1px 2px 1px 0;
+  padding: 1px 6px;
+  margin: 1px 3px 1px 0;
   border-radius: 2px;
   border: 1px solid var(--line-bright);
-  font-size: 10px;
+  font-size: var(--fs-label);
+  font-family: var(--mono);
   color: var(--fg-dim);
   cursor: help;
 }
@@ -567,17 +712,17 @@ tr:hover td { background: #0f1218; }
 .chip.soft { color: var(--fg-faint); border-style: dashed; }
 .chip.skip, .chip.skipped { color: var(--fg-faint); }
 
-.pager { display: flex; align-items: center; gap: 8px; padding: 8px 2px; }
-.pager-info { color: var(--fg-faint); font-size: 11px; }
-.pager-page { color: var(--fg-dim); font-size: 11px; }
+.pager { display: flex; align-items: center; gap: 10px; padding: 12px 2px 4px; }
+.pager-info { color: var(--fg-faint); font-size: var(--fs-label); }
+.pager-page { color: var(--fg-dim); font-size: var(--fs-label); font-family: var(--mono); }
 button.pg {
   background: #161b22;
   color: var(--fg-dim);
   border: 1px solid var(--line-bright);
   border-radius: 3px;
   font: inherit;
-  font-size: 11px;
-  padding: 2px 8px;
+  font-size: var(--fs-label);
+  padding: 3px 10px;
   cursor: pointer;
 }
 button.pg:hover:not(:disabled) { color: var(--fg); border-color: #3a434f; }
@@ -587,76 +732,88 @@ button.pg:hover:not(:disabled) { color: var(--fg); border-color: #3a434f; }
 .arm-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
-  gap: 10px;
+  gap: 12px;
+  margin-bottom: 4px;
 }
 .arm-card {
   border: 1px solid var(--line-bright);
   border-top: 2px solid var(--arm, var(--line-bright));
   border-radius: 4px;
   background: var(--bg-raised);
-  padding: 8px 10px;
+  padding: 10px 12px;
 }
 .arm-card.exception { margin-top: 12px; }
-.arm-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
-.arm-name { color: var(--arm, var(--fg)); font-size: 12px; letter-spacing: 0.04em; }
-.arm-pnl { font-size: 15px; font-variant-numeric: tabular-nums; }
-.arm-line { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--fg-faint); }
-.arm-line b { color: var(--fg); font-weight: 500; }
-.arm-chart { height: 96px; margin: 8px 0 2px; }
-.arm-curve-note { color: var(--fg-faint); font-size: 10px; margin-bottom: 6px; }
+.arm-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }
+.arm-name { color: var(--arm, var(--fg)); font-size: var(--fs-body); letter-spacing: 0.04em; font-weight: 700; }
+.arm-pnl { font-size: var(--fs-value-word); font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.arm-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--fs-label);
+  color: var(--fg-faint);
+  padding: 2px 0;
+  line-height: 1.5;
+}
+.arm-line b { color: var(--fg); font-weight: 600; }
+.arm-chart { height: 96px; margin: 10px 0 4px; }
+.arm-curve-note { color: var(--fg-faint); font-size: var(--fs-tick); margin-bottom: 6px; }
 
 /* A/B/C comparison: metric down the left, arm across the top. The row
    label is a row header so a screen reader reads "return on bankroll,
    arm B" rather than two disconnected cells. */
-table.cmp { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.cmp { width: 100%; border-collapse: collapse; font-size: var(--fs-body); margin-bottom: 4px; }
 table.cmp th.row-label {
   text-align: left;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--fg-dim);
-  padding: 6px 10px 6px 0;
+  padding: 8px 12px 8px 0;
   border-bottom: 1px solid var(--line);
   white-space: nowrap;
 }
 table.cmp thead th {
   text-align: left;
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 2px solid var(--line-bright);
   vertical-align: bottom;
 }
 table.cmp th.arm-col {
   color: var(--arm, var(--fg));
-  font-size: 15px;
+  font-size: var(--fs-value-word);
   letter-spacing: 0.06em;
+  font-family: var(--mono);
 }
 .arm-sub {
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--fs-tick);
   letter-spacing: 0;
-  margin-top: 1px;
+  margin-top: 2px;
+  font-weight: 400;
 }
 table.cmp tbody td {
-  padding: 6px 10px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
 table.cmp tbody tr:hover td { background: #0f1218; }
-.arm-note { color: var(--fg-faint); font-size: 10px; line-height: 1.45; margin: 4px 0 6px; }
-.arm-flags { margin-top: 8px; }
+.arm-note { color: var(--fg-faint); font-size: var(--fs-tick); line-height: 1.5; margin: 6px 0 8px; }
+.arm-flags { margin-top: 10px; }
 .arm-flag {
   border: 1px solid var(--line-bright);
   border-left: 3px solid var(--warn);
   border-radius: 3px;
-  padding: 3px 6px;
-  margin-top: 4px;
-  font-size: 11px;
+  padding: 5px 8px;
+  margin-top: 5px;
+  font-size: var(--fs-label);
   color: var(--fg-dim);
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .arm-flag.bad { border-left-color: var(--bad); }
 .af-code { color: var(--warn); letter-spacing: 0.04em; }
 .arm-flag.bad .af-code { color: var(--bad); }
 
-.chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0; font-size: 11px; color: var(--fg-dim); }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0; font-size: var(--fs-label); color: var(--fg-dim); }
 .lg i { display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; }
 .lg i.dashed { background-image: repeating-linear-gradient(90deg, currentColor 0 3px, transparent 3px 6px); }
 
@@ -665,14 +822,14 @@ table.cmp tbody tr:hover td { background: #0f1218; }
 table.plan td.cell { min-width: 16rem; }
 td.dir { color: var(--fg); text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }
 th.arm-head { color: var(--accent); }
-.cell-top { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.cell-top { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 .cell.holds { background: #0d1015; }
 .cell.fires { background: #0f1a12; }
-.chips { margin: 2px 0; }
-.veto-reasons { color: #f0d8a8; font-size: 10px; margin: 3px 0; line-height: 1.4; }
-.triggers, .watch-levels { margin-top: 3px; font-size: 10px; color: var(--fg-dim); }
-.trig, .watch { display: inline-block; margin-right: 8px; }
-.cell-foot { margin-top: 4px; color: var(--fg-faint); font-size: 10px; }
+.chips { margin: 3px 0; }
+.veto-reasons { color: #f0d8a8; font-size: var(--fs-tick); margin: 4px 0; line-height: 1.5; }
+.triggers, .watch-levels { margin-top: 4px; font-size: var(--fs-tick); color: var(--fg-dim); }
+.trig, .watch { display: inline-block; margin-right: 10px; font-family: var(--mono); }
+.cell-foot { margin-top: 6px; color: var(--fg-faint); font-size: var(--fs-tick); font-family: var(--mono); }
 td.cell.missing { color: var(--fg-faint); text-align: center; }
 
 td.cf { max-width: 22rem; }
@@ -686,75 +843,101 @@ td.cf.flat { color: var(--fg-dim); }
   align-items: flex-end;
   gap: 6px;
   height: 140px;
-  padding: 6px 2px 0;
+  padding: 8px 2px 0;
   border-bottom: 1px solid var(--line-bright);
 }
 .hbar { flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; position: relative; }
 .hstack { display: flex; width: 100%; min-height: 2px; }
 .hstack i { display: block; }
 .hstack i.zero { flex: 1; background: #14181e; }
-.hlabel { text-align: center; color: var(--fg-faint); font-size: 9px; margin-top: 3px; }
-.hcount { text-align: center; color: var(--fg-dim); font-size: 9px; }
+.hlabel { text-align: center; color: var(--fg-faint); font-size: var(--fs-tick); margin-top: 4px; font-family: var(--mono); }
+.hcount { text-align: center; color: var(--fg-dim); font-size: var(--fs-tick); font-family: var(--mono); }
 
 /* ---- marker popup ----------------------------------------------------- */
 
 .marker-popup {
   position: fixed;
   z-index: 40;
-  width: 22rem;
+  width: 24rem;
   max-width: calc(100vw - 16px);
   background: var(--bg-raised);
   border: 1px solid var(--line-bright);
   border-radius: 4px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
-  padding: 8px 10px;
-  font-size: 11px;
+  padding: 10px 12px;
+  font-size: var(--fs-body);
   color: var(--fg-dim);
 }
 .mp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.mp-title { color: var(--fg); font-size: 12px; }
-.mp-fields { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 6px 0 2px; }
-.mf { display: inline-flex; gap: 4px; }
-.mk { color: var(--fg-faint); text-transform: uppercase; font-size: 9px; letter-spacing: 0.08em; }
-.mv { color: var(--fg); font-variant-numeric: tabular-nums; }
-.mp-block { margin-top: 6px; border-top: 1px solid var(--line); padding-top: 5px; }
-.mp-h { color: var(--fg-faint); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
-.mp-list { margin: 3px 0 0; padding: 0; list-style: none; }
-.mp-list li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
-.mp-detail { color: var(--fg-dim); }
-.mp-reasoning { color: var(--fg-dim); line-height: 1.5; }
-.mp-cf { font-size: 12px; margin-top: 2px; }
+.mp-title { color: var(--fg); font-size: var(--fs-body); font-weight: 700; }
+.mp-fields { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 2px; }
+.mf { display: inline-flex; gap: 5px; }
+.mk {
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  font-size: var(--fs-tick);
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+.mv { color: var(--fg); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.mp-block { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 7px; }
+.mp-h {
+  color: var(--fg-faint);
+  font-size: var(--fs-tick);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+.mp-list { margin: 4px 0 0; padding: 0; list-style: none; }
+.mp-list li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; }
+.mp-detail { color: var(--fg-dim); line-height: 1.6; }
+.mp-reasoning { color: var(--fg-dim); line-height: 1.6; }
+.mp-cf { font-size: var(--fs-body); margin-top: 3px; font-family: var(--mono); }
 .mp-cf.good { color: var(--up); }
 .mp-cf.bad { color: var(--down); }
 .mp-cf.pending { color: var(--warn); }
 .mp-cf.flat { color: var(--fg); }
-.mp-sub { color: var(--fg-faint); font-size: 10px; line-height: 1.45; margin-top: 2px; }
-.mp-foot { margin-top: 7px; padding-top: 5px; border-top: 1px solid var(--line); color: var(--fg-faint); font-size: 9px; }
+.mp-sub { color: var(--fg-faint); font-size: var(--fs-tick); line-height: 1.5; margin-top: 3px; }
+.mp-foot { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); color: var(--fg-faint); font-size: var(--fs-tick); }
 
 footer.ro {
-  padding: 4px 10px;
+  padding: 6px 14px;
   border-top: 1px solid var(--line);
   background: var(--bg-sunken);
   color: var(--fg-faint);
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  font-size: var(--fs-tick);
+  letter-spacing: 0.03em;
+  line-height: 1.45;
 }
 
 /* ---- calibration ------------------------------------------------------ */
 
-.calib-chart { height: 220px; margin: 8px 0 4px; }
+.calib-chart { height: 220px; margin: 10px 0 6px; }
 #calib-iv-chart { height: 200px; }
+/* PASS 2 fix #5: the frozen-note that closes a calibration table is the last thing on
+   the panel, and at the old rhythm it sat flush against the final row — a sticky-header
+   table's last line under a footnote reads as the footnote having covered it. The
+   footnote gets its own block of space above it and the scroll container's bottom
+   padding keeps clear of the page footer. */
+.panel-note {
+  color: var(--fg-faint);
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  margin: 14px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
 
 .calib-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 18px;
-  margin: 6px 0 2px;
-  font-size: 11px;
+  gap: 6px 20px;
+  margin: 8px 0 4px;
+  font-size: var(--fs-label);
   color: var(--fg-faint);
 }
 .calib-facts > div { display: flex; gap: 6px; align-items: baseline; }
-.calib-facts b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+.calib-facts b { color: var(--fg); font-weight: 600; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 /* Distance histogram: paired call/put bars per 1pp bucket with the threshold marked.
    Plain divs rather than a chart — the threshold is an x-axis quantity, and a price line
@@ -764,7 +947,7 @@ footer.ro {
   align-items: flex-end;
   gap: 4px;
   height: 160px;
-  padding: 6px 2px 0;
+  padding: 8px 2px 0;
   border-bottom: 1px solid var(--line-bright);
 }
 .dbar {
@@ -785,22 +968,23 @@ footer.ro {
   left: 50%;
   transform: translateX(-50%);
   color: var(--bad);
-  font-size: 9px;
+  font-size: var(--fs-tick);
   white-space: nowrap;
 }
 
-table.chk-table { max-width: 60rem; }
+table.chk-table { max-width: 62rem; margin-bottom: 4px; }
 tr.chk td { vertical-align: top; }
-tr.chk .glyph { width: 2.2rem; text-align: center; font-size: 13px; }
+tr.chk .glyph { width: 2.4rem; text-align: center; font-size: var(--fs-mark); }
 tr.chk.blocked .glyph { filter: saturate(1.6); }
 tr.chk.progress .glyph { opacity: 0.8; }
 tr.chk.todo .glyph, tr.chk.unknown .glyph { opacity: 0.55; }
-.chk-reason { color: var(--fg-dim); font-size: 11px; line-height: 1.45; margin-top: 2px; max-width: 52rem; }
+.chk-reason { color: var(--fg-dim); font-size: var(--fs-label); line-height: 1.55; margin-top: 3px; max-width: 54rem; }
 tr.chk .state {
   color: var(--fg-faint);
-  font-size: 9px;
-  letter-spacing: 0.08em;
+  font-size: var(--fs-tick);
+  letter-spacing: 0.1em;
   text-transform: uppercase;
+  font-weight: 700;
   text-align: right;
   white-space: nowrap;
 }

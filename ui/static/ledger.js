@@ -67,14 +67,15 @@ function headerCells() {
   return LEDGER_COLUMNS.map((column) => {
     const arrow = sortIndicator(column, state.sort, state.order);
     const active = column.sort === state.sort;
+    // PASS 2: a numeric column's header carries `.r` so the label sits over its own
+    // figures instead of over the whitespace to their left.
+    const cls = [column.num ? "r" : "", active ? "sorted" : ""].filter(Boolean).join(" ");
     if (!column.sort) {
       // Not every column is sortable (reasoning is free text) and saying so beats a
       // header that looks clickable and does nothing.
-      return `<th class="${active ? "sorted" : ""} nosort" title="not sortable">${esc(
-        column.label,
-      )}</th>`;
+      return `<th class="${cls} nosort" title="not sortable">${esc(column.label)}</th>`;
     }
-    return `<th class="sortable ${active ? "sorted" : ""}" data-sort="${esc(
+    return `<th class="sortable ${cls}" data-sort="${esc(
       column.sort,
     )}" aria-sort="${active ? (state.order === "asc" ? "ascending" : "descending") : "none"}">${esc(
       column.label,
@@ -95,16 +96,23 @@ function rowHtml(row) {
     : "";
   const reasoning = row.reasoning
     ? `<span title="${esc(row.reasoning)}">${esc(truncate(row.reasoning, 90))}</span>`
-    : `<span class="muted">${DASH}</span>`;
+    : `<span class="dash">${DASH}</span>`;
+  // PASS 2: one rule for dash-only cells (`.dash`), applied wherever a cell holds the
+  // absence of a value rather than a value. Before this, whether a dash was muted
+  // depended on which column it was in.
+  const numOrDash = (value, { right = false } = {}) =>
+    `<td class="num ${right ? "r " : ""}${value == null || value === DASH ? "dash" : ""}">${esc(
+      value == null ? DASH : value,
+    )}</td>`;
   return `<tr data-id="${esc(row.id)}">
     <td class="num">#${esc(row.id)}</td>
     <td class="num" title="${esc(row.ts)}">${esc(shortDay(row.ts))} ${esc(clockET(row.ts))}</td>
     <td><span class="arm-tag ${esc(row.arm)}">${esc(row.arm)}</span></td>
     <td><span class="kind kind-${esc(String(row.kind).toLowerCase())}">${esc(row.kind)}</span></td>
-    <td class="num">${esc(row.symbol || DASH)}</td>
-    <td class="num">${esc(row.conviction == null ? DASH : row.conviction)}</td>
+    ${numOrDash(row.symbol || null)}
+    ${numOrDash(row.conviction == null ? null : row.conviction, { right: true })}
     <td class="reasoning">${reasoning}${refs}</td>
-    <td class="num muted" title="journal created_at — when the row was written, not the market time it is about">${esc(
+    <td class="num ${row.created_at ? "r" : "dash"}" title="journal created_at — when the row was written, not the market time it is about">${esc(
       row.created_at ? `${shortDay(row.created_at)} ${clockET(row.created_at)}` : DASH,
     )}</td>
   </tr>`;
@@ -225,6 +233,9 @@ function renderSummary(info, filters) {
     {
       label: "last written",
       value: last ? `${shortDay(last)} ${clockET(last)}` : DASH,
+      // PASS 2: "Oct 3 14:22" is 11 characters of date-and-time; at the 22px money size
+      // it ellipsised the minutes, which is the part of a timestamp nobody can guess.
+      date: true,
       sub: last ? "journal created_at" : "nothing written yet",
       title: "created_at — when the row was written, not the market time it is about",
     },

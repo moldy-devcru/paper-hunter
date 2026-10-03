@@ -146,6 +146,8 @@ function renderSummary(summaries) {
       label: "window",
       value: live.length ? "open" : "not open",
       tone: live.length ? "up" : "",
+      // PASS 2: a word, not a figure — see statCard's `word` flag.
+      word: true,
       sub: live.length ? `${live.length} arm(s) active` : "no positions yet",
       title: "an arm is live when it has a position or a close in the journal",
     },
@@ -179,8 +181,8 @@ function card(summary, flags) {
             `<tr title="${esc(position.notes)}"><td>${esc(position.label)}</td>` +
             `<td class="r num">${esc(position.qty ?? DASH)}</td>` +
             `<td class="r num">${esc(pxOf(position.entry))}</td>` +
-            `<td class="r num muted">${DASH}</td>` +
-            `<td class="r num muted" title="${esc(position.notes)}">${DASH}</td></tr>`,
+            `<td class="r num dash">${DASH}</td>` +
+            `<td class="r num dash" title="${esc(position.notes)}">${DASH}</td></tr>`,
         )
         .join("") +
       `</tbody></table>`

@@ -80,9 +80,15 @@ function cellHtml(cell) {
 
 function renderPlan(payload) {
   const grid = huntGrid(payload.cells);
-  const banner = eventVetoBanner(payload.event_veto);
-  // UX PASS 1: the event veto is a day-level fact, so it earns a banner ONLY when it
-  // says something — active, or unknown (a rulebook we could not read is not an all
+  // UX PASS 2 fix #3: `eventVetoBanner` is handed the RULEBOOK's veto kinds, so the
+  // all-clear names what it checked ("none of fomc, cpi recorded") instead of asserting
+  // that nothing was found. The chip stays quiet; the confirmation lives in the
+  // disclosure behind the "?", where a reader who wants to satisfy themselves can read
+  // the whole sentence, and in the chip's own tooltip for a glance.
+  const ruleKinds = payload.event_veto_kinds || [];
+  const banner = eventVetoBanner(payload.event_veto, { kinds: ruleKinds });
+  // The event veto is a day-level fact, so it earns a banner ONLY when it says
+  // something — active, or unknown (a rulebook we could not read is not an all
   // clear). The "none of the veto kinds" case used to render a full-width green banner
   // at the top of the tab, which made the absence of a problem the most prominent thing
   // on the page. It is a chip now, inline with the plan meta, where a glance catches it
@@ -93,7 +99,18 @@ function renderPlan(payload) {
         banner.text,
       )}</b></div>`;
   const eventChip = banner.level === "ok"
-    ? `<span class="chip soft" title="${esc(banner.text)}">event veto: none</span>`
+    ? `<span class="chip soft veto-clear" title="${esc(banner.text)}">event veto: none${
+        ruleKinds.length ? ` (${esc(ruleKinds.join(", "))})` : ""
+      }</span>` +
+      `<details class="why"><summary title="what was checked">?</summary><div class="why-body">${esc(
+        banner.text,
+      )}. Checked against the rulebook's own <code>event_calendar.veto_kinds</code>${
+        ruleKinds.length
+          ? ` (${esc(ruleKinds.join(", "))})`
+          : " — none could be read"
+      }, matched against each cell's T5 condition text. This is a quiet chip rather than
+         a banner because the absence of a veto is the expected state, not a finding;
+         the reasoning is here so the claim can be checked rather than trusted.</div></details>`
     : "";
   if (!grid.empty) {
     const head = `<tr><th>direction</th>${grid.arms
@@ -117,6 +134,7 @@ function renderPlan(payload) {
     // old and an unrun session is the expected state, not an error worth shouting about.
     el("hunt-plan").innerHTML =
       bannerHtml +
+      (eventChip ? `<div class="plan-meta">${eventChip}</div>` : "") +
       emptyState(
         `No plan cells yet for ${payload.date} — the hunt writes its plan each session, pre-market`,
         "The plan is not a table: executor.hunt_plan writes one immutable decision row " +
@@ -168,12 +186,18 @@ function renderNoshots(payload) {
         <td class="num">${esc(clockET(row.ts))}</td>
         <td>${esc(hypothesis.arm || DASH)}</td>
         <td>${esc(hypothesis.direction || DASH)}</td>
-        <td>${failed || `<span class="muted">${DASH}</span>`}</td>
-        <td class="num">${esc(row.price == null ? DASH : row.price.toFixed(2))}</td>
+        <td>${failed || `<span class="dash">${DASH}</span>`}</td>
+        <td class="r num ${row.price == null ? "dash" : ""}">${esc(
+          row.price == null ? DASH : row.price.toFixed(2),
+        )}</td>
         <td class="cf ${esc(cf.tone)}" title="${esc(cf.detail)}">${esc(cf.headline)}</td>
-        <td class="num muted">${
+        <td class="num ${
           row.counterfactual_entry_ref == null
-            ? `<span class="muted" title="no decision row references this sighting">unlinked</span>`
+            ? "dash"
+            : "r"
+        }">${
+          row.counterfactual_entry_ref == null
+            ? `<span title="no decision row references this sighting">unlinked</span>`
             : `#${esc(row.counterfactual_entry_ref)}`
         }</td>
       </tr>`;
@@ -181,7 +205,7 @@ function renderNoshots(payload) {
     .join("");
   el("hunt-noshots").innerHTML = `${head}<table class="grid">
     <thead><tr><th>date</th><th>time</th><th>arm</th><th>dir</th><th>failed</th>
-    <th>underlying</th><th>counterfactual</th><th>decision</th></tr></thead>
+    <th class="r">underlying</th><th>counterfactual</th><th class="r">decision</th></tr></thead>
     <tbody>${body}</tbody></table>`;
 }
 
@@ -268,7 +292,9 @@ function renderSummary({ plan, noshots, histogram, day, errors }) {
   const cells = (plan && plan.cells) || [];
   const fired = cells.filter((cell) => cell.fire === true).length;
   const held = cells.filter((cell) => cell.fire === false).length;
-  const banner = plan ? eventVetoBanner(plan.event_veto) : { level: "unknown", text: "" };
+  const banner = plan
+    ? eventVetoBanner(plan.event_veto, { kinds: plan.event_veto_kinds || [] })
+    : { level: "unknown", text: "" };
 
   let status = "not run";
   let statusTone = "";
@@ -297,6 +323,10 @@ function renderSummary({ plan, noshots, histogram, day, errors }) {
       label: "run status",
       value: status,
       tone: statusTone,
+      // PASS 2: every branch of `status` is a phrase ("plan unavailable", "3 cells
+      // fire"), not a figure — without this it renders in the 22px numeric slot and
+      // ellipsises the one word that says what the day did.
+      word: true,
       sub: day,
       title: "the plan for this session: how many cells fire, how many hold, or that it has not run",
     },

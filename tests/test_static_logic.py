@@ -535,9 +535,12 @@ FLOW = [
         "is_delayed": True,
         "session_spot": 500.0 + i,
         "deep_otm_threshold_pct": 3.0,
-        "deep_otm_call_volume": 1000.0 + 100 * i,
-        "deep_otm_put_volume": 500.0 + 50 * i,
-        "deep_otm_total_volume": 1500.0 + 150 * i,
+        # WIRE key names, as /api/calibration emits them (ux pass 2). The fixture used to
+        # be written from the journal schema instead of from a response, which is how the
+        # model went on reading `deep_otm_*` keys the endpoint never sends.
+        "call_volume": 1000.0 + 100 * i,
+        "put_volume": 500.0 + 50 * i,
+        "total_volume": 1500.0 + 150 * i,
         "call_by_distance": {"1": 400.0 + 10 * i, "2": 600.0 + 90 * i},
         "put_by_distance": {"1": 200.0 + 5 * i, "2": 300.0 + 45 * i},
         "baseline_days": min(i, 20),
@@ -664,9 +667,9 @@ def test_flow_volume_model_sorts_sessions_and_keeps_the_holes_visible() -> None:
     """The endpoint returns DESC (newest first); the line must not run backwards. And a
     session with a null volume is a hole the model counts, not one it silently drops."""
     rows = [
-        {"date": "2026-08-04", "deep_otm_total_volume": 20.0},
-        {"date": "2026-08-02", "deep_otm_total_volume": None},
-        {"date": "2026-08-03", "deep_otm_total_volume": 10.0},
+        {"date": "2026-08-04", "total_volume": 20.0},
+        {"date": "2026-08-02", "total_volume": None},
+        {"date": "2026-08-03", "total_volume": 10.0},
     ]
     out = run_js("M.flowVolume(" + js(rows) + ", " + js({"sessions_needed": 20}) + ")")
     assert [point["date"] for point in out["points"]] == [

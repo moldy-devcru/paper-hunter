@@ -40,6 +40,7 @@ from fastapi.testclient import TestClient
 from ui.api import STATIC_MODULES, app
 
 STATIC = Path(__file__).resolve().parent.parent / "ui" / "static"
+API = Path(__file__).resolve().parent.parent / "ui" / "api.py"
 INDEX_HTML = STATIC / "index.html"
 APP_JS = STATIC / "app.js"
 STYLE_CSS = STATIC / "style.css"
@@ -432,7 +433,10 @@ def test_open_positions_are_never_marked_to_market() -> None:
     the entry price alone would be a fabricated P&L, so both render as dashes with the
     reason in the tooltip, and the view model refuses to carry a mark at all."""
     arms = read(STATIC / "arms.js")
-    assert '<td class="r num muted">${DASH}</td>' in arms, "last and unrealized render as dashes"
+    # UX pass 2 replaced the ad-hoc `muted` on dash-only cells with one `.dash` rule in
+    # the stylesheet; the assertion follows the class, the property does not change: both
+    # cells still render as a dash with the reason in the tooltip.
+    assert '<td class="r num dash">${DASH}</td>' in arms, "last and unrealized render as dashes"
     model = read(STATIC / "model.js")
     assert "last: null" in model and "unrealized: null" in model
     assert "not computed" in model
@@ -599,4 +603,185 @@ def test_the_calibration_module_is_routed_and_has_no_cdn_reference() -> None:
     text = read(STATIC / "calibration.js")
     assert EXTERNAL.findall(text) == []
     for pattern in (r"method\s*:", r"XMLHttpRequest", r"navigator\.sendBeacon", r"\.submit\("):
-        assert re.search(pattern, text) is None, f"calibration.js can write: {pattern!r}"
+        assert re.search(pattern, text) is None, f"calibration.js can write: {pattern}"
+
+
+# ---------------------------------------------------------------------------
+# UX PASS 2 — the five fixes from the pass-1 vision review, plus the type scale.
+# Each is pinned here because every one of them is a REGRESSION risk: nothing about
+# them is load-bearing to the machine, so a later edit can undo any of them silently and
+# the page keeps working. They are only visible to an eye.
+# ---------------------------------------------------------------------------
+
+
+def test_pass2_the_baseline_card_names_its_two_facts() -> None:
+    """Fix #1: the card read "64/20", which looks like a broken fraction — 64 sessions is
+    not a share of 20. The sessions and the minimum are now two labelled facts, and the
+    same relabelling reaches the chip, which had the same ambiguity."""
+    calib = read(STATIC / "calibration.js")
+    assert "${flow.sessions}/${flow.sessionsNeeded}" not in calib, (
+        "a bare n/m pair reads as a fraction, not as a count against a minimum"
+    )
+    assert 'label: "baseline sessions"' in calib
+    assert "minimum ${flow.sessionsNeeded}" in calib, "the minimum is named as a minimum"
+    assert "baseline complete · ${model.sessions} sessions" in calib, "and so is the chip"
+
+
+def test_pass2_no_summary_subtitle_is_clamped_or_truncated() -> None:
+    """Fix #2: the proposed-N subtitle ellipsised mid-word, cutting the qualifier
+    ("not frozen") that gives the number its meaning. The subtitle wraps now, and the
+    stylesheet carries no line clamp or ellipsis on it."""
+    calib = read(STATIC / "calibration.js")
+    assert 'sub: "× the baseline mean, not frozen"' in calib, (
+        "short enough that it does not need clamping, and it keeps the qualifier"
+    )
+    css = read(STATIC / "style.css")
+    sub = css.split(".stat-sub {")[1].split("}")[0]
+    for banned in ("line-clamp", "text-overflow", "white-space: nowrap"):
+        assert banned not in sub, f".stat-sub must not truncate: {banned}"
+
+
+def test_pass2_the_veto_all_clear_names_the_kinds_it_checked() -> None:
+    """Fix #3: demoting the veto banner to a chip must not have cost the safety
+    confirmation its content. "none" is not checkable; "none of fomc, cpi recorded" is —
+    so the rulebook's own kinds are sent whether or not any of them fired, and the chip
+    keeps a disclosure carrying the whole sentence."""
+    api = read(API)
+    assert '"event_veto_kinds": veto_kinds' in api, (
+        "the response carries the rulebook's kinds in the clear case too"
+    )
+    model = read(STATIC / "model.js")
+    assert "export function eventVetoBanner(eventVeto, { kinds = [] } = {})" in model
+    assert "none of ${kinds.join" in model, 'the all-clear names the kinds: "none of X, Y recorded"'
+    hunt = read(STATIC / "hunt.js")
+    assert 'details class="why"' in hunt, "the chip keeps a disclosure with the reasoning"
+    assert "event_veto_kinds" in hunt
+
+
+def test_pass2_an_empty_chart_collapses_instead_of_reserving_a_rectangle() -> None:
+    """Fix #4: pass 1 put a sentence inside a 220px dashed rectangle, which fixed the
+    "is this broken?" impression but kept the void and pushed the numbers below it. The
+    chart container is now conditional on there being a series to draw, and the no-data
+    case renders a compact state instead."""
+    calib = read(STATIC / "calibration.js")
+    assert "function compactChartState(" in calib
+    assert "const hasVolume = model.measured > 0" in calib, (
+        "flow panel: a series must exist, counted by the model itself so the chart and "
+        "the table cannot disagree"
+    )
+    assert "if (!hasVolume) return;" in calib, "and no canvas is created without one"
+    assert 'class="chart-state compact"' in calib
+    assert "const hasReal = model.realCount > 0;" in calib, "iv panel: same rule"
+    assert "if (!hasReal) return;" in calib
+    css = read(STATIC / "style.css")
+    assert ".chart-state.compact" in css, "and the compact state is one line, not a box"
+    assert "height: auto" in css.split(".chart-state.compact")[1][:200]
+
+
+def test_the_calibration_model_reads_the_wire_key_names() -> None:
+    """Found by rendering the tab against a seeded journal during ux pass 2: the flow
+    panel was a table of dashes on a populated store. `/api/calibration` renames the
+    journal's `deep_otm_*` columns to `call_volume` / `put_volume` / `total_volume`, and
+    the model read the schema's spelling — while the fixtures in test_static_logic were
+    written from the schema too, so both sides agreed and the page was still empty.
+
+    The two sides are pinned together here: every key the model reads out of a flow row
+    has to be a key the endpoint actually writes, and the fixture has to use the wire
+    shape. A rename on either side now fails here instead of silently blanking a panel.
+    """
+    api = read(API)
+    model = read(STATIC / "model.js")
+    flow = model.split("export function flowVolume(")[1].split("export function")[0]
+    # Every key the endpoint writes into a flow row, taken from that row's own literal.
+    block = api.split("flow.append(", 1)[1].split("\n                )", 1)[0]
+    pairs = re.findall(r'"([a-z0-9_]+)":\s*(?:bool\()?row\["([a-z0-9_]+)"\]', block)
+    emitted = {wire for wire, _ in pairs}
+    renamed = {wire for wire, column in pairs if wire != column}
+    assert renamed == {"call_volume", "put_volume", "total_volume"}, (
+        "the endpoint's renames are the contract; if one changes, update the model too"
+    )
+    read_keys = set(re.findall(r"row\.([a-z0-9_]+)", flow))
+    assert read_keys <= emitted, (
+        f"the model reads keys the endpoint never sends: {read_keys - emitted}"
+    )
+    assert {"total_volume", "call_volume", "put_volume"} <= read_keys
+    fixture = read(Path(__file__).resolve().parent / "test_static_logic.py")
+    assert '"deep_otm_total_volume"' not in fixture, (
+        "a fixture written from the schema is how this drift hid: use the wire shape"
+    )
+
+
+def test_pass2_the_calibration_note_does_not_crowd_the_last_row() -> None:
+    """Fix #5: the frozen-note footnote sat directly under the tbody, so the last session
+    row and its caveat read as one crowded block. It is a `.panel-note` with its own
+    space and rule, after the table — and the scroll container keeps its last row clear
+    of the page footer."""
+    calib = read(STATIC / "calibration.js")
+    flow = calib.split("function renderFlow(")[1].split("function renderDistance(")[0]
+    assert 'class="panel-note"' in flow, "the closing note is a panel-note"
+    assert flow.index("</tbody></table>`;") < flow.index('<div class="panel-note"'), (
+        "and it comes after the table, so the last row is not sharing a line with it"
+    )
+    css = read(STATIC / "style.css")
+    assert ".panel-note" in css
+    assert "padding: 12px 14px 34px" in css, "and the scroll keeps clear of the footer"
+
+
+def test_pass2_the_type_scale_is_declared_once_and_used() -> None:
+    """Every font size on the page is a step in the scale declared at the top of the
+    stylesheet. That is the whole pass-2 typography invariant, and it is the one a later
+    edit breaks silently: a hard-coded 12px in one rule is invisible in review and
+    permanent in the file."""
+    css = read(STATIC / "style.css")
+    root = css.split(":root {")[1].split("\n}")[0]
+    steps = set(re.findall(r"(--fs-[a-z-]+):", root))
+    assert {"--fs-value", "--fs-head", "--fs-body", "--fs-label", "--fs-tick"} <= steps
+    used = set(re.findall(r"font-size:\s*var\((--fs-[a-z-]+)\)", css))
+    raw = re.findall(r"font-size:\s*(\d+(?:\.\d+)?)px", css)
+    assert not raw, f"a font size outside the scale: {sorted(set(raw))}"
+    assert used <= steps, f"undeclared scale steps in use: {sorted(used - steps)}"
+    assert "font: var(--fs-body)/1.5 var(--sans)" in css, "prose defaults to the UI sans"
+    assert ".num, td.num, th.num { font-family: var(--mono)" in css, (
+        "monospace is opt-in, on the figures and symbols that need to line up"
+    )
+
+
+def test_pass2_numeric_columns_line_up_and_dashes_are_one_class() -> None:
+    """Alignment is a per-column decision (`.r`), mono is mechanical (`.num`), and the
+    absence of a value looks the same wherever it appears (`.dash`)."""
+    ledger = read(STATIC / "ledger.js")
+    assert "column.num ? \"r\" : \"\"" in ledger, "a numeric column's header takes its alignment"
+    model = read(STATIC / "model.js")
+    assert '{ key: "conviction", label: "conv", sort: "conviction", num: true }' in model
+    css = read(STATIC / "style.css")
+    assert "td.dash, .dash { color: var(--fg-faint); }" in css, "one rule for every dash cell"
+    for page in ("calibration.js", "hunt.js", "arms.js", "ledger.js"):
+        text = read(STATIC / page)
+        assert 'num muted' not in text, f"{page} still styles a dash cell per-occurrence"
+
+
+def test_pass2_muted_text_meets_the_body_contrast_floor() -> None:
+    """The old faint ink measured 3.35:1 on the page background — below the 4.5:1 floor,
+    on the colour used by every label, dash and footnote. This pins the replacement and
+    re-measures it against all three backgrounds the muted text actually sits on."""
+    css = read(STATIC / "style.css")
+    faint = re.search(r"--fg-faint:\s*(#[0-9a-f]{6})", css).group(1)
+
+    def luminance(hex_color: str) -> float:
+        parts = [int(hex_color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+        parts = [p / 12.92 if p <= 0.03928 else ((p + 0.055) / 1.055) ** 2.4 for p in parts]
+        return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+
+    def ratio(fg: str, bg: str) -> float:
+        a, b = luminance(fg), luminance(bg)
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+    backgrounds = {
+        name: re.search(rf"--{name}:\s*(#[0-9a-f]{{6}})", css).group(1)
+        for name in ("bg", "bg-raised", "bg-sunken")
+    }
+    for name, bg in backgrounds.items():
+        assert ratio(faint, bg) >= 4.5, f"--fg-faint on --{name} is {ratio(faint, bg):.2f}:1"
+    dim = re.search(r"--fg-dim:\s*(#[0-9a-f]{6})", css).group(1)
+    for name, bg in backgrounds.items():
+        assert ratio(dim, bg) >= 4.5, f"--fg-dim on --{name} is {ratio(dim, bg):.2f}:1"
