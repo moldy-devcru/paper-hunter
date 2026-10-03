@@ -22,6 +22,7 @@ import pytest
 from executor.alpaca_client import AlpacaAPIError, Bar, BarSeries, OptionBarSeries
 from executor.black_scholes import black_scholes_price
 from executor.iv_backfill import (
+    DEFAULT_LADDER_RANGE_PCT,
     DEFAULT_RETRY_BASE_SECONDS,
     FEED_FLOOR,
     FORBIDDEN_COOLDOWN_SECONDS,
@@ -105,9 +106,24 @@ def test_select_expiry_on_a_friday_returns_today_for_arm_b():
 def test_ladder_is_symmetric_snapped_and_finite():
     ladder = ladder_strikes(SPOT)
     assert ladder == tuple(sorted(ladder))
-    assert abs(ladder[0] - (SPOT * 0.97)) <= 1.0
-    assert abs(ladder[-1] - (SPOT * 1.03)) <= 1.0
-    assert all(abs((s / SPOT - 1) * 100) <= 3.0001 for s in ladder)
+    assert abs(ladder[0] - (SPOT * (1 - DEFAULT_LADDER_RANGE_PCT / 100))) <= 1.0
+    assert abs(ladder[-1] - (SPOT * (1 + DEFAULT_LADDER_RANGE_PCT / 100))) <= 1.0
+    assert all(
+        abs((s / SPOT - 1) * 100) <= DEFAULT_LADDER_RANGE_PCT + 0.0001 for s in ladder
+    )
+
+
+def test_ladder_width_is_sized_to_the_gate_not_to_caution():
+    """The ladder exists to supply a FALLBACK strike, not to span the moneyness axis.
+
+    The gate reads nearest-to-spot, which on a $1 grid is under 0.1% from spot and therefore
+    always lands in bucket ``mny0.00``. So the honest width is "enough ATM strikes that one
+    missing bar does not end the session" — and this pins that a too-narrow ladder (one
+    strike, no fallback) is a refusal rather than a silently empty session.
+    """
+    assert len(ladder_strikes(SPOT)) >= 5, "need real fallback strikes, not one"
+    with pytest.raises(IvBackfillError, match="ladder would be empty"):
+        ladder_strikes(SPOT, strike_step=10_000.0)   # step wider than the range -> empty
 
 
 def test_ladder_rejects_impossible_parameters():
@@ -233,8 +249,8 @@ def test_vega_floor_does_not_eat_contracts_inside_the_default_ladder():
     (The guard biting on a genuinely collapsed contract is pinned in
     ``test_black_scholes.test_invert_bar_close_refuses_vega_collapse``.)
     """
-    plan = _plan(expiry=SESSION + dt.timedelta(days=10))   # 10 DTE, far edge of the ladder
-    far = 669.0
+    plan = _plan(expiry=SESSION + dt.timedelta(days=10))   # 10 DTE
+    far = max(ladder_strikes(SPOT))                       # far edge of the REAL ladder
     observations, report = observations_for_session(
         plan, _bars_for(plan, strike=far, vol=0.16), underlying="SPY"
     )

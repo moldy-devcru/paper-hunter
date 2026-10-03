@@ -360,12 +360,10 @@ def ladder_strikes(
     them — two ladders computed by two pieces of code is a class of bug where the strike you
     priced is not the strike you requested.
 
-    # INTERPRETATION: $1-wide is SPY's listed near-ATM spacing and 3% is the
-    reconstruction span, both *parameters*. A session with a $0.50 or $5 ladder would have
-    listed contracts this grid never asks for, and missing contracts mean the
-    nearest-to-spot reconstruction can be a few dollars off spot. Every run reports
-    requested-vs-returned coverage per session so the size of that error is visible instead
-    of assumed.
+    # INTERPRETATION: $1-wide is SPY's listed near-ATM spacing, and the width is sized to
+    # the GATE rather than to caution -- see DEFAULT_LADDER_RANGE_PCT for why that is 0.75%
+    # and not 3%. Both are *parameters*, and every run reports requested-vs-returned coverage
+    # per session so the size of any reconstruction error is visible instead of assumed.
     """
     if spot <= 0:
         raise IvBackfillError(f"spot must be > 0 to build a strike ladder, got {spot}")
@@ -380,6 +378,15 @@ def ladder_strikes(
     while strike <= high + 1e-9:
         out.append(round(strike, 4))
         strike += strike_step
+    if not out:
+        # A strike step wider than the range produces an empty ladder, and an empty ladder
+        # would flow through as a session with zero requested contracts -- reported as "this
+        # contract did not trade" when the truth is "we asked for nothing". Misconfiguration
+        # must not wear the costume of a market observation.
+        raise IvBackfillError(
+            f"strike step {strike_step} is wider than the {range_pct}% window around spot "
+            f"{spot}; the ladder would be empty. Narrow the step or widen the range."
+        )
     return tuple(out)
 
 
