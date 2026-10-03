@@ -30,8 +30,10 @@ import sqlite3
 import pytest
 import yaml
 from fixtures_synthetic import (
+    _chain,
     calendar_with,
     deep_itm_chain,
+    make_contract,
     series_from,
     synthetic_daily_payload,
 )
@@ -447,12 +449,49 @@ def test_non_veto_event_kind_does_not_veto(series, rules, session_day):
 # ---------------------------------------------------------------------------
 
 
+def _zero_dte_plus_deferred_chain(day: dt.date, spot: float):
+    """A chain with BOTH today's expiry and deferred ones.
+
+    FIX 2026-10-03 (review 4.2): the two arm-B IV tests below used to build
+    :func:`deep_itm_chain`, an arm-C chain whose every contract is 60-200 DTE out. That
+    only produced a rank while the gate read whatever tenor the chain happened to lead
+    with. Now that the gate reads the arm's OWN band, an arm-B test has to actually
+    contain a 0DTE contract — and to make the selection non-trivial, a deferred one
+    closer to spot than the 0DTE strike.
+    """
+    contracts = []
+    # Strikes descend as expiry extends, so the contract nearest spot is the 30-DTE one
+    # — outside arm C's 90-180 band and 90 days from the contract arm C actually buys.
+    # That is the shape that let the old whole-chain selector answer arm C's gate off a
+    # tenor arm C does not trade.
+    for dte, strike in ((0, spot + 4.0), (30, spot - 1.0), (120, spot - 3.0)):
+        exp = (day + dt.timedelta(days=dte)).strftime("%Y%m%d")
+        contracts.append(
+            make_contract(
+                symbol=f"SPY{exp}C{int(strike * 1000):08d}",
+                underlying="SPY",
+                expiry=exp,
+                strike=strike,
+                right="call",
+                ask=1.20,
+                iv=0.18,
+            )
+        )
+    return _chain("SPY", contracts)
+
+
 def test_iv_rank_from_the_store_satisfies_t5_for_arm_b(tmp_path, series, rules, session_day,
                                                         spot):
     store = IvRankStore.open(tmp_path / "ivrank.db", min_observations=5)
 
-    chain = deep_itm_chain(day=session_day, spot=spot)
-    contract = min(chain.contracts, key=lambda c: abs(c.strike - spot))
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    # Arm B's gate reads the 0DTE band, so the contract whose key gets seeded is the
+    # 0DTE one — not the deferred strikes that sit closer to spot.
+    contract = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=0, dte_max=0
+    )
+    assert contract is not None
+    assert contract.implied_volatility is not None
     # RULED 2026-10-03 (R4): T5 reads the ROLLING DTE-keyed series, so the fixture
     # must seed the series the plan will actually look up. Seeding via the production
     # helper rather than re-deriving the key is deliberate: this test previously seeded
@@ -495,7 +534,7 @@ def test_iv_rank_from_the_store_satisfies_t5_for_arm_b(tmp_path, series, rules, 
 
 def test_iv_rank_warmup_surfaces_its_own_reason(tmp_path, series, rules, session_day, spot):
     store = IvRankStore.open(tmp_path / "ivrank.db")
-    chain = deep_itm_chain(day=session_day, spot=spot)
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
     plan = build_hunt_plan(
         data=StaticMarketData(series=series, chain=chain),
         rules=rules,
@@ -658,3 +697,142 @@ def test_summarise_mentions_every_cell(series, rules, session_day):
     for arm in ACTIVE_ARMS:
         for direction in DIRECTIONS:
             assert f"{arm}/{direction}" in text
+
+# ---------------------------------------------------------------------------
+# T5 reads the arm's OWN traded tenor (outsider review 4.2)
+# ---------------------------------------------------------------------------
+
+
+def test_the_iv_gate_reads_the_traded_tenor_not_whatever_the_chain_leads_with(
+    rules, series, session_day, spot
+):
+    """The regression: a chain whose NEAREST-TO-SPOT contract is a 30-DTE call.
+
+    Before the fix, the selector was ``min(pool, key=|strike - spot|)`` over every
+    expiry, so this chain answered arm C's gate with a 30-DTE contract — 90 days short of
+    the 90-180 DTE contract arm C actually buys. The brief's T5 is explicit that arm C's
+    gate reads "IV on the chosen strike", i.e. the traded tenor.
+    """
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    nearest_overall = min(
+        chain.contracts, key=lambda c: abs(c.strike - spot)
+    )
+    assert _dte(nearest_overall, session_day) == 30, (
+        "fixture must lead with a contract OUTSIDE arm C's band"
+    )
+
+    arm_c = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day,
+        dte_min=rules.arms.C.entry.dte.min, dte_max=rules.arms.C.entry.dte.max,
+    )
+    assert arm_c is not None
+    assert arm_c is not nearest_overall
+    assert 90 <= _dte(arm_c, session_day) <= 180
+
+
+def test_arm_b_and_arm_c_iv_gates_read_different_tenors_on_the_same_chain(
+    rules, series, session_day, spot
+):
+    """Both arms gate on IV from the same chain object. Before the fix they also read
+    the SAME contract, which is the whole bug: arm B trades 0DTE and arm C trades
+    90-180 DTE, and one IV number cannot speak for both."""
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    arm_b = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=rules.arms.B.entry.dte,
+        dte_max=rules.arms.B.entry.dte,
+    )
+    arm_c = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day,
+        dte_min=rules.arms.C.entry.dte.min, dte_max=rules.arms.C.entry.dte.max,
+    )
+    assert arm_b is not None and arm_c is not None
+    assert arm_b is not arm_c
+    assert _dte(arm_b, session_day) == 0
+    assert 90 <= _dte(arm_c, session_day) <= 180
+
+
+def test_the_iv_gate_reports_no_source_when_the_chain_has_nothing_in_band(
+    rules, series, session_day, spot
+):
+    """A chain with no 0DTE contract cannot score arm B's 0DTE gate.
+
+    The strict reading: report ``no_source`` (T5 PENDING, no trade) rather than fall
+    back to some other expiry. Falling back IS the bug — it is what let a 0DTE gate be
+    satisfied by a 30-DTE reading.
+    """
+    chain = deep_itm_chain(day=session_day, spot=spot)  # every contract 60-200 DTE out
+    assert hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=0, dte_max=0
+    ) is None
+    rank, provenance = hunt_plan._iv_rank_for_direction(
+        chain, _stub_store(), spot, "call", session_day, dte_min=0, dte_max=0
+    )
+    assert rank is None
+    assert provenance["status"] == "no_source"
+    assert provenance["dte_band"] == "0-0"
+
+
+def test_the_iv_gate_ignores_the_other_direction_and_unparseable_expiries(
+    rules, session_day, spot
+):
+    """Right-filtering survives, and an unparseable expiry cannot sneak into a band."""
+    exp = (session_day + dt.timedelta(days=120)).strftime("%Y%m%d")
+    bad = make_contract(
+        symbol="SPYBAD", underlying="SPY", expiry="not-a-date", strike=spot,
+        right="call", ask=1.0,
+    )
+    chain = _chain(
+        "SPY",
+        [
+            bad,
+            make_contract(symbol="SPYPUTC", underlying="SPY", expiry=exp,
+                          strike=spot, right="put", ask=1.0),
+            make_contract(symbol="SPYC", underlying="SPY", expiry=exp,
+                          strike=spot, right="call", ask=1.0),
+        ],
+    )
+    picked = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=90, dte_max=180
+    )
+    assert picked is not None and picked.symbol == "SPYC"
+
+
+def test_the_iv_provenance_names_the_tenor_that_answered(tmp_path, series, rules,
+                                                         session_day, spot):
+    """A rank is only interpretable next to the series and tenor that produced it."""
+    store = IvRankStore.open(tmp_path / "ivrank.db", min_observations=5)
+    chain = _zero_dte_plus_deferred_chain(session_day, spot)
+    contract = hunt_plan._iv_contract_for_arm(
+        chain, spot, "call", session_day, dte_min=90, dte_max=180
+    )
+    assert contract is not None and contract.implied_volatility is not None
+    tenor = hunt_plan._tenor_key_for(
+        contract, session_day,
+        mode=rules.checklist.t5_options_chain.tenor_key_mode,
+        dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+    )
+    for i in range(6):
+        store.record(underlying="SPY", as_of=(session_day - dt.timedelta(days=i)).isoformat(),
+                     tenor=tenor, iv=(contract.implied_volatility or 0.18) - 0.01 * (i + 1),
+                     source="alpaca_chain")
+    plan = build_hunt_plan(
+        data=StaticMarketData(series=series, chain=chain),
+        rules=rules, day=session_day, iv_store=store, spot=spot,
+    )
+    prov = plan.cell("C", "call").snapshot_dict["iv_rank_provenance"]
+    assert prov["status"] == "ok", prov
+    assert prov["iv_expiry"] == contract.expiry
+    assert prov["iv_dte"] == _dte(contract, session_day)
+    assert prov["iv_dte_band"] == "90-180"
+    store.close()
+
+
+def _dte(contract, day: dt.date) -> int:
+    return (dt.datetime.strptime(contract.expiry, "%Y%m%d").date() - day).days
+
+
+class _stub_store:
+    """Enough store surface for the selection paths that never reach a lookup."""
+
+    def iv_rank(self, *a, **k):  # pragma: no cover - must not be called
+        raise AssertionError("no_source must be decided before any store lookup")

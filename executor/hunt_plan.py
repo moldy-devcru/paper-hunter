@@ -655,8 +655,62 @@ def _watch_levels(
     )
 
 
-def _atm_for_right(chain: OptionChain, spot: float, right: str) -> OptionContract | None:
-    pool = [c for c in chain.contracts if c.right == right]
+def _dte_of(contract: OptionContract, day: dt.date) -> int | None:
+    """Calendar days from ``day`` to the contract's expiry, or ``None`` if unparseable.
+
+    Same reading as ``noshot._dte``: the session date, never ``datetime.now()``.
+    """
+    if not contract.expiry:
+        return None
+    try:
+        return max((dt.datetime.strptime(contract.expiry, "%Y%m%d").date() - day).days, 0)
+    except ValueError:
+        return None
+
+
+def _iv_contract_for_arm(
+    chain: OptionChain,
+    spot: float,
+    right: str,
+    day: dt.date,
+    *,
+    dte_min: int,
+    dte_max: int,
+) -> OptionContract | None:
+    """The contract arm ``X``'s IV gate should read: nearest-to-spot INSIDE its DTE band.
+
+    FIX 2026-10-03 (outsider review 4.2). This replaces a whole-chain, no-DTE-filter
+    nearest-strike search (review finding F13), which made both arms read front-month
+    regardless of what they were about to trade.
+
+    Why it matters for arm C specifically. ``docs/brief.md`` T5 says the IV gate for
+    arm C is "IV on the **chosen strike** within normal band" — the chosen strike being
+    the 90-180 DTE, delta>=0.80 deep-ITM call from ``arms.C.entry.dte``. The code
+    instead picked the strike nearest spot across every expiry in the chain, which for a
+    real SPY chain is a front-month contract a quarter of a year away from the one arm C
+    would buy. So arm C's "IV is normal" evidence was being read off an instrument it
+    was not trading: a 130-DTE contract's IV regime is not a 0DTE's, and the gate
+    exists precisely to refuse hostile IV *for the position being taken*.
+
+    The band is the rulebook's own ``arms.X.entry.dte`` (arm B: 0; arm C: 90-180),
+    passed in rather than hard-coded here, so the plan cannot drift from the rulebook
+    or from the live selectors in ``watch_loop``. Within the band the nearest-to-spot
+    contract is chosen, matching the selection the EOD soak accumulates
+    (``soak.py`` records one ATM contract per expiry) — so the gate reads a series that
+    can actually warm up, instead of a deep-ITM strike bucket nothing has ever written.
+
+    ``None`` means the chain has no contract of that right inside the band, and T5
+    reports ``no_source`` rather than falling back to a tenor the arm does not trade.
+    Falling back is the bug this fixes.
+    """
+    pool: list[OptionContract] = []
+    for contract in chain.contracts:
+        if contract.right != right:
+            continue
+        dte = _dte_of(contract, day)
+        if dte is None or not (dte_min <= dte <= dte_max):
+            continue
+        pool.append(contract)
     if not pool:
         return None
     return min(pool, key=lambda c: abs(c.strike - spot))
@@ -712,14 +766,22 @@ def _iv_rank_for_direction(
     direction: Direction,
     day: dt.date,
     *,
+    dte_min: int,
+    dte_max: int,
     tenor_key_mode: str = "rolling_dte",
     dte_bucket_days: int = 7,
 ) -> tuple[float | None, dict[str, Any]]:
-    """IV rank for the direction's ATM tenor, via the injected store.
+    """IV rank for THIS ARM's traded tenor, via the injected store.
 
     Returns ``(rank_or_None, provenance)``. The provenance is kept even when the rank
     is undefined: "warmup" with 12 observations and "no history" are different facts
     and the journal should show which one blocked T5.
+
+    ``dte_min``/``dte_max`` are the calling arm's rulebook DTE band (FIX 2026-10-03,
+    outsider review 4.2): arm B reads its 0DTE contract, arm C reads a contract inside
+    its 90-180 DTE band. They are required keywords rather than defaulted, so a new
+    call site has to say which tenor it means instead of inheriting "whichever expiry
+    the API listed first".
     """
     if chain is None or store is None:
         reason = (
@@ -728,11 +790,19 @@ def _iv_rank_for_direction(
         return None, {"status": "no_source", "reason": reason}
     if spot is None:
         return None, {"status": "no_source", "reason": "no spot for ATM tenor selection"}
-    contract = _atm_for_right(chain, spot, direction)
+    contract = _iv_contract_for_arm(
+        chain, spot, direction, day, dte_min=dte_min, dte_max=dte_max
+    )
+    band = f"{dte_min}-{dte_max}"
     if contract is None:
         return None, {
             "status": "no_source",
-            "reason": f"chain carries no {direction} contracts",
+            "reason": (
+                f"chain carries no {direction} contracts inside the {band} DTE band — "
+                "the IV gate reads the arm's traded tenor only, so it reports no source "
+                "rather than scoring a tenor this arm does not buy"
+            ),
+            "dte_band": band,
         }
     if contract.implied_volatility is None:
         return None, {
@@ -752,6 +822,13 @@ def _iv_rank_for_direction(
     payload = result.to_dict()
     payload["contract"] = contract.symbol
     payload["current_iv"] = contract.implied_volatility
+    # FIX 2026-10-03 (outsider review 4.2): record WHICH tenor answered — the expiry and
+    # the arm's band, not just the symbol. A rank of 31 for arm C is only interpretable
+    # next to "read off a 121-DTE call", because before this fix the same code could
+    # return that number off a 7-DTE call and nothing in the journal would say so.
+    payload["iv_dte_band"] = band
+    payload["iv_expiry"] = contract.expiry
+    payload["iv_dte"] = _dte_of(contract, day)
     # Recorded so the journal says WHICH series answered, not just what it returned.
     # Under R4 the two modes are a live switch, so a rank of 31 is only interpretable
     # next to the key that produced it.
@@ -916,6 +993,16 @@ def build_hunt_plan(
                 )
 
             extra_notes: list[str] = []
+            # FIX 2026-10-03 (outsider review 4.2): the IV gate reads each arm's OWN
+            # traded tenor, taken from the rulebook's entry DTE band (arm B: 0, arm C:
+            # 90-180) so the plan cannot drift from the rulebook. Before this, both arms
+            # read the nearest-strike contract across the whole chain — front-month for
+            # arm C, whose actual trade is a 90-180 DTE contract.
+            if arm == "B":
+                iv_dte_min = iv_dte_max = rules.arms.B.entry.dte
+            else:
+                iv_dte_min = rules.arms.C.entry.dte.min
+                iv_dte_max = rules.arms.C.entry.dte.max
             # Both arms now read an IV rank. Arm C used to be skipped here because its
             # T5 gate was calibration_pending and scoring a rank would imply a threshold
             # that did not exist; the 2026-10-02 ruling gave it a real ceiling (< 50, same
@@ -926,6 +1013,8 @@ def build_hunt_plan(
                 spot,
                 direction,
                 day,
+                dte_min=iv_dte_min,
+                dte_max=iv_dte_max,
                 tenor_key_mode=rules.checklist.t5_options_chain.tenor_key_mode,
                 dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
             )
