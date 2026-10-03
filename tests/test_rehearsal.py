@@ -85,6 +85,26 @@ def test_the_no_shot_ledger_is_written_for_the_near_miss(rehearsal_run) -> None:
     assert all(row["counterfactual_entry_ref"] is not None for row in rows)
 
 
+def test_the_eod_stage_runs_the_shipped_cli_offline(rehearsal_run) -> None:
+    """The EOD pass is executed, not replayed (rehearsal finding §3 item 9)."""
+    r, _workdir = rehearsal_run
+    eod = _stage(r, "eod")
+    assert {s["cli"] for s in eod.detail["sessions"].values()} == {"eod --offline"}
+
+
+def test_a_traded_cell_is_never_recorded_as_a_skip(rehearsal_run) -> None:
+    """The rehearsal's whole reason for existing here (§3 item 8).
+
+    The shot session saw the setups and traded. If the ledger still holds a row for the
+    traded cell, a reader cannot tell a trade from a skip.
+    """
+    r, _workdir = rehearsal_run
+    shot = _stage(r, "eod").detail["sessions"]["shot"]
+    assert shot["taken"], "the shot session traded nothing, so the case is unproven"
+    row_keys = {f"{row['arm']}/{row['direction']}" for row in shot["rows"]}
+    assert not set(shot["taken"]) & row_keys
+
+
 def test_exits_and_the_roll_ladder_both_fire(rehearsal_run) -> None:
     r, _workdir = rehearsal_run
     exits = _stage(r, "exits+roll")

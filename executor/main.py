@@ -54,6 +54,7 @@ import datetime as dt
 import hashlib
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ from executor.position_manager import (
     MemoryJournalSink,
     PositionManager,
     SqliteJournalSink,
+    eastern,
     iso_ts,
     to_et,
 )
@@ -83,6 +85,12 @@ PLAN_DIR = Path("data/plans")
 
 #: T6 input policies shared by `hunt-plan` and `watch` (see executor/flow_gate.py).
 FLOW_GATE_POLICIES = ("none", "last-confirmed")
+
+#: The session open, ET. A decision journaled before it is the pre-market plan's; one
+#: at or after it is intraday machinery (the watch loop's re-verifications, entries,
+#: exits). Used to pick the plan row each counterfactual links to — see
+#: :func:`_plan_decision_ids`.
+PLAN_CUTOFF_ET = dt.time(9, 30)
 
 
 class CliError(RuntimeError):
@@ -297,6 +305,25 @@ def build_parser() -> argparse.ArgumentParser:
     eod_cmd = sub.add_parser("eod", help="end of day: mark, enforce, journal, NO-SHOTs")
     eod_cmd.add_argument("--plan", default=None)
     eod_cmd.add_argument("--date", default=None)
+    eod_cmd.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "run the EOD pass against a fixture transport instead of the network: no "
+            "credential, no request, same parsing and same failures. Reads the day's "
+            "bars and the option chain from --offline-fixture"
+        ),
+    )
+    eod_cmd.add_argument(
+        "--offline-fixture",
+        default=None,
+        help=(
+            "JSON file of {request path: payload} (or {\"routes\": {...}}), shaped like "
+            "Alpaca's documented responses: /v2/stocks/SPY/bars as a flat 'bars' list "
+            "and /v1beta1/options/snapshots/SPY as a symbol-keyed 'snapshots' object. "
+            "Required by --offline; an unrouted request raises 404 like the real API"
+        ),
+    )
     return parser
 
 
@@ -581,9 +608,9 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
     plan_path = Path(args.plan) if args.plan else PLAN_DIR / f"{day.isoformat()}.json"
     plan = load_plan_file(plan_path) if plan_path.exists() else None
 
-    from executor.alpaca_client import AlpacaClient
-
-    client = AlpacaClient.from_env()
+    client = _eod_client(args)
+    if args.offline:
+        print("OFFLINE: market data comes from the fixture transport; nothing was fetched")
     daily = client.get_daily_bars(rules.strategy.symbol, feed="sip", limit=400)
     chain = client.get_option_chain(rules.strategy.symbol)
     session_bar = _session_bar(daily, day)
@@ -595,7 +622,9 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
     print(f"{day}: close-vs-50EMA streak = {streak} (50EMA={ema_now})")
 
     # 2. positions + marks
-    positions = client.get_positions() if not args.dry_run else []
+    positions = (
+        client.get_positions() if (not args.dry_run and not args.offline) else []
+    )
     for position in positions:
         print(
             f"position {position.symbol} qty={position.qty} "
@@ -603,17 +632,61 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
         )
 
     # 3. NO-SHOTs from the plan
+    #
+    # FIX 2026-10-03 (full-cycle rehearsal §3 items 8/9): the EOD pass now passes both
+    # `taken` and `decision_ids` to ``build_noshots``. Without `taken`, a session that
+    # both saw the setup AND traded still wrote a row worded as a skip; without
+    # `decision_ids` every row landed with counterfactual_entry_ref = NULL, severing
+    # the link between a counterfactual and the decision that produced it. Both facts
+    # are read out of the journal itself — the ledger cannot claim a skip when the
+    # journal records the trade.
     drafts: list[Any] = []
+    taken: list[tuple[str, str]] = []
+    decision_ids: dict[tuple[str, str], int] = {}
     if plan is not None and conn is not None:
+        session_decisions = _session_decisions(conn, day)
+        taken_keys, unmapped = _taken_keys(session_decisions)
+        taken = sorted(taken_keys)
+        decision_ids = _plan_decision_ids(plan, session_decisions, day)
+        print(
+            f"session journal: {len(session_decisions)} decision(s); traded "
+            f"{sorted(f'{a}/{d}' for a, d in taken) or 'nothing'}; plan rows linked "
+            f"{len(decision_ids)}/{len(plan.arms)}"
+        )
+        for row in unmapped:
+            print(
+                f"warning: TRADE decision {row} could not be mapped to an "
+                "(arm, direction) key — its cell is treated as NOT taken, so a cell "
+                "that traded can still be recorded as a skip",
+                file=sys.stderr,
+            )
         drafts = build_noshots(
             plan,
             setup_bar=session_bar,
             chain=chain,
             rules=rules,
+            taken=taken,
+            decision_ids=decision_ids,
             ts=iso_ts(now),
         )
         ids = write_noshots(conn, drafts)
         print(f"wrote {len(ids)} NO-SHOT row(s): {ids}")
+        # INTERPRETATION: a sighting whose plan row is missing from the journal is still
+        # written — it is real evidence that the setup was sighted — but it is reported
+        # loudly, because an unattributed counterfactual cannot be traced back to the
+        # decision that produced it. Refusing the row instead would delete a genuine
+        # sighting over a bookkeeping gap, which is the worse failure for a ledger whose
+        # job is to record what was *not* done.
+        unlinked = [
+            f"{d.arm}/{d.direction}" for d in drafts if d.decision_ref is None
+        ]
+        if unlinked:
+            print(
+                f"warning: counterfactual(s) with no decision link: {unlinked} — no "
+                "pre-market plan row was journaled for those cells, so these rows land "
+                "with counterfactual_entry_ref = NULL and cannot be attributed",
+                file=sys.stderr,
+            )
 
     # 4. journal close
     if conn is not None:
@@ -633,10 +706,16 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
                     "phase": "eod_close",
                     "positions": [p.__dict__ for p in positions],
                     "noshots": len(drafts),
+                    "taken": [f"{arm}/{direction}" for arm, direction in taken],
                 },
                 reasoning=(
                     f"EOD close for {day}: marked positions, streak "
                     f"{streak} close(es) below 50EMA, NO-SHOTs written"
+                    + (
+                        f"; traded {[f'{a}/{d}' for a, d in taken]}"
+                        if taken
+                        else "; nothing traded"
+                    )
                 ),
                 strategy_version=rules.strategy_version,
                 symbol=rules.strategy.symbol,
@@ -645,6 +724,139 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
         set_meta(conn, "last_eod", {"date": day.isoformat(), "streak": streak})
         print("journal closed for the day")
     return 0
+
+
+def _eod_client(args: argparse.Namespace) -> Any:
+    """The EOD pass's market-data client: live, or a fixture transport offline.
+
+    # INTERPRETATION: ``--offline`` is a *transport* swap, not a second code path. The
+    offline client is a real :class:`~executor.alpaca_client.AlpacaClient` over
+    :class:`~executor.alpaca_client.MockTransport`, so the same parsing, the same
+    doc-verified query-parameter contract and the same failure modes run — including
+    the 404 an absent fixture route raises, which is the whole point of running the
+    real CLI offline rather than replaying its steps. Credentials are placeholders and
+    are never sent anywhere.
+    """
+    from executor.alpaca_client import AlpacaClient
+
+    if not args.offline:
+        return AlpacaClient.from_env()
+
+    path = getattr(args, "offline_fixture", None)
+    if not path:
+        raise CliError(
+            "--offline needs --offline-fixture <file.json>: a JSON object mapping "
+            "Alpaca request paths to canned payloads (or {\"routes\": {...}}), shaped "
+            "like the documented responses — /v2/stocks/SPY/bars (flat 'bars' list) "
+            "and /v1beta1/options/snapshots/SPY (symbol-keyed 'snapshots'). No fixture "
+            "means no data, and a silent empty series would produce a streak of 0."
+        )
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    routes = raw.get("routes", raw) if isinstance(raw, dict) else None
+    if not isinstance(routes, dict):
+        raise CliError(f"{path}: expected a JSON object of request path -> payload")
+
+    from executor.alpaca_client import MockTransport
+
+    return AlpacaClient(
+        transport=MockTransport(routes), key="offline-fixture", secret="offline-fixture"
+    )
+
+
+def _et_tz(day: dt.date) -> dt.tzinfo:
+    """The ET zone for ``day`` — DST-correct, because the plan cutoff is a wall clock."""
+    return eastern(dt.datetime.combine(day, dt.time(12, 0), tzinfo=dt.UTC))
+
+
+def _et_date(ts: str) -> dt.date | None:
+    """The ET session date of a decision's UTC timestamp, or ``None`` if unparseable."""
+    try:
+        moment = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return to_et(moment).date() if moment.tzinfo is not None else None
+
+
+def _session_decisions(conn: Any, day: dt.date) -> list[Any]:
+    """Every journal decision written on the ET session ``day``, in journal order."""
+    from journal.store import list_decisions
+
+    return [entry for entry in list_decisions(conn) if _et_date(entry.ts) == day]
+
+
+def _occ_right(symbol: str | None) -> str | None:
+    """``"C"``/``"P"`` parsed out of an OCC contract symbol, or ``None``.
+
+    OCC 2024-01: 1–6 char root, 6-digit ``YYMMDD``, ``C``/``P``, 8-digit strike. The
+    strike and the date are checked as digits so an equity ticker (which has no right
+    letter) returns ``None`` rather than a letter from the middle of a name.
+    """
+    if not symbol or len(symbol) < 17:
+        return None
+    right, expiry, strike = symbol[-9], symbol[-15:-9], symbol[-8:]
+    if right in ("C", "P") and expiry.isdigit() and strike.isdigit():
+        return right
+    return None
+
+
+def _taken_keys(decisions: Sequence[Any]) -> tuple[set[tuple[str, str]], list[str]]:
+    """``(arm, direction)`` keys that ended up with a position, plus unmappable rows.
+
+    Read from the journal's own TRADE rows — the ledger's record of truth — rather than
+    from broker positions, because a position opened and closed inside the session is a
+    trade the broker no longer reports and the NO-SHOT cell still must not be recorded
+    as a skip. :class:`~executor.alpaca_trading` writes one TRADE decision per routed
+    entry action, live and dry.
+
+    # INTERPRETATION: the direction comes from the contract's OCC right, so arm B's put
+    cell and call cell are told apart by what was actually bought. Arm C is a long-call
+    arm in this rulebook, so a ``P`` there would be a rulebook violation rather than a
+    parsing problem — it is mapped as a put and shows up as a cell key no plan carries,
+    which is visible rather than silently folded into the call cell.
+    """
+    taken: set[tuple[str, str]] = set()
+    unmapped: list[str] = []
+    for entry in decisions:
+        if entry.kind != "TRADE" or entry.arm not in ("B", "C"):
+            continue
+        right = _occ_right(entry.symbol)
+        if right is None:
+            unmapped.append(f"#{entry.id} {entry.arm} {entry.symbol or '<no symbol>'}")
+            continue
+        taken.add((entry.arm, "put" if right == "P" else "call"))
+    return taken, unmapped
+
+
+def _plan_decision_ids(
+    plan: HuntPlan, decisions: Sequence[Any], day: dt.date
+) -> dict[tuple[str, str], int]:
+    """``{(arm, direction): decision_id}`` for the plan rows this session ran on.
+
+    Each counterfactual links to the decision that produced it, so this has to pick the
+    *plan* row and not any other row for the same cell: the watch loop journals its own
+    NO_TRADE / PROPOSAL / VETO rows for the same ``(arm, direction)`` intraday.
+
+    # INTERPRETATION: the pre-market plan is what runs before the session open, so a
+    decision journaled at or after 09:30 ET is intraday machinery and is skipped. The
+    newest pre-open row for a cell wins, because a plan rewritten before the open
+    supersedes the one it replaced — and it is still the decision the day's execution
+    was actually taken against.
+    """
+    cutoff = dt.datetime.combine(day, PLAN_CUTOFF_ET, tzinfo=_et_tz(day))
+    ids: dict[tuple[str, str], int] = {}
+    for cell in plan.arms:
+        best: int | None = None
+        for entry in decisions:
+            if entry.arm != cell.arm or entry.kind != cell.decision_kind or entry.id is None:
+                continue
+            moment = dt.datetime.fromisoformat(entry.ts.replace("Z", "+00:00"))
+            if moment >= cutoff:
+                continue
+            if best is None or entry.id > best:
+                best = entry.id
+        if best is not None:
+            ids[cell.key] = best
+    return ids
 
 
 def _session_bar(daily: BarSeries, day: dt.date) -> Any:
@@ -692,6 +904,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if getattr(args, "offline", False) and not args.dry_run:
+            raise CliError(
+                "--offline cannot be combined with --live: offline mode reads fixtures "
+                "and journals locally; it never routes an order"
+            )
         if not args.dry_run:
             # Fail fast on a missing credential before any work happens. The refusal
             # names the variable, never its value, and happens before a single bar is

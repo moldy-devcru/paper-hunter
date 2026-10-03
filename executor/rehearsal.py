@@ -21,18 +21,22 @@ every stage the daily cron trio touches, in order, in one process:
    the entry governor passes, the router records the action and sends nothing.
 9. **exits + roll** — arm B's profit take and hard close on the open position, and arm
    C's roll ladder with a supplied replacement leg.
-10. **eod + soak** — the EOD pass for the shot session (streak, NO-SHOTs with the taken
-    cell marked, journal close) and one soak pass that writes a ``flow_baseline`` row and
-    IV observations into the temp journal.
+10. **eod + soak** — the EOD pass for both sessions, run as the **real CLI**
+    (`executor.main.main(["eod", "--offline", ...])`) against a fixture transport: streak,
+    the NO-SHOT ledger with the traded cell excluded and every counterfactual linked to
+    its plan decision, and the journal close. Then one soak pass that writes a
+    ``flow_baseline`` row and IV observations into the temp journal.
 11. **analysis** — shadow-roll open/mark, the scorecard, and the weekly rollup.
 12. **integrity** — assert what must be true at the end: no orders sent, no network, no
     writes outside the temp dir, the journal's append-only counters intact.
 
 Design constraints, all load-bearing:
 
-* **Zero network.** Every read comes from a fixture object in this module or from a
-  temp copy of a deployed file. No Alpaca client is constructed, no credential is read,
-  and the only router used is :class:`~executor.watch_loop.DryRunRouter`.
+* **Zero network.** Every read comes from a fixture object in this module, from a temp
+  copy of a deployed file, or — for the EOD stage — from a
+  :class:`~executor.alpaca_client.MockTransport` built from a fixture file. No credential
+  is ever read, no socket is opened (``socket.connect`` is patched to raise), and the only
+  router used is :class:`~executor.watch_loop.DryRunRouter`.
 * **Zero writes under ``/opt`` (or anywhere else that matters).** Deployed files are
   opened read-only and copied into the temp dir; the journal, the IV store and the plan
   files are all created there.
@@ -83,7 +87,6 @@ from executor.hunt_plan import (
     write_hunt_plan,
 )
 from executor.iv_rank import IvRankStore, tenor_key
-from executor.noshot import build_noshots, write_noshots
 from executor.position_manager import (
     ArmState,
     ManagedPosition,
@@ -1654,18 +1657,105 @@ def _session_series(
     )
 
 
-def stage_eod(r: Rehearsal, st: Stage) -> None:
-    """The EOD pass, offline, for BOTH sessions.
+def _offline_routes(series: BarSeries, chain: OptionChain) -> dict[str, Any]:
+    """The two routes ``cmd_eod`` reads, in Alpaca's documented wire shapes.
 
-    ``cmd_eod`` in the CLI builds a real ``AlpacaClient`` at the top, so it cannot be run
-    in a rehearsal at all; the steps it performs are replayed here against the fixture
-    world, and the gaps it has are demonstrated rather than assumed (see findings).
+    FIX 2026-10-03 (rehearsal §3 item 9): with ``--offline`` the EOD CLI is driven
+    through :class:`~executor.alpaca_client.MockTransport`, which enforces the
+    doc-verified query-parameter contract per route — so a fixture that drifts from the
+    API fails here instead of quietly passing a rehearsal.
     """
-    from executor.main import _ema50_streak, _session_bar
+    from executor.alpaca_client import OPTIONS_SNAPSHOTS_PATH, stock_bars_path
+
+    return {
+        stock_bars_path(series.symbol): {
+            "symbol": series.symbol,
+            "feed": series.feed,
+            "bars": [
+                {
+                    "t": b.t.isoformat().replace("+00:00", "Z"),
+                    "o": b.o,
+                    "h": b.h,
+                    "l": b.l,
+                    "c": b.c,
+                    "v": b.v,
+                    "n": b.n,
+                    "vw": b.vw,
+                }
+                for b in series.bars
+            ],
+            "next_page_token": None,
+        },
+        f"{OPTIONS_SNAPSHOTS_PATH}/{series.symbol}": {
+            "snapshots": {
+                c.symbol: {
+                    "impliedVolatility": c.implied_volatility,
+                    "greeks": {"delta": c.greeks.delta},
+                    # Alpaca's quote keys are bp/ap, not bid/ask.
+                    "latestQuote": {"bp": c.latest_quote.bid, "ap": c.latest_quote.ask},
+                    "latestTrade": {"p": c.latest_trade.p},
+                }
+                for c in chain.contracts
+            },
+            "next_page_token": None,
+        },
+    }
+
+
+def _entry_journal_row(r: Rehearsal, key: str) -> dict[str, Any]:
+    """The TRADE row the live path would have written for this session's entry.
+
+    :class:`~executor.position_manager.SqliteJournalSink` writes one TRADE decision per
+    routed entry action. The watch stage runs on a
+    :class:`~executor.position_manager.MemoryJournalSink` because it is testing the loop,
+    not the journal — but ``cmd_eod`` now reads ``taken`` off the journal's own TRADE
+    rows, so a rehearsal that drives the real CLI has to put the trade where production
+    puts it. Otherwise the EOD stage would be proving a session in which nothing traded.
+    """
+    plan = r.plans[key]["plan"]
+    arm, direction = r.plans[key]["taken"][0]
+    contract = r.plans[key]["contract"]
+    stamp = (
+        dt.datetime.combine(plan.day, dt.time(11, 0), tzinfo=UTC)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+    return {
+        "ts": stamp,
+        "arm": arm,
+        "kind": "TRADE",
+        "checklist_snapshot": {"indicators": {}, "rehearsal": True},
+        "checklist_state": {
+            "phase": "watch_entry",
+            "direction": direction,
+            "contract": contract,
+        },
+        "reasoning": (
+            f"rehearsal: the watch loop's reclaim took {contract} for cell "
+            f"{arm}/{direction}; journaled here so the EOD pass reads a real trade"
+        ),
+        "strategy_version": plan.strategy_version,
+        "symbol": contract,
+    }
+
+
+def stage_eod(r: Rehearsal, st: Stage) -> None:
+    """The EOD pass for BOTH sessions — the real CLI, offline, via ``--offline``.
+
+    FIX 2026-10-03 (rehearsal §3 items 8 and 9): this stage used to replay ``cmd_eod``'s
+    steps against the fixture world, because the command built a live ``AlpacaClient``
+    unconditionally and could not be run at all offline. It now runs
+    ``executor.main.main(["eod", "--offline", ...])`` against a fixture transport, so the
+    pass that writes the ledger is the shipped one — including ``taken`` and
+    ``decision_ids``, which is what this stage is the regression test for.
+    """
+    from executor.main import _ema50_streak, _session_bar, write_plan_file
+    from executor.main import main as cli_main
 
     w = _world(r)
     sessions: dict[str, Any] = {}
     written_total = 0
+    rules_path = r.workdir / "rules.rehearsal.json"
     for key in ("noshot", "shot"):
         entry = r.plans[key]
         plan = entry["plan"]
@@ -1676,73 +1766,65 @@ def stage_eod(r: Rehearsal, st: Stage) -> None:
             else _session_series(w["quiet"], day, final_return=-0.002, volume_mult=0.9)
         )
         session_bar = _session_bar(series, day)
-        streak, ema = _ema50_streak(series, day)
         chain = zero_dte_chain(day=day, spot=session_bar.c if session_bar else w["spot"])
         taken = entry["taken"]
-        drafts = build_noshots(
-            plan,
-            setup_bar=session_bar,
-            chain=chain,
-            rules=r.rules,
-            taken=taken,
-            ts=f"{day.isoformat()}T21:05:00Z",
-            decision_ids=entry["ids"],
+        if taken:
+            append_decision(r.conn, DecisionEntry(**_entry_journal_row(r, key)))
+
+        plan_path = write_plan_file(plan, r.workdir / f"plan-{day.isoformat()}.json")
+        fixture = r.workdir / f"eod-fixture-{day.isoformat()}.json"
+        fixture.write_text(
+            json.dumps({"routes": _offline_routes(series, chain)}, indent=2),
+            encoding="utf-8",
         )
-        written = write_noshots(r.conn, drafts)
-        written_total += len(written)
+        rc = cli_main(
+            [
+                "--rules",
+                str(rules_path),
+                "--db",
+                str(r.conn_out),
+                "--now",
+                f"{day.isoformat()}T17:05:00-04:00",
+                "eod",
+                "--plan",
+                str(plan_path),
+                "--date",
+                day.isoformat(),
+                "--offline",
+                "--offline-fixture",
+                str(fixture),
+            ]
+        )
+        if rc != 0:
+            raise RehearsalError(f"cmd_eod exited {rc} for the {key} session")
         rows = list_noshots(r.conn, date=day.isoformat())
-        # The same call cmd_eod makes — no `taken`, no `decision_ids` — to show what the
-        # CLI's EOD pass actually records for a session that DID trade. The comparison
-        # runs on the near-miss session because that is the one where a cell both saw the
-        # setup and could plausibly have been traded: for the shot session the cells are
-        # too far from firing to be sightings at all, so the omission is invisible there.
-        cli_shaped = build_noshots(plan, setup_bar=session_bar, chain=chain, rules=r.rules)
-        if not taken and cli_shaped:
-            traded_shape = build_noshots(
-                plan,
-                setup_bar=session_bar,
-                chain=chain,
-                rules=r.rules,
-                taken={("B", "call")},
-                ts=f"{day.isoformat()}T21:05:00Z",
-                decision_ids=entry["ids"],
-            )
-        else:
-            traded_shape = []
-        close_id = append_decision(
-            r.conn,
-            DecisionEntry(
-                ts=f"{day.isoformat()}T21:10:00Z",
-                arm="B",
-                kind="NO_TRADE",
-                checklist_snapshot={
-                    "enforcement": {"session_bar": session_bar.c if session_bar else None},
-                    "indicators": {"ema50": ema, "streak_below_ema50": streak},
-                },
-                checklist_state={
-                    "phase": "eod_close",
-                    "positions": [],
-                    "noshots": len(drafts),
-                    "taken": list(taken),
-                },
-                reasoning=(
-                    f"EOD close for {day}: streak {streak} close(s) below 50EMA, "
-                    f"{len(written)} NO-SHOT row(s)"
-                ),
-                strategy_version=r.rules.strategy_version,
-                symbol=r.rules.strategy.symbol,
-            ),
-        )
-        set_meta(r.conn, "last_eod", {"date": day.isoformat(), "streak": streak})
+        written = len(rows)
+        written_total += written
+        close = [
+            d
+            for d in list_decisions(r.conn)
+            if d.kind == "NO_TRADE"
+            and (d.checklist_state or {}).get("phase") == "eod_close"
+            and d.ts.startswith(day.isoformat())
+        ]
+        streak, ema = _ema50_streak(series, day)
+        cells = [f"{c.arm}/{c.direction}" for c in plan.arms]
+        row_keys = [
+            f"{x.instrument_hypothesis.get('arm')}/{x.instrument_hypothesis.get('direction')}"
+            for x in rows
+        ]
         sessions[key] = {
             "day": day.isoformat(),
+            "cli": "eod --offline",
             "session_bar_close": session_bar.c if session_bar else None,
             "streak_below_ema50": streak,
             "ema50": ema,
-            "taken": list(taken),
-            "noshots_written": len(written),
-            "noshots_in_journal": len(rows),
-            "close_decision_id": close_id,
+            "taken": [f"{a}/{d}" for a, d in taken],
+            "cells": cells,
+            "cells_without_a_row": [c for c in cells if c not in row_keys],
+            "noshots_written": written,
+            "noshots_in_journal": written,
+            "close_decision_id": close[-1].id if close else None,
             "rows": [
                 {
                     "id": x.id,
@@ -1757,16 +1839,14 @@ def stage_eod(r: Rehearsal, st: Stage) -> None:
                 }
                 for x in rows
             ],
-            "cli_shaped_rows": len(cli_shaped),
-            "cli_shaped_decision_refs": [d.decision_ref for d in cli_shaped],
-            "rows_if_that_cell_had_traded": len(traded_shape),
         }
     st.detail = {"sessions": sessions, "noshots_written_total": written_total}
     for key, s_ in sessions.items():
         st.say(
-            f"EOD {s_['day']} ({key}): streak={s_['streak_below_ema50']} "
-            f"(50EMA {s_['ema50']:.2f}), {s_['noshots_written']} NO-SHOT row(s), "
-            f"close decision #{s_['close_decision_id']}"
+            f"EOD {s_['day']} ({key}) via {s_['cli']}: streak={s_['streak_below_ema50']} "
+            f"(50EMA {s_['ema50']:.2f}), traded {s_['taken'] or 'nothing'}, "
+            f"{s_['noshots_written']} NO-SHOT row(s), close decision "
+            f"#{s_['close_decision_id']}"
         )
         for row in s_["rows"]:
             st.say(
@@ -1780,30 +1860,47 @@ def stage_eod(r: Rehearsal, st: Stage) -> None:
         st.error = "no NO-SHOT rows were written for either session — the ledger path is unproven"
     else:
         st.find(
-            f"LEDGER PATH EXERCISED: {written_total} NO-SHOT row(s) written with the "
-            "session's own bar, the setup-day strike recomputed from that bar (not the "
-            "plan's provisional projection), and each row linked to the plan decision "
-            "row it came from."
+            f"LEDGER PATH EXERCISED: {written_total} NO-SHOT row(s) written by the real "
+            "`cmd_eod --offline`, with the session's own bar, the setup-day strike "
+            "recomputed from that bar (not the plan's provisional projection), and each "
+            "row linked to the plan decision row it came from."
         )
-    gap_session = next(
-        (k for k, s_ in sessions.items() if s_["cli_shaped_rows"] and not s_["taken"]), None
-    )
-    if gap_session:
-        gap = sessions[gap_session]
+    unlinked = [
+        f"{key} #{row['id']}"
+        for key, s_ in sessions.items()
+        for row in s_["rows"]
+        if row["counterfactual_entry_ref"] is None
+    ]
+    if unlinked:
+        st.ok = False
+        st.error = f"counterfactual(s) with no decision link: {unlinked}"
+    else:
         st.find(
-            f"EOD GAP (cmd_eod, unmodified): on the {gap_session} session the CLI's EOD "
-            f"pass builds {gap['cli_shaped_rows']} NO-SHOT row(s) without passing "
-            f"`taken`; if that same cell had traded, the correct ledger would hold "
-            f"{gap['rows_if_that_cell_had_traded']} row(s). So a session that both saw "
-            "the setup and traded still gets a row worded as a skip, with no way for a "
-            "reader to tell the two apart. `cmd_eod` also omits `decision_ids`, so every "
-            "row lands with counterfactual_entry_ref = NULL and the counterfactual loses "
-            "its link to the decision that produced it."
+            "COUNTERFACTUAL LINK INTACT: every NO-SHOT row carries counterfactual_entry_ref, "
+            "so each counterfactual is tied to the plan decision that produced it."
+        )
+    traded_with_row = [
+        f"{key} {cell}"
+        for key, s_ in sessions.items()
+        for cell in s_["taken"]
+        if cell in [f"{row['arm']}/{row['direction']}" for row in s_["rows"]]
+    ]
+    if traded_with_row:
+        st.ok = False
+        st.error = f"traded cell(s) recorded as a NO-SHOT skip: {traded_with_row}"
+    else:
+        st.find(
+            "TAKEN HONESTY CONFIRMED: `cmd_eod` reads the session's TRADE rows out of the "
+            "journal, and a cell that traded gets no counterfactual row — a trade is not "
+            "a skip. The shot session took "
+            + "; ".join(sessions["shot"]["taken"] or ["nothing"])
+            + " and holds no row for it."
         )
     st.find(
-        "EOD PATH EXERCISED offline: the CLI's EOD command is not runnable in a "
-        "rehearsal because it constructs a live AlpacaClient unconditionally — there is "
-        "no --offline mode, so its steps were replayed against fixtures here."
+        "EOD PATH EXERCISED offline: `cmd_eod --offline` runs the shipped EOD command over "
+        "a MockTransport built from a fixture file, so the whole EOD CLI path — bars, "
+        "chain, streak, ledger, journal close — is rehearsed now instead of replayed step "
+        "by step."
     )
 
 
