@@ -84,7 +84,7 @@
           <span>hover a candle for OHLCV</span>
         </div>
 
-        <div class="chart-wrap">
+        <div class="chart-wrap" id="chart-wrap">
           <div id="chart"></div>
           <div class="overlay" id="overlay">
             <div>
@@ -100,7 +100,84 @@
         </footer>
       </section>
 
-      <!-- ================= U3 / U4 placeholders ================= -->
+      <!-- ================= arms ================= -->
+      <section id="page-arms" class="page" hidden>
+        <header class="chrome">
+          <span class="symbol">ARMS</span>
+          <div class="group">
+            <span class="stamp" id="arms-stamp">arms · not loaded</span>
+          </div>
+          <div class="group">
+            <span class="stamp">A is the control · exception path is never summed into A/B/C</span>
+          </div>
+        </header>
+        <div class="scroll" id="arms-body">
+          <div class="empty big">loading arms…</div>
+        </div>
+        <footer class="ro">
+          open positions come from the journal, marked-to-market is never computed here —
+          the journal holds no marks, and an invented mark is how a paper experiment starts lying.
+        </footer>
+      </section>
+
+      <!-- ================= ledger ================= -->
+      <section id="page-ledger" class="page" hidden>
+        <header class="chrome">
+          <span class="symbol">LEDGER</span>
+          <input id="ledger-q" class="field" type="search" placeholder="search reasoning / symbol / snapshot" />
+          <select id="ledger-arm" class="field">
+            <option value="">all arms</option>
+            <option value="A">A</option>
+            <option value="B">B</option>
+            <option value="C">C</option>
+            <option value="EXCEPTION">EXCEPTION</option>
+          </select>
+          <select id="ledger-kind" class="field">
+            <option value="">all kinds</option>
+            <option value="TRADE">TRADE</option>
+            <option value="NO_TRADE">NO_TRADE</option>
+            <option value="ROLL">ROLL</option>
+            <option value="STOP">STOP</option>
+            <option value="PROPOSAL">PROPOSAL</option>
+            <option value="VETO">VETO</option>
+          </select>
+          <label class="glabel">from <input id="ledger-from" class="field date" type="date" /></label>
+          <label class="glabel">to <input id="ledger-to" class="field date" type="date" /></label>
+          <button id="ledger-reset" class="tf">reset</button>
+          <span class="spacer"></span>
+          <span class="stamp" id="ledger-stamp">ledger · not loaded</span>
+        </header>
+        <div class="scroll" id="ledger-body">
+          <div class="empty big">loading ledger…</div>
+        </div>
+        <footer class="ro">
+          append-only — a correction is a new row that references the old one, never an edit.
+        </footer>
+      </section>
+
+      <!-- ================= hunt ================= -->
+      <section id="page-hunt" class="page" hidden>
+        <header class="chrome">
+          <span class="symbol">HUNT</span>
+          <input id="hunt-date" class="field date" type="date" />
+          <button id="hunt-today" class="tf">today</button>
+          <span class="spacer"></span>
+          <span class="stamp" id="hunt-stamp">hunt · not loaded</span>
+        </header>
+        <div class="scroll">
+          <h3 class="panel">plan</h3>
+          <div id="hunt-plan"><div class="empty">loading plan…</div></div>
+          <h3 class="panel">no-shot ledger</h3>
+          <div id="hunt-noshots"><div class="empty">loading sightings…</div></div>
+          <h3 class="panel">veto histogram</h3>
+          <div id="hunt-histogram"><div class="empty">loading histogram…</div></div>
+        </div>
+        <footer class="ro">
+          discipline made visible — a sighting with no counterfactual yet is pending, not "no edge".
+        </footer>
+      </section>
+
+      <!-- ================= U4 placeholder ================= -->
       <section id="page-placeholder" class="page" hidden>
         <div class="placeholder">
           <h2 id="ph-title">page</h2>

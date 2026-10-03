@@ -32,7 +32,16 @@ from fastapi.testclient import TestClient
 
 from executor import indicators
 from executor.alpaca_client import MockTransport, stock_bars_path
-from journal.store import FlowBaselineRow, append_flow_baseline, init_db
+from journal.store import (
+    DecisionEntry,
+    FlowBaselineRow,
+    Position,
+    append_decision,
+    append_flow_baseline,
+    init_db,
+    open_position,
+    set_meta,
+)
 from tests.fixtures_journal import build_journal
 from ui.aggregate import AggBar
 from ui.api import UISettings, app, configure, open_ro, ro_uri
@@ -859,3 +868,235 @@ def test_bars_endpoint_never_uses_the_network_under_test(
     monkeypatch.setattr("socket.socket", explode)
     for path in ALL_ENDPOINTS:
         assert client.get(path).status_code == 200, path
+
+
+# ---------------------------------------------------------------------------
+# 9. U3 backend additions — the fields the journal-facing pages needed
+#
+# Everything below exists because a page could not tell the truth without it. Each is
+# additive: no previously-served key changed shape, so U1/U2 assertions above still
+# hold untouched.
+# ---------------------------------------------------------------------------
+
+
+def test_noshots_carry_a_price_and_its_provenance(client: TestClient) -> None:
+    """U3: a NO-SHOT is drawn as a marker on the chart, and a marker needs a price.
+
+    Same precedence rule as /api/signals — the sighting's own recorded spot first, then
+    the nearest cached bar — so the popup and the marker can never disagree about what
+    the underlying was when we said no. Null stays a legal answer.
+    """
+    payload = client.get("/api/noshots", params={"from": "2026-03-01"}).json()
+    for row in payload["rows"]:
+        assert "price" in row and "price_source" in row
+        assert row["price"] is None or isinstance(row["price"], float)
+        assert isinstance(row["price_source"], str) and row["price_source"]
+        assert row["created_at"], "the sighting's write time is part of the immutable story"
+    # The canned sightings record their own indicator snapshot, so the price comes from
+    # there rather than from a bar lookup.
+    with_price = [row for row in payload["rows"] if row["price"] is not None]
+    assert with_price, "at least one sighting resolved a price"
+    assert any(row["price_source"].startswith("snapshot.") for row in with_price)
+    assert "nearest cached bar at or before the sighting" in payload["price_note"]
+
+
+def test_noshot_price_falls_back_to_the_bar_cache(tmp_path: Path, journal_path: Path) -> None:
+    """A sighting with no snapshot price still anchors on the bar it was sighted at."""
+    import json as _json
+
+    conn = sqlite3.connect(journal_path)
+    conn.execute(
+        "INSERT INTO noshots (ts, date, instrument_hypothesis, failed_conditions,"
+        " indicator_values, counterfactual_entry_ref, counterfactual_outcome, created_at)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        (
+            "2026-09-15T19:00:00Z",
+            "2026-09-15",
+            _json.dumps({"arm": "B", "direction": "call", "symbol": SYMBOL}),
+            _json.dumps({"T4": {"status": "FAIL", "blocking": True, "detail": "rvol 1.1"}}),
+            _json.dumps({"rvol": 1.1}),  # no spot/close/price key
+            None,
+            None,
+            "2026-09-15T19:00:01Z",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    cache_path = tmp_path / "barcache-fallback.db"
+    seed_cache(cache_path, _session_bars())
+    ctx = configure(
+        UISettings(
+            journal_path=journal_path,
+            ivrank_path=tmp_path / "missing-ivrank.db",
+            barcache_path=cache_path,
+        )
+    )
+    try:
+        with TestClient(app) as test_client:
+            payload = test_client.get("/api/noshots", params={"date": "2026-09-15"}).json()
+            row = next(r for r in payload["rows"] if r["indicator_values"] == {"rvol": 1.1})
+            assert row["price"] is not None
+            assert row["price_source"] == "bar"
+    finally:
+        ctx.close()
+
+
+def test_arms_report_journal_internal_mismatches_loudly(tmp_path: Path) -> None:
+    """U3: the Arms page must not render a confident card over broken inputs.
+
+    The spec asked for a live Alpaca cross-check. This server is read-only,
+    offline-capable and credential-free, so that half is not performed — and
+    ``cross_check.broker_checked is False`` is the endpoint refusing to imply otherwise.
+    What IS checked is journal against journal, and the over-allocation case below is a
+    real one: deployed notional beyond the bankroll makes "cash" negative.
+    """
+    conn = init_db(tmp_path / "overallocated.db")
+    set_meta(conn, "strategy_version", "v1.0.0")
+    set_meta(conn, "window_start", "2026-03-02")
+    set_meta(conn, "arm_bankroll", {"A": 100.0, "B": 100.0, "C": 100.0})
+    open_position(
+        conn,
+        Position(
+            arm="C", symbol=SYMBOL, contract=None,
+            entry_ts="2026-03-02T14:00:00Z", entry_price=50.0, qty=20,
+        ),
+    )  # 1000 deployed against a 100 bankroll
+    conn.close()
+    ctx = configure(
+        UISettings(
+            journal_path=tmp_path / "overallocated.db",
+            ivrank_path=tmp_path / "missing-ivrank.db",
+            barcache_path=tmp_path / "bc.db",
+        )
+    )
+    try:
+        with TestClient(app) as test_client:
+            payload = test_client.get("/api/arms").json()
+            codes = {flag["code"] for flag in payload["mismatches"] if flag["arm"] == "C"}
+            assert "over_allocated" in codes
+            flag = next(f for f in payload["mismatches"] if f["code"] == "over_allocated")
+            assert flag["severity"] == "bad"
+            assert "exceeds bankroll" in flag["detail"]
+            assert payload["cross_check"]["broker_checked"] is False
+            assert "NOT that the broker agrees" in payload["cross_check"]["note"]
+    finally:
+        ctx.close()
+
+
+def test_arms_flag_an_open_position_with_no_bankroll(tmp_path: Path) -> None:
+    """Positions with no recorded bankroll make deployed/cash/return undefined; that is
+    a flag, not a zero."""
+    conn = init_db(tmp_path / "nobankroll.db")
+    open_position(
+        conn,
+        Position(
+            arm="B", symbol=SYMBOL, contract=None,
+            entry_ts="2026-03-02T14:00:00Z", entry_price=1.50, qty=5,
+        ),
+    )
+    conn.close()
+    ctx = configure(
+        UISettings(
+            journal_path=tmp_path / "nobankroll.db",
+            ivrank_path=tmp_path / "missing-ivrank.db",
+            barcache_path=tmp_path / "bc.db",
+        )
+    )
+    try:
+        with TestClient(app) as test_client:
+            payload = test_client.get("/api/arms").json()
+            flag = next(f for f in payload["mismatches"] if f["code"] == "no_bankroll")
+            assert flag["arm"] == "B"
+            assert "undefined" in flag["detail"]
+    finally:
+        ctx.close()
+
+
+def test_arms_are_flag_free_on_the_canned_journal(client: TestClient) -> None:
+    """A clean journal must produce no flags — otherwise the banner is noise and the
+    operator learns to ignore it, which is worse than having no banner."""
+    payload = client.get("/api/arms").json()
+    assert payload["mismatches"] == []
+    assert payload["cross_check"]["scope"] == "journal-internal"
+
+
+def test_empty_arms_still_report_the_cross_check_scope(empty_client: TestClient) -> None:
+    """The empty-journal shape is asserted elsewhere; this is the U3 addition to it."""
+    payload = empty_client.get("/api/arms").json()
+    assert payload["mismatches"] == []
+    assert payload["cross_check"]["broker_checked"] is False
+
+
+def test_huntplan_reports_the_event_veto_from_the_rulebook(client: TestClient) -> None:
+    """U3: the banner's vocabulary comes from the rulebook, not a frontend regex.
+
+    The canned 2026-03-04 cell fails T5 with "earnings day veto" — not one of the
+    rulebook's veto kinds (fomc, cpi), so the banner stays clear and says why. The
+    negative case matters: a banner that fired on every day would be worse than none.
+    """
+    payload = client.get("/api/huntplan", params={"date": "2026-03-04"}).json()
+    assert payload["event_veto"]["available"] is True
+    assert payload["event_veto"]["active"] is False
+    assert "prose rather than as a structured flag" in payload["event_veto_note"]
+
+
+def test_huntplan_event_veto_fires_on_a_rulebook_veto_kind(client: TestClient) -> None:
+    """A cell whose T5 detail names FOMC must raise the banner and quote the reason."""
+    path = client.app.state.context.settings.journal_path
+    journal_conn = init_db(path)
+    append_decision(
+        journal_conn,
+        DecisionEntry(
+            ts="2026-03-04T12:30:00Z", arm="B", kind="NO_TRADE", symbol=SYMBOL,
+            checklist_snapshot={"direction": "call"},
+            checklist_state={
+                "fire": False,
+                "conditions": {
+                    "T5": {"status": "FAIL", "blocking": True, "detail": "T5 NOT: FOMC day veto"}
+                },
+                "failed_conditions": ["T5"], "pending_conditions": [],
+                "veto_reasons": ["T5: veto — T5 NOT: FOMC day veto"],
+            },
+            reasoning="event veto", conviction=1, strategy_version="v1.0.0",
+        ),
+    )
+    journal_conn.close()
+
+    payload = client.get("/api/huntplan", params={"date": "2026-03-04"}).json()
+    assert payload["event_veto"]["active"] is True
+    assert "fomc" in payload["event_veto"]["kinds"]
+    assert "FOMC day veto" in payload["event_veto"]["reason"]
+
+
+def test_huntplan_without_a_rulebook_says_it_could_not_determine_the_event_veto(
+    tmp_path: Path, journal_path: Path
+) -> None:
+    """No rulebook means no verdict. `available: False` is what stops the page drawing a
+    green banner it did not earn."""
+    ctx = configure(
+        UISettings(
+            journal_path=journal_path,
+            ivrank_path=tmp_path / "missing-ivrank.db",
+            barcache_path=tmp_path / "bc.db",
+            rules_path=tmp_path / "no-such-rulebook.toml",
+        )
+    )
+    try:
+        with TestClient(app) as test_client:
+            payload = test_client.get("/api/huntplan", params={"date": "2026-03-04"}).json()
+            assert payload["event_veto"] == {
+                "active": False, "kinds": [], "available": False, "reason": "",
+            }
+    finally:
+        ctx.close()
+
+
+def test_trades_can_sort_by_created_at(client: TestClient) -> None:
+    """U3: the immutable-journal story is about write order, so write time is sortable."""
+    payload = client.get(
+        "/api/trades", params={"sort": "created_at", "order": "asc", "from": "2026-03-01"}
+    ).json()
+    assert payload["sort"] == "created_at"
+    stamps = [row["created_at"] for row in payload["rows"]]
+    assert stamps == sorted(stamps)
+    assert client.get("/api/trades", params={"sort": "nonsense"}).status_code == 422

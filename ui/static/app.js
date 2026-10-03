@@ -1,4 +1,11 @@
-// paper-hunter terminal — Phase U2 frontend.
+// paper-hunter terminal — Phase U2 frontend, extended by U3 with the journal-facing
+// pages (Arms, Ledger, Hunt) and the marker popups.
+//
+// U3 split the frontend into ES modules rather than growing this file: the pages are
+// independent (each owns its own poll and its own teardown) and the parts worth testing
+// — the NO-SHOT join, the counterfactual sentence, the histogram model — are pure and
+// live in model.js where Node can score them. This file stays the router, the terminal,
+// and the marker wiring.
 //
 // No build chain: this file is a plain ES module loaded straight from disk by the
 // browser, and the one third-party library (TradingView Lightweight Charts 5.2.1) is
@@ -22,6 +29,13 @@
 // load-bearing twice over: it drives the visible-range HUD, and it detects the user
 // panning left of the loaded window so the page can re-request a wider window (the
 // spec's "zooming backwards is a re-request with a wider window").
+
+import { startArms, stopArms } from "./arms.js";
+import { wireLedger, startLedger, stopLedger } from "./ledger.js";
+import { startHunt, stopHunt, wireHunt } from "./hunt.js";
+import { getJSON, getAll } from "./net.js";
+import { indexNoshots, noshotsForDecision } from "./model.js";
+import { openMarkerPopup, closeMarkerPopup, wireMarkerPopupDismissal } from "./markers.js";
 
 const TF_LIST = ["5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1M", "1Q"];
 const INTRADAY_TF = new Set(["5m", "10m", "15m", "30m", "1h", "4h"]);
@@ -66,11 +80,15 @@ const OVERLAY_COLOR = {
   macd_histogram: "#7f8c9b",
 };
 
+// # INTERPRETATION — routing. `null` means "built"; an object means "not built, say so
+// honestly". Calibration is the only page still pending (U4); Arms, Ledger and Hunt
+// became real pages in U3 and are started/stopped on entry so their polls stop when the
+// operator is looking at a different tab.
 const PAGES = {
   terminal: null,
-  arms: { phase: "U3", body: "Per-arm bankroll, deployed cash, open positions, equity curve and the shadow-roll sim. The endpoints are live; the page is not built." },
-  ledger: { phase: "U3", body: "Every decision row with search, sort and date filters, references rendered as correction-of links. The endpoints are live; the page is not built." },
-  hunt: { phase: "U3", body: "The hunt plan, the NO-SHOT ledger with counterfactuals, and the veto histogram. The endpoints are live; the page is not built." },
+  arms: null,
+  ledger: null,
+  hunt: null,
   calibration: { phase: "U4", body: "Flow baselines, threshold-distance histogram, IV-rank history, pending calibrations. The endpoints are live; the page is not built." },
 };
 
@@ -94,6 +112,11 @@ const state = {
   series: {},
   markers: null,
   byKey: new Map(),
+  // U3: NO-SHOT sightings. They are journal rows in their own table, not decisions,
+  // so /api/signals does not carry them (see SIGNAL_KINDS) — the terminal fetches
+  // /api/noshots for the same window and joins client-side by journal id.
+  noshots: [],
+  noshotIndex: new Map(),
   inFlight: false,
 };
 
@@ -146,21 +169,9 @@ const etDate = (iso) =>
 // data access
 // ---------------------------------------------------------------------------
 
-async function getJSON(path) {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
-  if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
-    try {
-      const body = await response.json();
-      if (body && body.detail) detail = JSON.stringify(body.detail);
-    } catch (_) {
-      /* a non-JSON error body is still an error worth showing */
-    }
-    throw new Error(`${path} -> ${detail}`);
-  }
-  return response.json();
-}
-
+// getJSON lives in net.js since U3 — one fetch helper for the whole frontend, so the
+// "GETs only, /api/ only" property has a single place to hold. windowParams() below is
+// the terminal's own window; the other pages build their own query strings.
 function windowParams() {
   const params = new URLSearchParams({ symbol: SYMBOL, tf: state.tf });
   if (state.from) params.set("from", state.from);
@@ -462,9 +473,12 @@ function applyIndicators(payload) {
   renderReadout(state.bars.length - 1);
 }
 
-function applySignals(payload) {
+function applySignals(payload, noshotsPayload) {
   const rows = (payload && payload.rows) || [];
   state.signals = rows;
+  const sightings = (noshotsPayload && noshotsPayload.rows) || [];
+  state.noshots = sightings;
+  state.noshotIndex = indexNoshots(sightings);
   const markers = rows.map((row) => {
     const arm = ARM_COLOR[row.arm] || "#8b95a4";
     return {
@@ -476,10 +490,25 @@ function applySignals(payload) {
       text: `${row.arm} ${row.kind}`,
     };
   });
+  // NO-SHOT near-misses get their own hollow-toned markers: the sighting's own `ts`,
+  // its own price (or none — see /api/noshots' price_note), and NO-SHOT in the label,
+  // because the glyph in lightweight-charts cannot be hollow and a filled marker would
+  // imply we acted. The near-miss detail lives in the popup on click, not in the label.
+  for (const row of sightings) {
+    markers.push({
+      time: chartTime(row.ts, state.tf),
+      position: "belowBar",
+      color: "#6b7686",
+      shape: "square",
+      id: `n${row.id}`,
+      text: "NO-SHOT",
+    });
+  }
   state.series.markers.setMarkers(markers);
   // Empty pre-window is the honest state, so say so instead of implying a bug.
-  el("tab-stamp").textContent = rows.length
-    ? `read-only · ${rows.length} signal${rows.length === 1 ? "" : "s"}`
+  const total = rows.length + sightings.length;
+  el("tab-stamp").textContent = total
+    ? `read-only · ${rows.length} signal${rows.length === 1 ? "" : "s"} · ${sightings.length} no-shot`
     : "read-only · 0 signals in window";
 }
 
@@ -600,23 +629,50 @@ function onCrosshair(param) {
   renderReadout(indexForTime(param.time));
 }
 
+/**
+ * The signal marker at a clicked bar, if any, plus the NO-SHOT sighting under it.
+ *
+ * A click resolves to whichever journal row is closest in time to the clicked bar,
+ * because lightweight-charts does not hit-test its own markers: it hands us a bar
+ * time and expects the caller to know what is on it. Signal rows win ties over
+ * sightings, since a decision is the row that moved.
+ */
+function markerAt(index) {
+  const bar = state.bars[index];
+  if (!bar) return null;
+  const key = timeKey(chartTime(bar.t, state.tf));
+  const at = (iso) => timeKey(chartTime(iso, state.tf));
+  const signal = state.signals.find((row) => at(row.t) === key) || null;
+  const noshot =
+    state.noshots.find((row) => at(row.ts) === key) || null;
+  if (!signal && !noshot) return null;
+  // If the sighting names the decision that rejected it, the popup shows both: the
+  // sighting (what we skipped and what it would have been worth) and the journal row
+  // that said no (and why). That join is the point of the page.
+  const linked =
+    signal || (noshot && noshot.counterfactual_entry_ref != null
+      ? state.signals.find((row) => row.journal_id === noshot.counterfactual_entry_ref) || null
+      : null);
+  return {
+    signal: linked,
+    sightings: noshot ? [noshot] : linked ? noshotsForDecision(state.noshotIndex, linked.journal_id) : [],
+  };
+}
+
 function onClick(param) {
-  // U3 replaces this with the signal popup (and the NO-SHOT counterfactual card).
   const index = param && param.time !== undefined ? indexForTime(param.time) : -1;
   if (index < 0) return;
-  const marker = state.signals.find((row) => timeKey(chartTime(row.t, state.tf)) === timeKey(chartTime(state.bars[index].t, state.tf)));
-  if (marker) {
-    console.log("[U3] signal marker click", {
-      arm: marker.arm,
-      kind: marker.kind,
-      journal_id: marker.journal_id,
-      price: marker.price,
-      price_source: marker.price_source,
-      reasoning: marker.reasoning,
-    });
-  } else {
-    console.log("[U3] bar click", { t: state.bars[index].t, ...state.bars[index] });
+  const hit = markerAt(index);
+  if (!hit) {
+    // A click on empty chart space closes whatever was open: the popup is anchored to
+    // the chart, so leaving it up over unrelated bars is how a stale popup misleads.
+    closeMarkerPopup();
+    return;
   }
+  const box = el("chart").getBoundingClientRect();
+  openMarkerPopup(hit.signal, hit.sightings, { x: box.left + (param.x || 0), y: box.top + (param.y || 0) }, {
+    host: el("chart-wrap") || document.body,
+  });
 }
 
 function hud(range) {
@@ -641,14 +697,18 @@ async function refresh({ fit = false, keepRange = null } = {}) {
     const jobs = [
       getJSON(`/api/bars?${barsParams}`),
       getJSON(`/api/signals?${symbolAndWindow()}&limit=2000`),
+      // The NO-SHOT window is the SAME window the bars use, so a sighting outside the
+      // visible range is not drawn. getAll, not Promise.all: a noshot failure must not
+      // take the chart down, it must just mean no hollow markers this poll.
+      getAll({ noshots: `/api/noshots?${symbolAndWindow()}&limit=2000` }),
       loadHealth(),
     ];
     const names = serverIndicators();
     if (names.length) jobs.push(getJSON(`/api/indicators?${barsParams}&set=${names.join(",")}`));
-    const [bars, signals, , indicators] = await Promise.all(jobs);
+    const [bars, signals, noshots, , indicators] = await Promise.all(jobs);
     applyBars(bars);
     if (indicators) applyIndicators(indicators);
-    applySignals(signals);
+    applySignals(signals, noshots.data);
     applyVisibility();
 
     if (keepRange) {
@@ -729,18 +789,36 @@ function route() {
   }
   const terminal = el("page-terminal");
   const placeholder = el("page-placeholder");
-  if (page === "terminal") {
-    terminal.hidden = false;
-    placeholder.hidden = true;
-    if (!state.chart) buildChart();
-    else state.chart.applyOptions({ autoSize: true });
-    refresh({ fit: !state.bars.length });
-  } else {
-    terminal.hidden = true;
-    placeholder.hidden = false;
+  // Each page is started on entry and stopped on exit, so a hidden page is not polling
+  // the journal behind the operator's back — the same reason the terminal pauses when
+  // the tab is hidden.
+  if (page !== "terminal") {
+    stopArms();
+    stopLedger();
+    stopHunt();
+  }
+  terminal.hidden = page !== "terminal";
+  for (const name of ["arms", "ledger", "hunt"]) {
+    const node = el(`page-${name}`);
+    if (node) node.hidden = name !== page;
+  }
+  placeholder.hidden = PAGES[page] === null;
+  if (PAGES[page] !== null) {
     el("ph-title").textContent = page;
     el("ph-phase").textContent = PAGES[page].phase;
     el("ph-body").textContent = PAGES[page].body;
+    return;
+  }
+  if (page === "terminal") {
+    if (!state.chart) buildChart();
+    else state.chart.applyOptions({ autoSize: true });
+    refresh({ fit: !state.bars.length });
+  } else if (page === "arms") {
+    startArms();
+  } else if (page === "ledger") {
+    startLedger();
+  } else if (page === "hunt") {
+    startHunt();
   }
 }
 
@@ -769,6 +847,9 @@ function wire() {
     button.addEventListener("click", () => toggleIndicator(button.dataset.ind));
   }
   window.addEventListener("hashchange", route);
+  wireMarkerPopupDismissal();
+  wireLedger();
+  wireHunt();
 }
 
 buildChart();

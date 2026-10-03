@@ -17,6 +17,14 @@ breaking the LAN promise in a way nobody notices until mads is on the train:
 
 The other assertions are the spec's literal checklist — ten timeframes, five pages,
 five indicator toggles — pinned so that dropping one is a test failure, not a shrug.
+
+U3 widened the grep-based assertions from three files to every file in ``ui/static/``,
+which is the point of splitting the frontend into ES modules: a guarantee that was
+expressed as "app.js contains no URL" silently stopped meaning anything the moment the
+code it described moved into a sibling file. Behavioural coverage of the pure logic
+lives in ``tests/test_static_logic.py``; what is pinned here is the wiring — the handlers,
+the ids, the routes — because wiring needs a document to be meaningful.
+
 Everything runs offline: no server is started, no network is touched.
 """
 
@@ -29,7 +37,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from ui.api import app
+from ui.api import STATIC_MODULES, app
 
 STATIC = Path(__file__).resolve().parent.parent / "ui" / "static"
 INDEX_HTML = STATIC / "index.html"
@@ -38,6 +46,11 @@ STYLE_CSS = STATIC / "style.css"
 VENDOR_DIR = STATIC / "vendor"
 VENDOR_JS = VENDOR_DIR / "lightweight-charts.standalone.production.js"
 PROVENANCE = VENDOR_DIR / "PROVENANCE.md"
+
+#: Every JavaScript file we author. U3 added seven modules; the LAN-offline and
+#: read-only guarantees are asserted over the whole set, not over a sample.
+JS_FILES = sorted(STATIC.glob("*.js"))
+MODULES = [path for path in JS_FILES if path.name != "app.js"]
 
 TIMEFRAMES = ("5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1M", "1Q")
 PAGES = ("terminal", "arms", "ledger", "hunt", "calibration")
@@ -103,6 +116,26 @@ def test_vendor_bundle_is_served(client: TestClient) -> None:
     assert response.text.startswith("/*!")
 
 
+@pytest.mark.parametrize("route", [route for route, _ in STATIC_MODULES])
+def test_every_es_module_is_served(client: TestClient, route: str) -> None:
+    """One explicit GET route per module. A module with no route is a 404 in the browser
+    and a blank page, and a module that is a directory walk would be a hole in the
+    zero-non-GET-routes assertion — so the list lives in ui/api.py and is tested here."""
+    response = client.get(route)
+    assert response.status_code == 200, f"{route} is not served"
+    assert "javascript" in response.headers["content-type"]
+    assert response.text.strip(), f"{route} is empty"
+
+
+def test_every_module_on_disk_has_a_route() -> None:
+    """The reverse direction: a new file that nobody routed is dead weight in the tree
+    and a 404 waiting to happen."""
+    routed = {path.name for _, path in STATIC_MODULES}
+    on_disk = {path.name for path in MODULES}
+    assert on_disk - routed == set(), f"unrouted modules: {sorted(on_disk - routed)}"
+    assert routed - on_disk == set(), f"routes point at missing files: {sorted(routed - on_disk)}"
+
+
 def test_unknown_static_paths_are_404(client: TestClient) -> None:
     """No directory walk: a path the app did not name explicitly does not resolve."""
     assert client.get("/nope.js").status_code == 404
@@ -151,7 +184,7 @@ def test_page_loads_the_vendored_bundle_relatively() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("path", [INDEX_HTML, APP_JS, STYLE_CSS], ids=lambda p: p.name)
+@pytest.mark.parametrize("path", [INDEX_HTML, STYLE_CSS, *JS_FILES], ids=lambda p: p.name)
 def test_no_cdn_references_in_served_assets(path: Path) -> None:
     """A LAN tool that fetches from a CDN is broken the moment the internet is not."""
     hits = EXTERNAL.findall(read(path))
@@ -160,12 +193,29 @@ def test_no_cdn_references_in_served_assets(path: Path) -> None:
     assert hits == [], f"{path.name} references an external resource: {hits}"
 
 
-@pytest.mark.parametrize("path", [INDEX_HTML, APP_JS], ids=lambda p: p.name)
+@pytest.mark.parametrize("path", JS_FILES, ids=lambda p: p.name)
 def test_no_write_verbs_in_the_frontend(path: Path) -> None:
-    """The UI has no door: nothing in the frontend even names a write method."""
-    text = read(path).upper()
-    for verb in ("POST", "PUT", "PATCH", "DELETE"):
-        assert f"'{verb}'" not in text and f'"{verb}"' not in text, f"{path.name} names {verb}"
+    """The UI has no door: nothing in the frontend can issue a write.
+
+    U2 asserted this by grepping for quoted ``'POST'``/``'PUT'``/... which was fine when
+    the only frontend file was a chart, and wrong the moment the Hunt page appeared:
+    ``DIRECTION_ORDER = ["call", "put"]`` is a list of OPTION DIRECTIONS, and the naive
+    grep called it a PUT. The property worth pinning is the mechanism, not the word —
+    an explicit HTTP verb, a request body, a beacon, or an editable field — so that is
+    what this asserts now.
+    """
+    text = read(path)
+    for pattern in (
+        r"method\s*:",
+        r"XMLHttpRequest",
+        r"navigator\.sendBeacon",
+        r"contenteditable",
+        r"\.submit\(",
+    ):
+        assert re.search(pattern, text) is None, f"{path.name} can write: matched {pattern!r}"
+    # The only fetch in the stack is net.js's, and it passes no body — asserted there
+    # rather than here, since a `body:` key elsewhere is prose (the placeholder text for
+    # a not-yet-built page literally says "body:").
 
 
 # ---------------------------------------------------------------------------
@@ -194,14 +244,16 @@ def test_every_page_has_a_tab_and_a_route(page: str) -> None:
     assert f"  {page}:" in read(APP_JS)
 
 
-@pytest.mark.parametrize("page", PAGES[1:])
-def test_pending_pages_say_pending(page: str) -> None:
-    """U3/U4 placeholders must name their phase instead of pretending to render."""
+def test_only_the_u4_page_is_still_a_placeholder() -> None:
+    """Arms, Ledger and Hunt became real pages in U3; Calibration is the last one. A page
+    that regresses to a placeholder must fail here rather than showing a phase badge."""
     body = read(APP_JS)
-    block = re.search(rf"  {page}: \{{(.*?)\n  \}},", body, re.DOTALL)
-    assert block, f"no PAGES entry for {page}"
-    assert re.search(r'phase: "U[34]"', block.group(1)), f"{page} has no phase label"
-    assert re.search(r'body: "[^"]+"', block.group(1)), f"{page} has no explanation"
+    for page in ("arms", "ledger", "hunt"):
+        assert re.search(rf"^  {page}: null,$", body, re.MULTILINE), f"{page} is not built"
+    block = re.search(r"  calibration: \{(.*?)\n  \};", body, re.DOTALL)
+    assert block, "no PAGES entry for calibration"
+    assert 'phase: "U4"' in block.group(1)
+    assert re.search(r'body: "[^"]+"', block.group(1)), "calibration has no explanation"
 
 
 @pytest.mark.parametrize("name", TOGGLES)
@@ -290,10 +342,127 @@ def test_polling_is_poll_not_websocket() -> None:
 
 
 def test_frontend_only_calls_get_endpoints() -> None:
-    """Every fetch in the frontend is a GET path under /api/ — no invented endpoints."""
-    paths = set(re.findall(r"getJSON\(\s*[`\"]([^`\"]+)", read(APP_JS)))
+    """Every fetch in the frontend is a GET path under /api/ — no invented endpoints.
+
+    Scanned across ALL modules since U3: this assertion used to read app.js alone, which
+    would have kept passing while arms.js and hunt.js quietly grew their own callers.
+    """
+    paths: set[str] = set()
+    for path in JS_FILES:
+        text = read(path)
+        # Both call styles are scanned: getJSON("/api/...") directly, and the entries of
+        # a getAll({plan: "/api/...", ...}) batch. Matching only the first would have
+        # missed every U3 page, since all three load their panels in one batch.
+        paths |= set(re.findall(r"getJSON\(\s*[`\"]([^`\"]+)", text))
+        paths |= set(re.findall(r"[`\"](/api/[a-z]+)", text))
     assert paths, "no endpoints referenced at all — the page would be decoration"
     for path in paths:
         assert path.startswith("/api/"), f"{path} is not an API path"
     roots = {path.split("?")[0] for path in paths}
     assert {"/api/health", "/api/bars", "/api/indicators", "/api/signals"} <= roots
+    # The three U3 pages are pinned by name so a renamed endpoint is a failure here.
+    assert {"/api/arms", "/api/trades", "/api/huntplan", "/api/noshots", "/api/histogram"} <= roots
+
+
+def test_the_fetch_helper_refuses_a_non_api_path() -> None:
+    """Read-only enforcement, frontend half: the one fetch helper checks its argument."""
+    net = read(STATIC / "net.js")
+    assert 'if (typeof path !== "string" || !path.startsWith("/api/"))' in net
+    assert "fetch(path, { headers:" in net, "the only fetch in the stack must be a bare GET"
+    assert re.search(r"fetch\([^)]*\b(method|body)\s*:", net) is None, (
+        "no fetch call in the stack may name a method or a body"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 5. U3 page wiring
+# ---------------------------------------------------------------------------
+
+
+def test_marker_click_opens_a_popup_instead_of_logging() -> None:
+    """The U2 placeholder was a console.log. U3 replaces it with the anchored popup, and
+    the popup's dismissal is wired exactly once at startup."""
+    body = read(APP_JS)
+    click = body.split("function onClick")[1].split("\nfunction ")[0]
+    assert "openMarkerPopup(" in click, "a marker click must open the popup"
+    assert "console.log" not in click, "the U2 placeholder must be gone"
+    assert "closeMarkerPopup()" in click, "clicking empty chart space closes the popup"
+    assert "wireMarkerPopupDismissal()" in body
+
+
+def test_the_popup_closes_on_escape_and_outside_click() -> None:
+    markers = read(STATIC / "markers.js")
+    assert 'event.key === "Escape"' in markers
+    assert "mousedown" in markers
+    assert "node.contains(event.target)" in markers, (
+        "the click that opened the popup must not immediately close it"
+    )
+    assert "isMarkerPopupOpen()" in markers, "dismissal handlers must no-op when nothing is open"
+
+
+def test_the_popup_joins_noshots_client_side_by_journal_id() -> None:
+    """NO-SHOT rows are not decisions, so /api/signals does not carry them. The join is
+    `noshots.counterfactual_entry_ref -> decisions.id` and it happens in the browser."""
+    body = read(APP_JS)
+    assert 'getAll({ noshots: `/api/noshots?${symbolAndWindow()}&limit=2000` })' in body
+    assert "applySignals(signals, noshots.data)" in body, "both payloads reach one renderer"
+    assert "indexNoshots(sightings)" in body and "noshotsForDecision(state.noshotIndex" in body
+    assert "NO-SHOT" in body, "near-misses are labelled on the chart, not implied"
+
+
+def test_the_arms_page_keeps_the_exception_path_out_of_the_arm_numbers() -> None:
+    arms = read(STATIC / "arms.js")
+    assert '["A", "B", "C"]' in arms, "the three cards are A/B/C"
+    assert "exceptionBlock(" in arms, "the exception path gets its own block"
+    assert "never summed into A/B/C" in arms, "and says so on the page, not only in a comment"
+    assert "mismatchesByArm" in arms, "mismatch flags are rendered"
+    assert "no_bankroll" not in arms.split("function card(")[0], "flag text comes from the endpoint"
+
+
+def test_open_positions_are_never_marked_to_market() -> None:
+    """The journal holds no marks. A `last`/`unrealized` cell that computed a number from
+    the entry price alone would be a fabricated P&L, so both render as dashes with the
+    reason in the tooltip, and the view model refuses to carry a mark at all."""
+    arms = read(STATIC / "arms.js")
+    assert '<td class="r num muted">${DASH}</td>' in arms, "last and unrealized render as dashes"
+    model = read(STATIC / "model.js")
+    assert "last: null" in model and "unrealized: null" in model
+    assert "not computed" in model
+    positions = arms.split("const positions = ")[1].split("const vsControl")[0]
+    assert "unreal" in positions.lower()
+    for banned in ("* position.qty", "position.entry *", "pxOf(position.entry) *"):
+        assert banned not in positions, f"the positions table must not derive P&L: {banned}"
+
+
+def test_the_ledger_page_has_no_edit_affordance() -> None:
+    """Append-only, and the page says so. No form posts, no editable cell, no PUT."""
+    ledger = read(STATIC / "ledger.js")
+    assert "correction of #" in ledger, "references render as correction-of links"
+    assert "referenceChain(" in ledger
+    for banned in ("contenteditable", "PUT", "PATCH", "DELETE", "onblur"):
+        assert banned not in ledger, f"the ledger has no {banned}"
+    html = read(INDEX_HTML)
+    for field in ("ledger-q", "ledger-arm", "ledger-kind", "ledger-from", "ledger-to"):
+        assert f'id="{field}"' in html, f"the {field} control is missing"
+
+
+def test_the_hunt_page_dates_itself_and_renders_all_three_panels() -> None:
+    html = read(INDEX_HTML)
+    for node in ("hunt-date", "hunt-plan", "hunt-noshots", "hunt-histogram"):
+        assert f'id="{node}"' in html, f"the hunt page is missing #{node}"
+    hunt = read(STATIC / "hunt.js")
+    assert "America/New_York" in hunt, "the date picker defaults to the ET session, not UTC"
+    assert "/api/huntplan?date=" in hunt and "/api/noshots?from=" in hunt
+    assert "/api/histogram?veto=weekly" in hunt
+    assert "allSettled" in read(STATIC / "net.js"), (
+        "one dead panel must not take the hunt page down with it"
+    )
+
+
+def test_the_veto_histogram_is_plain_divs_and_says_why() -> None:
+    """The spec allowed lightweight-charts or plain SVG/divs. The choice is divs, and it
+    is documented in the module rather than left as an unexplained difference."""
+    model = read(STATIC / "model.js")
+    assert "Rendered as plain stacked DIVs" in model
+    assert "flex:${segment.value}" in read(STATIC / "hunt.js"), "segments are flex-proportioned"
+    assert 'class="hbar"' in read(STATIC / "hunt.js")

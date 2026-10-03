@@ -104,7 +104,11 @@ SIGNAL_KINDS: tuple[str, ...] = ("TRADE", "STOP", "ROLL", "PROPOSAL", "VETO")
 Arm = Literal["A", "B", "C", "EXCEPTION"]
 DecisionKind = Literal["TRADE", "NO_TRADE", "ROLL", "STOP", "PROPOSAL", "VETO"]
 PositionStatus = Literal["OPEN", "CLOSED"]
-SortField = Literal["ts", "id", "arm", "kind", "symbol", "conviction"]
+#: ``created_at`` is sortable for the same reason it is rendered: the immutable-journal
+#: story on the Ledger page is "this row was written at T, and if it was corrected the
+#: correction is a LATER row that references it" — which is a statement about write
+#: order, so ordering by event time alone hides it.
+SortField = Literal["ts", "id", "arm", "kind", "symbol", "conviction", "created_at"]
 Timeframe = Literal["5m", "10m", "15m", "30m", "1h", "4h", "1d", "1w", "1M", "1Q"]
 IndicatorSet = Literal["ema50", "ema200", "rsi", "macd", "bb"]
 
@@ -614,6 +618,41 @@ def app_script() -> FileResponse:
     return _static_file(APP_SCRIPT, "text/javascript")
 
 
+#: The U3 ES modules, each served by its own explicit GET route. A loop rather than
+#: seven copy-pasted functions: the route list is the security posture, so it is one
+#: list next to the ``app_script`` docstring that explains the rule, not seven places
+#: to forget. Every entry is a named file with a literal path — no path parameter, no
+#: directory walk, and ``methods`` is set, so the zero-non-GET-routes assertion still
+#: sees a plain single-method route rather than a mount.
+STATIC_MODULES: tuple[tuple[str, Path], ...] = (
+    ("/format.js", STATIC_DIR / "format.js"),
+    ("/net.js", STATIC_DIR / "net.js"),
+    ("/model.js", STATIC_DIR / "model.js"),
+    ("/charts.js", STATIC_DIR / "charts.js"),
+    ("/markers.js", STATIC_DIR / "markers.js"),
+    ("/arms.js", STATIC_DIR / "arms.js"),
+    ("/ledger.js", STATIC_DIR / "ledger.js"),
+    ("/hunt.js", STATIC_DIR / "hunt.js"),
+)
+
+
+def _module_endpoint(path: Path) -> Any:
+    def endpoint() -> FileResponse:
+        return _static_file(path, "text/javascript")
+
+    endpoint.__name__ = f"static_{path.stem.replace('-', '_')}"
+    return endpoint
+
+
+for _route, _module_path in STATIC_MODULES:
+    app.add_api_route(
+        _route,
+        _module_endpoint(_module_path),
+        methods=["GET"],
+        include_in_schema=False,
+    )
+
+
 @app.get("/style.css", include_in_schema=False)
 def app_styles() -> FileResponse:
     return _static_file(APP_STYLES, "text/css")
@@ -780,6 +819,24 @@ def _price_for_decision(
     return cached[-1].c, "bar"
 
 
+#: JSON keys a snapshot may carry the traded price under, most specific first. Shared
+#: by decisions and NO-SHOT sightings: both record a price in their own JSON blob and
+#: both fall back to the bar cache, and one definition means the marker price and the
+#: popup price can never disagree.
+SNAPSHOT_PRICE_KEYS = ("spot", "price", "close", "underlying_price", "last_price")
+
+
+def _snapshot_price(snapshot: Any) -> tuple[float | None, str | None]:
+    """The price a JSON snapshot recorded for itself, and which key it came from."""
+    if not isinstance(snapshot, dict):
+        return None, None
+    for key in SNAPSHOT_PRICE_KEYS:
+        value = snapshot.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value), f"snapshot.{key}"
+    return None, None
+
+
 def _decision_price(
     ctx: AppContext,
     symbol: str,
@@ -787,11 +844,9 @@ def _decision_price(
     moment: dt.datetime,
 ) -> tuple[float | None, str]:
     """Price for one decision row: its own snapshot first, then the nearest bar."""
-    snapshot = _loads(entry["checklist_snapshot"]) or {}
-    for key in ("spot", "price", "close", "underlying_price", "last_price"):
-        value = snapshot.get(key)
-        if isinstance(value, (int, float)):
-            return float(value), f"snapshot.{key}"
+    price, source = _snapshot_price(_loads(entry["checklist_snapshot"]))
+    if price is not None:
+        return price, source or "snapshot"
     price, source = _price_for_decision(ctx, symbol, moment, "1Min")
     if price is None:
         daily = ctx.barcache.stored(symbol, "1Day", end=moment)
@@ -937,6 +992,85 @@ def signals(
     }
 
 
+def _arm_mismatches(
+    cards: Sequence[dict[str, Any]],
+    by_arm: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Integrity flags the card numbers depend on, computed from the journal alone.
+
+    # INTERPRETATION: the spec's Arms page says open positions are "live from Alpaca
+    paper + journal cross-check, mismatches flagged loudly". The broker half is not
+    available to a read-only LAN server that must also work with no network and no
+    Alpaca credentials, and silently reporting zero mismatches would be the worst
+    possible answer — a green card claiming a cross-check that never ran. So this
+    returns the checks that ARE possible offline, each one a real inconsistency
+    between two journal facts, and the UI states the scope next to the flags:
+
+      * ``no_bankroll``      — positions exist for an arm with no bankroll in meta, so
+                              deployed/cash/return are undefined and the card says so.
+      * ``over_allocated``   — deployed notional exceeds the bankroll, i.e. cash < 0.
+      * ``unpriceable``      — an open position with a null entry price or a
+                              non-positive qty; its notional is a made-up zero.
+      * ``missing_pnl``      — a CLOSED position whose pnl is null. Excluded from the
+                              realized sum (rollup does the same) but it means the
+                              equity curve has a hole in it.
+    """
+    flags: list[dict[str, Any]] = []
+
+    def add(arm: str, code: str, severity: str, detail: str) -> None:
+        flags.append({"arm": arm, "code": code, "severity": severity, "detail": detail})
+
+    for card in cards:
+        arm = str(card["arm"])
+        open_positions = card.get("open_positions") or []
+        bank = card.get("bankroll")
+        if open_positions and bank is None:
+            add(
+                arm,
+                "no_bankroll",
+                "bad",
+                f"{len(open_positions)} open position(s) but no bankroll in journal meta — "
+                "deployed, cash and return on bankroll are undefined for this arm.",
+            )
+        deployed = card.get("deployed") or 0.0
+        if bank is not None and deployed > bank:
+            add(
+                arm,
+                "over_allocated",
+                "bad",
+                f"deployed ${deployed:,.2f} exceeds bankroll ${bank:,.2f}: cash is "
+                f"${(bank - deployed):,.2f}.",
+            )
+        for position in open_positions:
+            if position.get("entry_price") is None or (position.get("qty") or 0) <= 0:
+                add(
+                    arm,
+                    "unpriceable",
+                    "bad",
+                    f"position #{position.get('id')} ({position.get('symbol')}) has "
+                    f"entry_price={position.get('entry_price')} qty={position.get('qty')} — "
+                    "its notional is a placeholder zero, not a measurement.",
+                )
+    # missing_pnl needs the CLOSED rows, which the card summarises but does not carry.
+    for card in cards:
+        closed = [
+            position
+            for position in by_arm.get(str(card["arm"]), [])
+            if position.get("status") == "CLOSED"
+        ]
+        missing = [position for position in closed if position.get("pnl") is None]
+        if missing:
+            add(
+                str(card["arm"]),
+                "missing_pnl",
+                "warn",
+                f"{len(missing)} closed position(s) with no recorded pnl "
+                f"({', '.join('#' + str(position['id']) for position in missing)}): they "
+                "are excluded from realized P&L and the equity curve has a hole there.",
+            )
+    return flags
+
+
 @app.get("/api/arms")
 def arms(
     ctx: Ctx,
@@ -950,6 +1084,8 @@ def arms(
                 "arms": [_empty_arm(arm) for arm in ("A", "B", "C", "EXCEPTION")],
                 "note": note,
                 "sufficient": False,
+                "mismatches": [],
+                "cross_check": {"scope": "none", "broker_checked": False, "note": "no journal"},
             }
         pnl = rollup.arm_pnl(conn, from_, to)
         bankroll = pnl["arms"]
@@ -1022,6 +1158,20 @@ def arms(
         "control_arm": pnl.get("control_arm"),
         "window": pnl.get("window"),
         "note": note,
+        "mismatches": _arm_mismatches(cards, by_arm),
+        "cross_check": {
+            "scope": "journal-internal",
+            "broker_checked": False,
+            "note": (
+                "The spec asks for open positions to be cross-checked against the live "
+                "Alpaca paper account. This server is read-only, offline-capable and "
+                "credential-free by design, so NO broker comparison was performed and "
+                "none is implied. What is checked here is journal against journal: the "
+                "flags above are real inconsistencies between two recorded facts. A card "
+                "with no flags means the journal is internally consistent, NOT that the "
+                "broker agrees with it."
+            ),
+        },
     }
 
 
@@ -1146,7 +1296,13 @@ def huntplan(
     target = date or dt.datetime.now(aggregate.MARKET_TZ).date()
     with ctx.journal() as (conn, note):
         if conn is None:
-            return {"date": target.isoformat(), "cells": [], "count": 0, "note": note}
+            return {
+                "date": target.isoformat(),
+                "cells": [],
+                "count": 0,
+                "note": note,
+                "event_veto": {"active": False, "kinds": [], "available": False, "reason": ""},
+            }
         clauses = ["kind IN ('PROPOSAL', 'NO_TRADE')", "substr(ts, 1, 10) = ?"]
         params: list[Any] = [target.isoformat()]
         if arm:
@@ -1180,11 +1336,53 @@ def huntplan(
                 "strategy_version": row["strategy_version"],
             }
         )
+    # INTERPRETATION: the event veto banner. The plan's ``checklist_state`` records
+    # the event veto only as prose inside the T5 condition's ``detail`` string
+    # ("earnings day veto", "no event day") — there is no structured ``is_event_day``
+    # flag on a plan cell. Rather than have the frontend guess with a regex over that
+    # prose, the vocabulary comes from the rulebook's ``event_calendar.veto_kinds`` and
+    # the match happens here, and the cell's own reason is returned verbatim next to the
+    # match. If the rulebook cannot be loaded, ``active`` is false and ``available`` is
+    # false: the page then says it could not determine the event veto rather than
+    # drawing a green banner it did not earn.
+    event_veto: dict[str, Any] = {"active": False, "kinds": [], "available": False, "reason": ""}
+    try:
+        rules = load_rules(ctx.settings.rules_path)
+        event_calendar = rules.checklist.t5_options_chain.event_calendar
+        veto_kinds = [kind.lower() for kind in event_calendar.veto_kinds]
+    except (RulesError, OSError, AttributeError):
+        veto_kinds = []
+    if veto_kinds:
+        hits: list[str] = []
+        reasons: list[str] = []
+        for cell in cells:
+            for condition in (cell.get("conditions") or {}).values():
+                if not isinstance(condition, dict):
+                    continue
+                detail = str(condition.get("detail") or "")
+                if condition.get("status") == "PASS" or "no event day" in detail.lower():
+                    continue
+                for kind in veto_kinds:
+                    if kind in detail.lower() and kind not in hits:
+                        hits.append(kind)
+                        reasons.append(detail)
+        event_veto = {
+            "active": bool(hits),
+            "kinds": hits,
+            "available": True,
+            "reason": "; ".join(dict.fromkeys(reasons)),
+        }
     return {
         "date": target.isoformat(),
         "cells": cells,
         "count": len(cells),
         "note": note,
+        "event_veto": event_veto,
+        "event_veto_note": (
+            "Derived by matching the rulebook's event_calendar.veto_kinds against each "
+            "cell's condition detail text, because a plan cell stores the event veto as "
+            "prose rather than as a structured flag. The reason is quoted verbatim."
+        ),
         "source": "journal decisions (kind PROPOSAL/NO_TRADE) — the plan as written",
     }
 
@@ -1226,17 +1424,35 @@ def noshots(
     out = []
     for row in rows:
         outcome = _loads(row["counterfactual_outcome"])
+        hypothesis = _loads(row["instrument_hypothesis"]) or {}
+        indicators = _loads(row["indicator_values"]) or {}
+        moment = dt.datetime.fromisoformat(str(row["ts"]).replace("Z", "+00:00"))
+        # A NO-SHOT marker needs a price to sit on the bar. A sighting records the spot
+        # it was taken at in its own JSON blobs; failing that, the nearest cached bar at
+        # or before the sighting. Null is a real answer and the marker still renders.
+        price, source = _snapshot_price(indicators)
+        if price is None:
+            price, source = _snapshot_price(hypothesis)
+        if price is None:
+            symbol = str(hypothesis.get("symbol") or DEFAULT_SYMBOL)
+            price, source = _price_for_decision(ctx, symbol, moment, "1Min")
+            if price is None:
+                daily = ctx.barcache.stored(symbol, "1Day", end=moment)
+                price, source = (daily[-1].c, "bar(1Day)") if daily else (None, "none")
         out.append(
             {
                 "id": row["id"],
                 "ts": row["ts"],
                 "date": row["date"],
-                "instrument_hypothesis": _loads(row["instrument_hypothesis"]) or {},
+                "instrument_hypothesis": hypothesis,
                 "failed_conditions": _loads(row["failed_conditions"]) or {},
-                "indicator_values": _loads(row["indicator_values"]) or {},
+                "indicator_values": indicators,
                 "counterfactual_entry_ref": row["counterfactual_entry_ref"],
                 "counterfactual_outcome": outcome,
                 "has_outcome": outcome is not None,
+                "price": price,
+                "price_source": source,
+                "created_at": row["created_at"],
             }
         )
     return {
@@ -1244,6 +1460,11 @@ def noshots(
         "count": len(out),
         "counterfactual": delta,
         "note": note,
+        "price_note": (
+            "same provenance rule as /api/signals: the sighting's own recorded spot, "
+            "else the nearest cached bar at or before the sighting. Null means we hold "
+            "no bar there — the hollow marker still renders, without a price."
+        ),
         "outcome_note": (
             "counterfactual_outcome is the one journal column that may be filled in "
             "after the fact (schema trigger). A null here means the window has not "
