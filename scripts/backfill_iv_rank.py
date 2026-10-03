@@ -67,6 +67,43 @@ from executor.iv_rank import DEFAULT_DB_PATH, DEFAULT_LOOKBACK_DAYS, IvRankStore
 #: drifted rulebook is an error rather than a silent fallback.
 FALLBACK_BANDS = (("B", 0, 0), ("C", 90, 180))
 
+#: Default arm set. Spelled with a comma because that is what :func:`parse_arms`
+#: documents as canonical; ``"BC"`` is accepted too (see the fix below) but a default
+#: that only works under the tolerant parser is a default that reads as a typo.
+DEFAULT_ARMS_SPEC = "B,C"
+
+
+def parse_arms(spec: str) -> tuple[str, ...]:
+    """Split an ``--arms`` spec into uppercase single-letter arms.
+
+    FIX 2026-10-03 (Monday readiness): the old parser split on ``","`` only, so the
+    shipped default ``"BC"`` produced the single token ``("BC",)``. No band is named
+    ``"BC"``, so the run printed ``no arms matched ('BC',)`` and exited 2 — the
+    documented default invocation of the script never worked, which is exactly the
+    kind of thing that is only found by running the thing.
+
+    The fix accepts commas, whitespace, **and the packed form**: any run of letters
+    separates into individual arms, so ``BC``, ``B,C``, ``B C``, ``b, c`` and
+    ``"B,C "`` all mean the same set. Arms are single letters in the rulebook
+    (``A``/``B``/``C``), which is what makes the packed reading unambiguous — a
+    multi-letter arm name would be spelled with a separator.
+
+    Order is first-seen and repeats collapse, because ``wanted`` is filtered against
+    the rulebook's bands downstream and a duplicate would only repeat the report's
+    ``bands_seen``.
+
+    An empty or separator-only spec yields ``()``, which the caller reports as "no arms
+    matched" — the honest failure, rather than silently defaulting to every arm. A
+    spec naming a letter that is not an arm (``"X"``) also parses fine: the parser
+    normalises, and the band match downstream is what decides.
+    """
+    parts: list[str] = []
+    for chunk in spec.replace(",", " ").split():
+        for letter in chunk.strip().upper():
+            if letter and letter not in parts:
+                parts.append(letter)
+    return tuple(parts)
+
 
 def bands_from_rulebook(rulebook_path: Path) -> tuple[tuple[str, int, int], ...]:
     """Per-arm ``(arm, dte_min, dte_max)`` read from the frozen rulebook.
@@ -102,8 +139,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--arms", default="BC",
-        help="comma-separated arms to backfill (default: %(default)s). B is a no-op by design.",
+        "--arms", default=DEFAULT_ARMS_SPEC,
+        help=(
+            "arms to backfill, comma- or whitespace-separated (default: %(default)s); "
+            "'BC' and 'B,C' are equivalent. B is a no-op by design."
+        ),
     )
     parser.add_argument("--strike-step", type=float, default=DEFAULT_STRIKE_STEP)
     parser.add_argument("--range-pct", type=float, default=DEFAULT_LADDER_RANGE_PCT)
@@ -122,7 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     end = dt.date.today()
     start = end - dt.timedelta(days=args.days)
-    arms = tuple(a.strip().upper() for a in args.arms.split(",") if a.strip())
+    arms = parse_arms(args.arms)
 
     if args.rules.exists():
         bands = bands_from_rulebook(args.rules)
@@ -133,6 +173,7 @@ def main(argv: list[str] | None = None) -> int:
     wanted = tuple(b for b in bands if b[0] in arms)
     if not wanted:
         print(f"no arms matched {arms!r} in {bands}")
+        print(f"available arms: {', '.join(b[0] for b in bands)}  (accepts 'BC' or 'B,C')")
         return 2
 
     try:
