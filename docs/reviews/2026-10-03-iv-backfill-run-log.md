@@ -10,7 +10,7 @@ Branch `feature/frozen-rule-rulings`. Base: run A's tip `50e2c0f`.
 | `a55deef` | `executor/black_scholes.py` — European pricer + IV solver, stdlib only |
 | `81f918d` | R9 provenance: `source="bars_bs_inversion"`, `origin="live"\|"backfill"` |
 | `c2da92b` | `executor/iv_backfill.py` + `scripts/backfill_iv_rank.py` + 23 tests |
-| `f2614da` | throttle pacing + bounded 403 cooldown, + 5 tests |
+| `f2614da` | throttle pacing + bounded 403 cooldown, + 5 tests — **the cooldown half was wrong, see errata** |
 | `765c76c` | ladder sized to the gate (50 chunks → 15) |
 | `e2b0b68` | empty-ladder refusal (found by the ladder test) |
 
@@ -46,6 +46,38 @@ From `docs/reviews/2026-10-03-iv-backfill-depth-probe.md`:
 
 ## The blocking finding: the options-bars route is throttled, and lies about it
 
+> ### ⚠️ ERRATUM — the "blocking finding" below is WRONG, and the blocker it names never existed.
+>
+> **It was not a throttle and there was nothing to wait out.** The blocker was a
+> **15-minute recency gate on `end`**, disguised as the text `OPRA agreement is not
+> signed`. Full root cause, with the measurements:
+> [`2026-10-03-opra-403-investigation.md`](2026-10-03-opra-403-investigation.md).
+>
+> The backfill sent `end = <today>T23:59:59Z`, which is always inside the last 15 minutes,
+> so **every run 403'd on its very first options call, deterministically, on any
+> credential.** Same 100 symbols, same credential, same second, `end` the only variable:
+> end-of-today → **403**; `now−20min` → **200** with all 100 symbols populated.
+>
+> Two measurements in the old finding were read backwards. "The identical request 403s and
+> then succeeds" — the requests were not identical: every success used a months-stale
+> `end`, every failure was today's. And "the budget is not what the docs say" — the budget
+> was never under pressure; `X-Ratelimit-Remaining` moved 199 → 193 across a 15-call burst
+> and the 403s consumed no budget at all.
+>
+> **Two corrections to what this log records as operational facts:**
+>
+> - The "aborted at ~7-11 min" runtimes were **180-second sleep ladders in front of a
+>   refusal that was never going to change**, not backpressure. The mitigation described
+>   below (403 cools down 180 s, doubling) was aimed at a phantom; 403 is now terminal and
+>   fails in one call, and `refusals` is counted instead of `cooldowns`.
+> - **"Sizing the ladder to the gate cut the request count 3.4×" is not why it failed.** The
+>   rebuilt ladder is **3 chunks, not 4** (288 distinct OCC symbols → 100/100/88, per
+>   `scratch/opra_ladder.py`, offline). With the clamp in place the whole thing is a handful
+>   of calls, not a multi-hour paced crawl. The 3.4× was real but irrelevant.
+>
+> What follows is preserved verbatim as the record of what was believed at the time and why
+> it looked true. Do not cite it as a finding.
+
 `403 OPRA agreement is not signed` arrives **in waves**. Roughly 10–15 requests succeed,
 then every request 403s for ~2 minutes, then the burst allowance returns. The identical
 request 403s twice, succeeds minutes later with nothing changed on our side, and 403s
@@ -74,6 +106,11 @@ Two self-inflicted factors made this worse and are recorded so they are not repe
 competing** for the same throttle while a third was launched; and the 403 cooldown was
 initially 30 s, shorter than the measured ~2 min recovery). Both were found and corrected;
 neither was an upstream fault.
+
+> **Errata on this note too:** the orphaned-run interference was real and worth recording.
+> The "~2 min measured recovery" was not — there was no recovery to measure, because the
+> request was being refused on recency, not throttled. The second self-inflicted factor
+> was a fix to a problem that did not exist.
 
 ## Can T5 arm C warm at all? — answered by arithmetic, not by hope
 
