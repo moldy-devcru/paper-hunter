@@ -23,6 +23,9 @@ import {
   distanceHistogram,
   ivHistory,
   windowChecklist,
+  statRow,
+  emptyState,
+  disclosure,
   WORKING_DEEP_OTM_PCT,
   MIN_IV_OBSERVATIONS,
 } from "./model.js";
@@ -37,6 +40,15 @@ import {
 const POLL_MS = 120_000;
 const el = (id) => document.getElementById(id);
 const state = { timer: null, inFlight: false, charts: [] };
+
+// UX PASS 1: a cell whose whole content is an em dash is the ABSENCE of a measurement,
+// and rendering it in the same weight as a number is what made the calibration tables
+// read as dense. `dashCell` mutes it; `cellNum` wraps a real number. Dash-only columns
+// are still shown (hiding a whole column because it is empty moves the layout under the
+// reader mid-poll) but they stop competing for attention.
+const dashCell = (value) =>
+  `<td class="r num muted" title="no value recorded">${esc(value == null ? DASH : value)}</td>`;
+const cellNum = (html) => `<td class="r num">${html}</td>`;
 
 function teardownCharts() {
   for (const chart of state.charts) {
@@ -70,17 +82,22 @@ function renderFlow(payload) {
   if (model.empty) {
     el("calib-flow").innerHTML =
       head +
-      `<div class="empty big">no flow_baseline sessions yet. ${esc(
-        payload.reason || "the soak writes one row per session after the 15:30 close",
-      )}. That is a fact, not an error — nothing has run the soak yet.</div>`;
+      emptyState(
+        "No flow_baseline sessions yet",
+        (payload.reason || "the soak writes one row per session after the 15:30 close") +
+          ". That is a fact, not an error — nothing has run the soak yet.",
+      );
     return;
   }
 
   const first = model.points[0];
   const last = model.points[model.points.length - 1];
+  // UX PASS 1: "baseline complete" is an all-clear, and an all-clear in a banner at
+  // the top of the tab is the same mistake the Arms and Hunt pages had. It becomes a
+  // chip on the status line; the forming case stays a banner because it is a real
+  // warning about a number that does not yet mean what it appears to mean.
   const status = model.complete
-    ? `<div class="banner ok">baseline complete (${model.sessions}/${model.sessionsNeeded}) — ` +
-      `the P90 is a real line now, and it still moves until N is frozen.</div>`
+    ? `<span class="chip pass" title="baseline complete (${model.sessions}/${model.sessionsNeeded}) — the P90 is a real line now, and it still moves until N is frozen">baseline complete ${model.sessions}/${model.sessionsNeeded}</span>`
     : `<div class="banner warn">P90 is <b>forming</b> — ${model.sessions} of ${
         model.sessionsNeeded
       } sessions collected, <b>needs ${model.needs} more</b> before it means anything. ` +
@@ -112,7 +129,10 @@ function renderFlow(payload) {
       }</b></div>
   </div>`;
 
-  const table = `<table class="grid"><thead><tr><th>session</th><th class="r">call</th>
+  // UX PASS 1: the session column is the row identity in every one of these tables, so
+  // it freezes with the header — scrolling a 20-session baseline no longer leaves the
+  // reader unable to say which row a number belongs to.
+  const table = `<table class="grid freeze"><thead><tr><th class="sticky-col">session</th><th class="r">call</th>
     <th class="r">put</th><th class="r">total</th><th class="r">trailing mean</th>
     <th class="r">forming P90</th><th class="r">spot</th></tr></thead><tbody>${
       [...model.points]
@@ -122,20 +142,29 @@ function renderFlow(payload) {
             `<tr title="${esc(point.feed || "feed unrecorded")}${
               point.isDelayed ? " · delayed feed" : ""
             }${point.baselineDays == null ? "" : ` · ${point.baselineDays}/${model.sessionsNeeded} baseline days`}">
-              <td class="num">${esc(point.date)}</td>
-              <td class="r num" style="color:${CALL_COLOR}">${vol(point.call)}</td>
-              <td class="r num" style="color:${PUT_COLOR}">${vol(point.put)}</td>
-              <td class="r num">${vol(point.total)}</td>
+              <td class="num sticky-col">${esc(point.date)}</td>
+              ${isNum(point.call) ? cellNum(`<span style="color:${CALL_COLOR}">${vol(point.call)}</span>`) : dashCell(null)}
+              ${isNum(point.put) ? cellNum(`<span style="color:${PUT_COLOR}">${vol(point.put)}</span>`) : dashCell(null)}
+              ${isNum(point.total) ? cellNum(vol(point.total)) : dashCell(null)}
               <td class="r num muted">${vol(point.baselineMean)}</td>
-              <td class="r num" style="color:#e05fd0">${vol(point.formingP90)}</td>
-              <td class="r num muted">${point.sessionSpot == null ? DASH : point.sessionSpot.toFixed(2)}</td>
+              ${isNum(point.formingP90) ? cellNum(`<span style="color:#e05fd0">${vol(point.formingP90)}</span>`) : dashCell(null)}
+              ${isNum(point.sessionSpot) ? cellNum(point.sessionSpot.toFixed(2)) : dashCell(null)}
             </tr>`,
         )
         .join("")
     }</tbody></table>`;
 
   el("calib-flow").innerHTML =
-    head + status + facts + `<div class="calib-chart" id="calib-flow-chart"></div>` +
+    head + status + facts +
+    // UX PASS 1: the chart container is 220px of nothing when the store has no points
+    // to plot. charts.js returns null rather than an empty canvas, so the panel has to
+    // say why the rectangle is there — a blank chart area reads as a rendering failure,
+    // and on a one-day-old machine that is exactly the wrong impression.
+    `<div class="calib-chart" id="calib-flow-chart"><div class="chart-state" id="calib-flow-state">${
+      model.points.length
+        ? "plotting…"
+        : "nothing to plot — sessions exist but carry no volume"
+    }</div></div>` +
     `<div class="chart-legend">
        <span class="lg"><i style="background:${CALL_COLOR}"></i>deep-OTM call volume</span>
        <span class="lg"><i style="background:${PUT_COLOR}"></i>deep-OTM put volume</span>
@@ -152,7 +181,17 @@ function renderFlow(payload) {
     table;
 
   const chart = flowVolumeChart(el("calib-flow-chart"), model);
-  if (chart) state.charts.push(chart);
+  if (chart) {
+    state.charts.push(chart);
+    // The chart drew over its container; drop the placeholder state.
+    const placeholder = el("calib-flow-state");
+    if (placeholder) placeholder.remove();
+  } else {
+    const placeholder = el("calib-flow-state");
+    if (placeholder) {
+      placeholder.textContent = "nothing to plot — the sessions on record carry no volume";
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -173,9 +212,12 @@ function renderDistance(payload) {
     : `no session recorded yet — showing the soak's working threshold (${model.threshold}pp)`;
 
   if (model.empty) {
-    el("calib-distance").innerHTML = `<div class="plan-meta">${esc(source)}</div>
-      <div class="empty big">no distance buckets stored. The soak writes one 1pp bucket per
-      percentage point from spot; nothing has written them yet.</div>`;
+    el("calib-distance").innerHTML = `<div class="plan-meta">${esc(source)}</div>` +
+      emptyState(
+        "No distance buckets stored",
+        "The soak writes one 1pp bucket per percentage point from spot. Nothing has " +
+          "written them yet, so there is no deep-vs-near split to show.",
+      );
     return;
   }
 
@@ -223,9 +265,12 @@ function renderIv(payload) {
   });
   const source = (payload.ivrank || {}).source_note || "";
   if (model.empty) {
-    el("calib-iv").innerHTML = `<div class="empty big">no IV observations in the store. ${esc(
-      source,
-    )} — before the soak runs and before the VIX seed is backfilled, T5 has nothing to read.</div>`;
+    el("calib-iv").innerHTML = emptyState(
+      "No IV observations in the store",
+      (source || "") +
+        " — before the soak runs and before the VIX seed is backfilled, T5 has nothing " +
+        "to read, and the warmup count it blocks on is zero.",
+    );
     return;
   }
   const legend = model.series
@@ -269,8 +314,7 @@ function renderIv(payload) {
          .join("")}</ul></div>`
     : "";
   const warm = model.warm
-    ? `<div class="banner ok">warmup reached: ${model.realCount} real observation(s) ≥
-       MIN_OBSERVATIONS=${model.minObservations}.</div>`
+    ? `<span class="chip pass" title="warmup reached: ${model.realCount} real observation(s) ≥ MIN_OBSERVATIONS=${model.minObservations}">warmup reached ${model.realCount}/${model.minObservations}</span>`
     : `<div class="banner ${model.realCount ? "warn" : "bad"}">warmup <b>not</b> reached:
        ${model.realCount}/${model.minObservations} real observation(s)${
          model.proxyCount
@@ -283,14 +327,16 @@ function renderIv(payload) {
      different colour: colour alone fails a monochrome print, and the seed is not the chain</div>` +
     seamBanner + conflicts + warm +
     `<div class="chart-legend">${legend}</div>` +
-    `<div class="calib-chart" id="calib-iv-chart"></div>` +
-    `<table class="grid"><thead><tr><th>underlying</th><th>tenor key</th>
+    `<div class="calib-chart" id="calib-iv-chart"><div class="chart-state" id="calib-iv-state">${
+      model.realCount ? "plotting…" : "proxy seed only — no real chain observations yet"
+    }</div></div>` +
+    `<table class="grid freeze"><thead><tr><th class="sticky-col">underlying</th><th>tenor key</th>
       <th class="r">real</th><th class="r">proxy</th><th>first</th><th>last</th>
       <th class="r">latest IV</th></tr></thead><tbody>${
         model.series
           .map(
             (entry) =>
-              `<tr><td>${esc(entry.underlying)}${
+              `<tr><td class="sticky-col">${esc(entry.underlying)}${
                 entry.isProxy ? ' <span class="chip pending">proxy seed</span>' : ""
               }</td><td>${esc(entry.tenorKey)}</td><td class="r num">${entry.realPoints}</td>
                <td class="r num ${entry.proxyPoints ? "" : "muted"}">${entry.proxyPoints}</td>
@@ -304,7 +350,11 @@ function renderIv(payload) {
       }</tbody></table>`;
 
   const chart = ivHistoryChart(el("calib-iv-chart"), model);
-  if (chart) state.charts.push(chart);
+  if (chart) {
+    state.charts.push(chart);
+    const placeholder = el("calib-iv-state");
+    if (placeholder) placeholder.remove();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -333,24 +383,95 @@ function renderChecklist(payload) {
     )
     .join("");
   const pending = payload.pending_calibrations || [];
+  // UX PASS 1: the read-only banner was the loudest thing on the tab and it was the
+  // same sentence every load — a permanent caveat, not a finding. The live part of it
+  // (the counts) is now a status line with badges, and the explanation is a disclosure.
+  const blocked = model.counts.blocked || 0;
+  const statusLine = `<div class="plan-meta checklist-status">
+    <span class="chip ${model.ready ? "pass" : blocked ? "fail" : "pending"}">${esc(
+      model.summary,
+    )}</span>
+    <span class="muted">read-only status view — nothing here can be ticked</span>
+  </div>`;
+  const notes = disclosure({
+    label: "About this checklist",
+    body:
+      `<div class="mp-detail">Ticking nothing here is the normal state: this page can only ` +
+      `report what the store proves, and the ratification's box is ticked by a human. ` +
+      `No item here can be checked off from this screen.</div>` +
+      `<div class="mp-detail" style="margin-top:4px">${
+        pending.length
+          ? `Rulebook.pending_calibrations (read straight from the YAML): ${pending
+              .map((entry) => `<code>${esc(entry)}</code>`)
+              .join(", ")}`
+          : "Rulebook.pending_calibrations is empty"
+      }</div>` +
+      `<div class="mp-detail" style="margin-top:4px">strategy_version ${esc(
+        payload.strategy_version || DASH,
+      )} — the checklist itself is the operator's document (docs/ratification.md §(d)) ` +
+      `and this page never edits it.</div>`,
+  });
   el("calib-checklist").innerHTML =
-    `<div class="banner ${
-      model.counts.blocked ? "bad" : model.counts.done === model.items.length ? "ok" : "warn"
-    }"><b>read-only status view</b> — ${esc(model.summary)}. Ticking nothing here is the
-     normal state: this page can only report what the store proves, and the ratification's
-     box is ticked by a human. No item here can be checked off from this screen.</div>` +
+    statusLine +
     `<table class="grid chk-table"><tbody>${rows}</tbody></table>` +
-    `<div class="plan-meta">${
-      pending.length
-        ? `Rulebook.pending_calibrations (read straight from the YAML): ${pending
-            .map((entry) => `<code>${esc(entry)}</code>`)
-            .join(", ")}`
-        : "Rulebook.pending_calibrations is empty"
-    }</div>` +
-    `<div class="plan-meta">strategy_version ${esc(
-      payload.strategy_version || DASH,
-    )} · read-only status, live values — the checklist itself is the operator's document
-      (docs/ratification.md §(d)) and this page never edits it</div>`;
+    notes;
+}
+
+/**
+ * UX PASS 1: the tab's headline numbers.
+ *
+ * The status card is the one that matters: `calibration_pending` vs `sufficient` is the
+ * question T6 asks, and it used to be reachable only by reading a status string buried
+ * mid-paragraph in the flow panel. It is derived from the same `n` block the panel
+ * renders, not recomputed, so the two can never disagree.
+ */
+function renderSummary(payload) {
+  const flow = flowVolume(payload.flow, payload.p90);
+  const n = proposedN(payload.n);
+  const iv = ivHistory((payload.ivrank || {}).series || [], {
+    minObservations: MIN_IV_OBSERVATIONS,
+  });
+  const status = n.status === "sufficient" ? "sufficient" : "calibration_pending";
+  const last = flow.points.length ? flow.points[flow.points.length - 1] : null;
+  el("calib-summary").innerHTML = statRow([
+    {
+      label: "calibration",
+      value: status,
+      tone: status === "sufficient" ? "up" : "pending",
+      sub: n.status === "sufficient" ? `from ${n.samples} sample(s)` : "not enough sessions",
+      title: "sufficient = the proposed N can be scored from the sessions on record",
+    },
+    {
+      label: "proposed N",
+      value: n.value == null ? DASH : `${n.value.toFixed(3)}x`,
+      sub: "multiplier on the baseline mean, not frozen",
+      title: "P90 of the per-session ratios; a ratio is dimensionless, a volume P90 is not",
+    },
+    {
+      label: "qualified sessions",
+      value: `${n.sessionsQualified}/${n.sessionsConsidered}`,
+      sub: n.excludedCount ? `${n.excludedCount} sample(s) excluded` : "none excluded",
+      title: "sessions that qualified for the ratio distribution, of those considered",
+    },
+    {
+      label: "baseline",
+      value: `${flow.sessions}/${flow.sessionsNeeded}`,
+      sub: flow.complete ? "complete" : `needs ${flow.needs} more`,
+      tone: flow.complete ? "up" : "pending",
+    },
+    {
+      label: "latest session",
+      value: last ? last.date : DASH,
+      sub: last ? `${vol(last.total)} deep-OTM contracts` : "no sessions yet",
+    },
+    {
+      label: "IV warmup",
+      value: `${iv.realCount}/${iv.minObservations}`,
+      sub: iv.warm ? "T5 can pass" : "T5 reports PENDING",
+      tone: iv.warm ? "up" : "pending",
+      title: "real chain observations against MIN_OBSERVATIONS; proxy seed does not count",
+    },
+  ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +480,7 @@ function renderChecklist(payload) {
 
 function render(payload) {
   teardownCharts();
+  renderSummary(payload);
   renderFlow(payload);
   renderDistance(payload);
   renderIv(payload);

@@ -528,7 +528,10 @@ def test_the_calibration_page_states_the_forming_p90_gap_in_words() -> None:
     assert "needs ${model.needs} more" in calib
     assert "forming" in calib
     assert "model.complete" in calib, "the complete case has to be reachable"
-    assert "no flow_baseline sessions yet" in calib, "and the empty case has to say so"
+    # UX pass 1 reworded the empty state into a one-liner ("No flow_baseline sessions
+    # yet" + a "?" disclosure), so the pin follows the new capitalisation. The property
+    # being asserted is unchanged: the empty case still names what is missing.
+    assert "No flow_baseline sessions yet" in calib, "and the empty case has to say so"
 
 
 def test_the_calibration_page_separates_proxy_from_real_in_colour_and_style() -> None:

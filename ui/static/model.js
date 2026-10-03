@@ -921,5 +921,83 @@ export function windowChecklist(payload) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 7. shared page furniture (UX pass 1)
+// ---------------------------------------------------------------------------
+//
+// Operator feedback on the first build: "very dense, compact text, hard to immediately
+// discern." The four non-chart pages were four walls of 11px monospace, where the one
+// number worth knowing (how much money, how many vetoes, is calibration ready) had the
+// same visual weight as a column header. These four helpers are the fix, and they live
+// here rather than in each page module because the rules they encode are the SAME rule
+// four times, and a rule copied four times is a rule that will be right on three tabs.
+//
+// # INTERPRETATION — the hierarchy rule, stated once:
+//   1. The number you came for is a CARD, at the top, in the largest type on the page.
+//   2. Methodology, caveats and "everything is fine" reporting is COLLAPSED. A page
+//      whose loudest element says "no problems" is a page that hides the problems.
+//   3. An empty state is ONE LINE plus a "?" that holds the explanation. Prose where a
+//      fact belongs reads as an error, and the machine is one day old: empty is the
+//      current, correct state of four of these tabs, not a failure to render.
+
+/**
+ * One big-number summary card.
+ *
+ * `label` is the noun ("bankroll"), `value` the number, `sub` the muted secondary line
+ * that says which slice of the world the number covers. `tone` is the usual up/down/flat
+ * class so a card reads at a glance; absent a tone the value is plain foreground.
+ */
+export function statCard({ label, value, sub = "", tone = "", title = "" }) {
+  return `<div class="stat"${title ? ` title="${esc(title)}"` : ""}>
+    <div class="stat-label">${esc(label)}</div>
+    <div class="stat-value ${esc(tone)}">${value == null ? DASH : esc(value)}</div>
+    ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ""}
+  </div>`;
+}
+
+/** A row of summary cards. `cards` is a list of statCard() argument objects. */
+export function statRow(cards, { cls = "" } = {}) {
+  const list = (cards || []).filter(Boolean);
+  if (!list.length) return "";
+  return `<div class="stat-row ${esc(cls)}">${list.map(statCard).join("")}</div>`;
+}
+
+/**
+ * An empty state: ONE short line, plus a "?" disclosure carrying the long explanation.
+ *
+ * `line` is the whole visible state — a fact, not an apology. `why` is the reasoning
+ * that used to be the whole paragraph, and it stays collapsed because an operator who
+ * needs it can open it and an operator scanning four tabs cannot. The "?" is a real
+ * `<details>` element rather than a `title` attribute: a native tooltip cannot hold two
+ * sentences, cannot be read on a touch screen, and disappears before it is finished.
+ */
+export function emptyState(line, why = "", { cls = "" } = {}) {
+  const disclosure = why
+    ? `<details class="why"><summary title="why">?</summary><div class="why-body">${esc(
+        why,
+      )}</div></details>`
+    : "";
+  return `<div class="empty-line ${esc(cls)}"><span>${esc(line)}</span>${disclosure}</div>`;
+}
+
+/**
+ * A collapsed methodology/integrity block.
+ *
+ * `count` marks the disclosure itself when there is something to look at, so a real
+ * finding is findable without being the loudest thing on the page: a badge on a closed
+ * disclosure says "read me", a banner says "stop and read me", and for a research tool
+ * where flags are usually zero, only the first is true most of the time.
+ */
+export function disclosure({ label, body, count = 0, tone = "", open = false, hint = "" }) {
+  const badge =
+    count > 0 ? `<span class="disc-count ${esc(tone)}">${esc(count)}</span>` : "";
+  return `<details class="disc"${open ? " open" : ""}>
+    <summary><span class="disc-label">${esc(label)}</span>${badge}${
+      hint ? `<span class="disc-hint">${esc(hint)}</span>` : ""
+    }</summary>
+    <div class="disc-body">${body}</div>
+  </details>`;
+}
+
 /** Escape helper re-export so page modules have one import for text handling. */
 export { esc, usd, pct, truncate, DASH };

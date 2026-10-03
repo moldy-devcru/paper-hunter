@@ -20,6 +20,9 @@ import {
   sortIndicator,
   referenceChain,
   pageInfo,
+  statRow,
+  emptyState,
+  disclosure,
 } from "./model.js";
 
 const POLL_MS = 60_000;
@@ -113,37 +116,134 @@ function render(payload) {
   const info = pageInfo(payload);
   state.note = payload.note || "";
 
-  el("ledger-body").innerHTML = `
-    <div class="banner">
-      immutable journal — rows are appended, never edited. A correction is a NEW row
-      that references the old one; there is no edit affordance on this page, by design.
-    </div>
-    ${info.empty ? `<div class="empty big">no rows match${esc(
-      filtersLabel(),
-    )}. The journal is append-only, so an empty result is a fact about the filters, not a missing table.</div>` : ""}
-    <table class="grid">
+  // UX PASS 1: the empty state distinguishes "the journal is empty" from "your filters
+  // match nothing", because they are opposite facts and the old text said only the
+  // second in every case — an operator with a brand-new journal and no filters at all
+  // was told their filters excluded everything, which is a false statement about their
+  // own query. At zero rows the table header, the pager and the row counter are all
+  // hidden: they describe rows that do not exist.
+  const filters = activeFilters();
+  const emptyHtml = info.empty
+    ? filters.length
+      ? emptyState(
+          "No rows match these filters",
+          `The journal holds ${info.total} row(s) in total and none of them survive ${
+            filters.map((filter) => filter.label).join(", ")
+          }. Clear a filter chip above, or reset, to see the whole journal. An empty ` +
+            `result here is a fact about the filters, not a missing table.`,
+        )
+      : emptyState(
+          "The journal is empty",
+          (state.note || "no rows yet") +
+            " — the ledger holds every decision the executor has written. Rows appear once " +
+            "the hunt runs, so on a young journal this is the expected state, not an error.",
+        )
+    : "";
+
+  const tableHtml = info.empty
+    ? ""
+    : `<table class="grid">
       <thead><tr>${headerCells()}</tr></thead>
       <tbody>${state.rows.map(rowHtml).join("")}</tbody>
     </table>
     <div class="pager">
-      <span class="pager-info">${
-        info.empty ? "0 rows" : `rows ${info.first}–${info.last} of ${info.total}`
-      }${esc(state.note ? ` · ${state.note}` : "")}</span>
+      <span class="pager-info">rows ${info.first}–${info.last} of ${info.total}${
+        state.note ? ` · ${esc(state.note)}` : ""
+      }</span>
       <button class="pg" data-page="prev" ${info.hasPrev ? "" : "disabled"}>‹ prev</button>
       <span class="pager-page">page ${info.page} of ${Math.max(info.pages, 1)}</span>
       <button class="pg" data-page="next" ${info.hasNext ? "" : "disabled"}>next ›</button>
     </div>`;
+
+  el("ledger-body").innerHTML =
+    renderSummary(info, filters) + ledgerPolicy() + emptyHtml + tableHtml;
+  renderFilterChips();
   el("ledger-stamp").textContent = `ledger · ${info.total} row(s) matching · updated ${new Date()
     .toLocaleTimeString("en-GB", { hour12: false })}`;
 }
 
-function filtersLabel() {
+/** True when any filter narrows the query. Drives the empty state's wording. */
+function activeFilters() {
   const parts = [];
-  if (state.q.trim()) parts.push(`q="${state.q.trim()}"`);
-  if (state.arm) parts.push(`arm=${state.arm}`);
-  if (state.kind) parts.push(`kind=${state.kind}`);
-  if (state.from || state.to) parts.push(`${state.from || "…"}→${state.to || "…"}`);
-  return parts.length ? ` (${parts.join(", ")})` : "";
+  if (state.q.trim()) parts.push({ key: "q", label: `search "${state.q.trim()}"` });
+  if (state.arm) parts.push({ key: "arm", label: `arm ${state.arm}` });
+  if (state.kind) parts.push({ key: "kind", label: state.kind });
+  if (state.from) parts.push({ key: "from", label: `from ${state.from}` });
+  if (state.to) parts.push({ key: "to", label: `to ${state.to}` });
+  return parts;
+}
+
+/**
+ * UX PASS 1: the active filters, as removable chips under the filter bar.
+ *
+ * A filter you cannot see the effect of is a filter you cannot undo. Before this the
+ * only way to know a filter was on was to read the empty-state sentence and count
+ * clauses in it, and the only way to undo one was the reset button — which throws away
+ * every filter at once to change one. Each chip names one filter and clears exactly
+ * that one; reset stays for the whole set.
+ */
+function renderFilterChips() {
+  const filters = activeFilters();
+  const node = el("ledger-chips");
+  if (!node) return;
+  node.hidden = filters.length === 0;
+  node.innerHTML = filters.length
+    ? `<span class="chip-label">filters</span>${filters
+        .map(
+          (filter) =>
+            `<button class="chip fchip" data-clear="${esc(filter.key)}" title="clear this filter">${esc(
+              filter.label,
+            )} ✕</button>`,
+        )
+        .join("")}`
+    : "";
+}
+
+/**
+ * UX PASS 1: three numbers above the table — how much is in the journal, how much of it
+ * this page is showing, and when the last row was written. On a journal that fills up
+ * over months, "rows shown" of a growing total is the number an operator actually
+ * navigates by, and it was previously buried in the pager's small print.
+ */
+function renderSummary(info, filters) {
+  const rows = state.rows;
+  const last = rows.length
+    ? rows.reduce((acc, row) => (row.created_at > acc ? row.created_at : acc), "")
+    : "";
+  const filtered = filters.length > 0;
+  return statRow([
+    {
+      label: filtered ? "matching rows" : "journal rows",
+      value: String(info.total),
+      sub: filtered ? `${filters.length} filter(s) on` : "unfiltered total",
+    },
+    {
+      label: "rows shown",
+      value: String(rows.length),
+      sub: info.total ? `${info.first}–${info.last} of ${info.total}` : "nothing to page",
+    },
+    {
+      label: "last written",
+      value: last ? `${shortDay(last)} ${clockET(last)}` : DASH,
+      sub: last ? "journal created_at" : "nothing written yet",
+      title: "created_at — when the row was written, not the market time it is about",
+    },
+  ]);
+}
+
+/** UX PASS 1: the append-only policy moves off the page face and into a disclosure. */
+function ledgerPolicy() {
+  return disclosure({
+    label: "append-only",
+    hint: "a correction is a new row, never an edit",
+    body:
+      `<div class="mp-detail">Rows are appended, never edited. A correction is a NEW row ` +
+      `that references the old one, and the references render as followable links, so the ` +
+      `chain from a superseded row to the current truth is walkable on this page.</div>` +
+      `<div class="mp-detail" style="margin-top:4px">There is no edit affordance anywhere ` +
+      `on this page, by design. \`created_at\` is rendered next to \`ts\` because those are ` +
+      `different facts: one is when the row was written, one is the market time it is about.</div>`,
+  });
 }
 
 export async function loadLedger() {
@@ -171,6 +271,30 @@ export async function loadLedger() {
 
 function resetPage() {
   state.page = 1;
+}
+
+/** Clear exactly one filter and mirror it back into its control. */
+function clearFilter(key) {
+  if (key === "q") {
+    state.q = "";
+    el("ledger-q").value = "";
+  } else if (key === "arm") {
+    state.arm = "";
+    el("ledger-arm").value = "";
+  } else if (key === "kind") {
+    state.kind = "";
+    el("ledger-kind").value = "";
+  } else if (key === "from") {
+    state.from = "";
+    el("ledger-from").value = "";
+  } else if (key === "to") {
+    state.to = "";
+    el("ledger-to").value = "";
+  } else {
+    return;
+  }
+  resetPage();
+  loadLedger();
 }
 
 export function wireLedger() {
@@ -219,6 +343,13 @@ export function wireLedger() {
     el("ledger-to").value = "";
     resetPage();
     loadLedger();
+  });
+
+  // UX PASS 1: chips live in the header, so their handler lives here rather than in the
+  // body listener. One filter per chip; `reset` still clears the whole set.
+  el("ledger-chips").addEventListener("click", (event) => {
+    const chip = event.target.closest("button.fchip");
+    if (chip) clearFilter(chip.dataset.clear);
   });
 
   el("ledger-body").addEventListener("click", (event) => {

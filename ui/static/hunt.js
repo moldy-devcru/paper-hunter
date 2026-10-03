@@ -13,7 +13,15 @@
 
 import { getJSON, getAll, query } from "./net.js";
 import { esc, usd, pct, px, DASH, shortDay, clockET, toneClass } from "./format.js";
-import { huntGrid, conditionChips, eventVetoBanner, vetoHistogram, counterfactual } from "./model.js";
+import {
+  huntGrid,
+  conditionChips,
+  eventVetoBanner,
+  vetoHistogram,
+  counterfactual,
+  statRow,
+  emptyState,
+} from "./model.js";
 
 const POLL_MS = 60_000;
 const state = { date: "", inFlight: false, timer: null };
@@ -73,8 +81,20 @@ function cellHtml(cell) {
 function renderPlan(payload) {
   const grid = huntGrid(payload.cells);
   const banner = eventVetoBanner(payload.event_veto);
-  const bannerHtml = `<div class="banner ${banner.level === "bad" ? "bad" : banner.level === "ok" ? "ok" : "warn"}">
-    <b>${esc(banner.text)}</b></div>`;
+  // UX PASS 1: the event veto is a day-level fact, so it earns a banner ONLY when it
+  // says something — active, or unknown (a rulebook we could not read is not an all
+  // clear). The "none of the veto kinds" case used to render a full-width green banner
+  // at the top of the tab, which made the absence of a problem the most prominent thing
+  // on the page. It is a chip now, inline with the plan meta, where a glance catches it
+  // and a scan does not trip over it.
+  const bannerHtml = banner.level === "ok"
+    ? ""
+    : `<div class="banner ${banner.level === "bad" ? "bad" : "warn"}"><b>${esc(
+        banner.text,
+      )}</b></div>`;
+  const eventChip = banner.level === "ok"
+    ? `<span class="chip soft" title="${esc(banner.text)}">event veto: none</span>`
+    : "";
   if (!grid.empty) {
     const head = `<tr><th>direction</th>${grid.arms
       .map((arm) => `<th class="arm-head">arm ${esc(arm)}</th>`)
@@ -89,14 +109,21 @@ function renderPlan(payload) {
       bannerHtml +
       `<div class="plan-meta">date ${esc(payload.date)} · ${grid.rows.length} direction(s) × ${
         grid.arms.length
-      } arm(s) · source: ${esc(payload.source || "journal")}</div>` +
+      } arm(s) · source: ${esc(payload.source || "journal")} ${eventChip}</div>` +
       `<table class="plan">${head}<tbody>${body}</tbody></table>`;
   } else {
+    // UX PASS 1: one line, plus the explanation behind a "?". The old sentence ran to
+    // three clauses across two lines and read like a failure; the machine is one day
+    // old and an unrun session is the expected state, not an error worth shouting about.
     el("hunt-plan").innerHTML =
       bannerHtml +
-      `<div class="empty big">no plan cells for ${esc(
-        payload.date,
-      )}. The plan is written once per session by the executor; an empty day is a day the hunt has not run, not a missing table.</div>`;
+      emptyState(
+        `No plan cells yet for ${payload.date} — the hunt writes its plan each session, pre-market`,
+        "The plan is not a table: executor.hunt_plan writes one immutable decision row " +
+          "per (arm, direction) cell, and /api/huntplan reads those rows back. An empty " +
+          "day therefore means the hunt has not run for this session — not that a table " +
+          "is missing. Pick another date above, or wait for the next session.",
+      );
   }
 }
 
@@ -115,7 +142,13 @@ function renderNoshots(payload) {
       : ""
   }</div>`;
   if (!rows.length) {
-    el("hunt-noshots").innerHTML = `${head}<div class="empty">no NO-SHOT sightings recorded</div>`;
+    el("hunt-noshots").innerHTML = `${head}${emptyState(
+      "No sightings for this date",
+      "A NO-SHOT row is written when the indicator panel was on and the shot was still " +
+        "not taken. No rows means the session either did not run or nothing came close " +
+        "enough to log. Each row carries its own counterfactual outcome, which fills in " +
+        "after the fact once the window has moved.",
+    )}`;
     return;
   }
   const body = rows
@@ -161,7 +194,13 @@ const VETO_COLORS = ["#4c9aff", "#e0a63a", "#e05fd0", "#3fb9c8", "#9aa4b2", "#f8
 function renderHistogram(payload) {
   const model = vetoHistogram(payload.weeks);
   if (model.empty) {
-    el("hunt-histogram").innerHTML = `<div class="empty">no veto records in the journal yet — the histogram is the count of which condition said no, and nothing has said no yet</div>`;
+    el("hunt-histogram").innerHTML = emptyState(
+      "No vetoes recorded yet",
+      "The histogram counts which checklist condition said no, across NO_TRADE decisions " +
+        "and NO-SHOT rows, bucketed by week. Empty means the checklist has not blocked " +
+        "anything yet — with the journal one day old that is the expected state, not a " +
+        "clean bill of health.",
+    );
     return;
   }
   const legend = model.conditions
@@ -216,6 +255,72 @@ function panelError(name, error) {
   return `<div class="banner bad">${esc(name)} failed: ${esc(error)}</div>`;
 }
 
+/**
+ * UX PASS 1: the four numbers the tab exists to answer, before any panel.
+ *
+ * Every one of them renders from an EMPTY payload without pretending: a dash is a
+ * measurement we do not have, and a card that reads "0 plan cells" on a machine that
+ * has never run is a true statement about the journal, which is not the same as a
+ * verdict on the hunt. That is why the "run status" card is a word and not a number.
+ */
+function renderSummary({ plan, noshots, histogram, day, errors }) {
+  const grid = plan ? huntGrid(plan.cells) : { rows: [], arms: [], empty: true };
+  const cells = (plan && plan.cells) || [];
+  const fired = cells.filter((cell) => cell.fire === true).length;
+  const held = cells.filter((cell) => cell.fire === false).length;
+  const banner = plan ? eventVetoBanner(plan.event_veto) : { level: "unknown", text: "" };
+
+  let status = "not run";
+  let statusTone = "";
+  if (errors.plan) {
+    status = "plan unavailable";
+  } else if (grid.empty) {
+    status = "no plan yet";
+  } else if (banner.level === "bad") {
+    status = "event veto";
+    statusTone = "down";
+  } else if (fired) {
+    status = `${fired} cell${fired === 1 ? "" : "s"} fire`;
+    statusTone = "up";
+  } else {
+    status = `${held} cell${held === 1 ? "" : "s"} hold`;
+  }
+
+  const rows = (noshots && noshots.rows) || [];
+  const delta = noshots && noshots.counterfactual;
+  const vetoTotal = histogram && histogram.totals
+    ? Object.values(histogram.totals.by_condition || {}).reduce((a, b) => a + b, 0)
+    : null;
+
+  el("hunt-summary").innerHTML = statRow([
+    {
+      label: "run status",
+      value: status,
+      tone: statusTone,
+      sub: day,
+      title: "the plan for this session: how many cells fire, how many hold, or that it has not run",
+    },
+    {
+      label: "plan cells",
+      value: String(cells.length),
+      sub: grid.empty ? "no plan written" : `${grid.rows.length} direction(s) × ${grid.arms.length} arm(s)`,
+      title: "immutable decision rows the executor wrote for this session",
+    },
+    {
+      label: "sightings",
+      value: String(rows.length),
+      sub: delta ? `delta ${usd(delta.delta_usd)}` : "NO-SHOT rows on this date",
+      title: "indicator panel on, shot not taken — each carries a counterfactual outcome",
+    },
+    {
+      label: "vetoes",
+      value: vetoTotal == null ? DASH : String(vetoTotal),
+      sub: vetoTotal ? "conditions that said no" : "none recorded",
+      title: "which checklist conditions blocked, across the whole journal window",
+    },
+  ]);
+}
+
 export async function loadHunt() {
   if (state.inFlight) return;
   state.inFlight = true;
@@ -231,6 +336,8 @@ export async function loadHunt() {
   else renderNoshots(data.noshots);
   if (errors.histogram) el("hunt-histogram").innerHTML = panelError("/api/histogram", errors.histogram);
   else renderHistogram(data.histogram);
+  renderSummary({ plan: data.plan, noshots: data.noshots, histogram: data.histogram, day, errors });
+  el("hunt-summary").hidden = false;
   el("hunt-stamp").textContent = `hunt · ${day} · updated ${new Date().toLocaleTimeString("en-GB", {
     hour12: false,
   })}`;
@@ -266,4 +373,15 @@ export function stopHunt() {
 }
 
 /** Exported so the module's pure pieces stay reachable from the test harness. */
-export { vetoHistogram, huntGrid, conditionChips, counterfactual, eventVetoBanner, pct, toneClass, query };
+export {
+  vetoHistogram,
+  huntGrid,
+  conditionChips,
+  counterfactual,
+  eventVetoBanner,
+  statRow,
+  emptyState,
+  pct,
+  toneClass,
+  query,
+};

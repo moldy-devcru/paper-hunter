@@ -64,9 +64,13 @@ export const etDate = (iso) => {
 /** "2026-03-05" -> "Mar 5". Only for dense table cells; ISO stays in the title. */
 export const shortDay = (iso) => {
   if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return DASH;
-  const [, m, d] = iso.split("-");
+  // Match only the date part. Splitting the whole ISO string on "-" put the time in the
+  // third field ("03T06:23:34Z"), so Number() on it was NaN and every rendered day came
+  // out as "Oct NaN". The regex captures Y/M/D and nothing else.
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!match) return DASH;
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  return `${months[Number(m) - 1] || m} ${Number(d)}`;
+  return `${months[Number(match[2]) - 1] || match[2]} ${Number(match[3])}`;
 };
 
 /** HTML-escape. Every string that reaches innerHTML goes through this. */

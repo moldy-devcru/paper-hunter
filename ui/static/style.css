@@ -276,6 +276,210 @@ h3.panel:first-child { margin-top: 0; }
 .empty.big { padding: 24px 4px; text-align: center; font-size: 12px; }
 .muted { color: var(--fg-faint); }
 
+/* ---- UX pass 1: information hierarchy ----------------------------------
+   The complaint these rules answer: "very dense, compact text, hard to
+   immediately discern." Three changes, in order of how much they matter:
+
+   1. The number you came for is BIG. Everything else on the tab is 11px,
+      so a 22px value reads as a different KIND of object, not a bigger
+      version of the same one. Tabular numerals keep the row aligned.
+   2. Methodology and all-clear reporting is COLLAPSED. A disclosure is a
+      closed box by default; a banner is a shout. Only findings get banners.
+   3. An empty state is ONE LINE. The long explanation lives behind a "?"
+      that opens, because the machine is one day old and "no data" is the
+      current truth, not an error condition. */
+
+/* Grid, not flex: five cards that all share the width evenly is the whole point of a
+   summary row, and it also stops a long money value ("$30,000.00") from wrapping to
+   two lines in a tile that flex-basis left too narrow. auto-fit + minmax means the
+   row reflows to one or two columns on a narrow window instead of squashing. */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.stat {
+  min-width: 0;
+  padding: 6px 10px 7px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.stat-label {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.stat-value {
+  font-size: 22px;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  /* A money value is one token: it may shrink its type or clip an ellipsis, but it
+     must never break "$30,000.00" across two lines and read as two numbers. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A status word rather than a number (arms "not open", calibration
+   "calibration_pending") needs to fit the same slot without wrapping into
+   three lines at this size. */
+.stat-value.pending { color: var(--warn); font-size: 15px; letter-spacing: 0; }
+.stat-sub {
+  color: var(--fg-faint);
+  font-size: 10px;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* One-line empty state + the "?" that carries the reasoning. */
+.empty-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  padding: 8px 2px;
+}
+.why { position: relative; display: inline-block; }
+.why summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--fg-faint);
+  border: 1px solid var(--line-bright);
+  border-radius: 50%;
+  width: 14px;
+  height: 14px;
+  line-height: 12px;
+  text-align: center;
+  font-size: 10px;
+}
+.why summary::-webkit-details-marker { display: none; }
+.why summary:hover { color: var(--fg); border-color: var(--accent); }
+.why-body {
+  margin-top: 5px;
+  padding: 6px 8px;
+  max-width: 52rem;
+  color: var(--fg-dim);
+  background: var(--bg-sunken);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* Collapsed methodology / integrity block. */
+.disc {
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--bg-sunken);
+  margin-bottom: 8px;
+}
+.disc > summary {
+  cursor: pointer;
+  padding: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  list-style: none;
+}
+.disc > summary::-webkit-details-marker { display: none; }
+.disc > summary::before { content: "▸ "; color: var(--fg-faint); }
+.disc[open] > summary::before { content: "▾ "; }
+.disc > summary:hover { color: var(--fg); }
+.disc-label { letter-spacing: 0.06em; text-transform: uppercase; font-size: 10px; }
+.disc-hint { color: var(--fg-faint); margin-left: 8px; font-size: 10px; }
+.disc-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 2px;
+  border: 1px solid var(--line-bright);
+  color: var(--warn);
+  font-size: 10px;
+}
+.disc-count.bad { color: var(--bad); border-color: var(--bad); }
+.disc-body { padding: 2px 8px 8px; font-size: 11px; line-height: 1.5; }
+.mp-detail.bad { color: var(--bad); }
+.mp-detail.warn { color: var(--warn); }
+
+/* Ledger filter clusters + active-filter chips. */
+.fgroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  border-left: 1px solid var(--line);
+}
+.fgroup:first-of-type { border-left: 0; }
+.fgroup > .glabel {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.chip-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 4px 12px;
+  background: var(--bg-sunken);
+  border-bottom: 1px solid var(--line);
+}
+.chip-row[hidden] { display: none; }
+.chip-label {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-right: 2px;
+}
+button.fchip {
+  font: inherit;
+  cursor: pointer;
+  color: var(--accent);
+  border-color: #24405f;
+  background: #101a26;
+}
+button.fchip:hover { color: #fff; border-color: var(--accent); }
+
+/* A blank chart rectangle reads as a rendering failure. When there is
+   nothing to plot, the container says so instead of sitting empty. */
+.chart-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--fg-faint);
+  font-size: 11px;
+  border: 1px dashed var(--line-bright);
+  border-radius: 3px;
+}
+
+/* Frozen header + row-identity column: on a 20-session baseline, a
+   scrolling table that loses its header AND its date column makes every
+   number ambiguous. */
+table.freeze thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg);
+}
+table.freeze th.sticky-col, table.freeze td.sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+table.freeze thead th.sticky-col { z-index: 3; }
+table.freeze tbody tr:hover td.sticky-col { background: #0f1218; }
+table.freeze td { padding-top: 5px; padding-bottom: 5px; }
+
 .plan-meta { color: var(--fg-faint); font-size: 11px; margin: 2px 0 6px; }
 
 input.field, select.field {
@@ -400,6 +604,43 @@ button.pg:hover:not(:disabled) { color: var(--fg); border-color: #3a434f; }
 .arm-line b { color: var(--fg); font-weight: 500; }
 .arm-chart { height: 96px; margin: 8px 0 2px; }
 .arm-curve-note { color: var(--fg-faint); font-size: 10px; margin-bottom: 6px; }
+
+/* A/B/C comparison: metric down the left, arm across the top. The row
+   label is a row header so a screen reader reads "return on bankroll,
+   arm B" rather than two disconnected cells. */
+table.cmp { width: 100%; border-collapse: collapse; font-size: 12px; }
+table.cmp th.row-label {
+  text-align: left;
+  font-weight: 500;
+  color: var(--fg-dim);
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.cmp thead th {
+  text-align: left;
+  padding: 6px 10px;
+  border-bottom: 2px solid var(--line-bright);
+  vertical-align: bottom;
+}
+table.cmp th.arm-col {
+  color: var(--arm, var(--fg));
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+.arm-sub {
+  color: var(--fg-faint);
+  font-size: 10px;
+  letter-spacing: 0;
+  margin-top: 1px;
+}
+table.cmp tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+table.cmp tbody tr:hover td { background: #0f1218; }
+.arm-note { color: var(--fg-faint); font-size: 10px; line-height: 1.45; margin: 4px 0 6px; }
 .arm-flags { margin-top: 8px; }
 .arm-flag {
   border: 1px solid var(--line-bright);
