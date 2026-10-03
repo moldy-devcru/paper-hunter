@@ -621,3 +621,121 @@ def test_record_many_writes_every_row(store):
     ]
     assert store.record_many(rows) == 5
     assert store.count_observations("SPY", TENOR) == 5
+
+# ---------------------------------------------------------------------------
+# origin provenance — ruling R9
+# ---------------------------------------------------------------------------
+
+
+def test_live_is_the_default_origin_and_survives_a_legacy_database(tmp_path):
+    """Every pre-existing row was a live EOD poll, so the migration must say exactly that.
+
+    A legacy store is simulated by creating the pre-R9 schema by hand and then opening it
+    with the current class — which is the only way to test the ALTER path at all, since
+    ``CREATE TABLE IF NOT EXISTS`` silently no-ops on an existing table.
+    """
+    legacy = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(legacy))
+    conn.execute(
+        """
+        CREATE TABLE iv_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            underlying TEXT NOT NULL,
+            as_of TEXT NOT NULL,
+            tenor_key TEXT NOT NULL,
+            expiry TEXT, right TEXT, strike REAL,
+            iv REAL NOT NULL,
+            source TEXT NOT NULL,
+            is_proxy INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            UNIQUE (underlying, as_of, tenor_key, source)
+        )
+        """
+    )
+    today = dt.datetime.now(dt.UTC).date()
+    conn.execute(
+        "INSERT INTO iv_observations (underlying, as_of, tenor_key, iv, source, is_proxy,"
+        " created_at) VALUES ('SPY', ?, 'legacy', 0.2, 'alpaca_chain', 0, '2024-01-01T00:00:00Z')",
+        (today.isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+    s = IvRankStore.open(legacy, min_observations=2)
+    row = s.observations("SPY")[0]
+    assert row.origin == "live"
+    # And a new write defaults to live too, with no call-site change anywhere.
+    s.record(underlying="SPY", as_of=today, tenor="legacy", iv=0.21)
+    assert s.latest("SPY", "legacy").origin == "live"
+    s.close()
+
+
+def test_backfilled_and_live_rows_coexist_for_the_same_session_and_key(store):
+    """Uniqueness is (underlying, as_of, tenor_key, source) — so both can be stored.
+
+    This is what makes the R9 splice auditable: you can hold a key's live-only history and
+    its backfilled history side by side and measure the difference, instead of being told
+    not to look.
+    """
+    day = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=5)
+    store.record(underlying="SPY", as_of=day, tenor=TENOR, iv=0.20, source="alpaca_chain")
+    store.record(
+        underlying="SPY",
+        as_of=day,
+        tenor=TENOR,
+        iv=0.26,
+        source="bars_bs_inversion",
+        origin="backfill",
+    )
+    assert store.count_observations("SPY", TENOR) == 2
+    assert store.count_observations("SPY", TENOR, origin="live") == 1
+    assert store.count_observations("SPY", TENOR, origin="backfill") == 1
+    sources = {o.source for o in store.observations("SPY")}
+    origins = {o.origin for o in store.observations("SPY")}
+    assert sources == {"alpaca_chain", "bars_bs_inversion"}
+    assert origins == {"live", "backfill"}
+
+
+def test_backfilled_observations_count_toward_warmup_per_ruling_r9(store):
+    """The load-bearing consequence of R9: a purely backfilled key can leave warmup."""
+    store.min_observations = 5
+    day = dt.datetime.now(dt.UTC).date()
+    for i in range(6):
+        store.record(
+            underlying="SPY",
+            as_of=day - dt.timedelta(days=30 - i),
+            tenor=TENOR,
+            iv=0.20 + i * 0.01,
+            source="bars_bs_inversion",
+            origin="backfill",
+        )
+    result = store.iv_rank(0.25, "SPY", TENOR)
+    assert result.status == "ok"
+    assert result.observations == 6
+    assert result.rank == pytest.approx(83.3333333, abs=1e-6)
+
+
+def test_origin_filter_can_reproduce_a_live_only_series(store):
+    store.min_observations = 5
+    day = dt.datetime.now(dt.UTC).date()
+    for i in range(6):
+        store.record(
+            underlying="SPY", as_of=day - dt.timedelta(days=30 - i),
+            tenor=TENOR, iv=0.20 + i * 0.01, source="alpaca_chain",
+        )
+        store.record(
+            underlying="SPY", as_of=day - dt.timedelta(days=30 - i),
+            tenor=TENOR, iv=0.40 + i * 0.01, source="bars_bs_inversion", origin="backfill",
+        )
+    mixed = store.iv_rank(0.35, "SPY", TENOR)
+    live_only = store.iv_rank(0.35, "SPY", TENOR, origin="live")
+    assert mixed.observations == 12 and live_only.observations == 6
+    # Same current reading, materially different answer — which is the entire reason the
+    # column exists rather than folding provenance into `source`.
+    assert mixed.rank != live_only.rank
+
+
+def test_unknown_origin_is_refused_at_the_door(store):
+    today = dt.datetime.now(dt.UTC).date()
+    with pytest.raises(IvRankError, match="origin must be"):
+        store.record(underlying="SPY", as_of=today, tenor=TENOR, iv=0.2, origin="guessed")

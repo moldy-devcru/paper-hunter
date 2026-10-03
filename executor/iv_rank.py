@@ -103,8 +103,29 @@ MONEYNESS_BUCKET_PCT = 2.0
 #: Default lookback. Matches the rulebook's ``iv_rank_lookback: "1y"``.
 DEFAULT_LOOKBACK_DAYS = 365
 
-IVSource = Literal["alpaca_chain", "cboe_vix_csv", "manual"]
+IVSource = Literal["alpaca_chain", "cboe_vix_csv", "manual", "bars_bs_inversion"]
 IVRankStatus = Literal["ok", "warmup", "no_history", "empty_window"]
+
+#: How a stored IV came to exist. Separate from ``source`` on purpose, because the two
+#: answer different questions: ``source`` says *which measurement* and ``origin`` says
+#: *when it was captured relative to the window opening*. Ruling R9 (2026-10-03) counts
+#: BACKFILLED observations toward the frozen 60 while stating, in the same paragraph,
+#: that mixing them with live ones inside one percentile series is "a methodological
+#: splice, not a single measurement". A ruling that permits the splice and refuses to
+#: mark it would be a ruling nobody could audit six months later.
+#:
+#: ``live`` is the default, so every pre-existing row and every current call site keeps
+#: its meaning without an edit.
+IVOrigin = Literal["live", "backfill"]
+
+LIVE_ORIGIN: IVOrigin = "live"
+BACKFILL_ORIGIN: IVOrigin = "backfill"
+
+#: ``source`` value for an IV inverted from a historical option bar's close. NOT
+#: ``manual`` (that column exists precisely to keep provenance honest, and reusing it
+#: would be a lie) and NOT a reuse of ``is_proxy`` (that bit means "Cboe VIX, a
+#: different index"; a bar-inverted SPY IV is the right index built the wrong way).
+BARS_INVERSION_SOURCE: IVSource = "bars_bs_inversion"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS iv_observations (
@@ -117,12 +138,16 @@ CREATE TABLE IF NOT EXISTS iv_observations (
     strike        REAL,                       -- null for proxy series
     iv            REAL    NOT NULL,
     source        TEXT    NOT NULL,
+    origin        TEXT    NOT NULL DEFAULT 'live',
     is_proxy      INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT    NOT NULL,
     UNIQUE (underlying, as_of, tenor_key, source)
 );
 CREATE INDEX IF NOT EXISTS idx_iv_lookup
     ON iv_observations (underlying, tenor_key, is_proxy, as_of);
+-- NOTE: the ``origin`` index is created by ``IvRankStore._migrate_columns``, not here.
+-- ``CREATE TABLE IF NOT EXISTS`` no-ops on an existing pre-R9 table, so an index naming
+-- ``origin`` in this script would fail against exactly the database that needs migrating.
 """
 
 #: Anything accepted where a date is expected.
@@ -151,6 +176,10 @@ class IvObservation:
     right: str | None = None
     strike: float | None = None
     created_at: str | None = None
+    #: ``live`` (an EOD chain poll) or ``backfill`` (a bar close inverted through
+    #: Black-Scholes). Both COUNT toward MIN_OBSERVATIONS per ruling R9; the column
+    #: exists so the splice is auditable rather than invisible.
+    origin: str = LIVE_ORIGIN
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,7 +452,29 @@ class IvRankStore:
         self.conn = conn
         self.min_observations = min_observations
         self.conn.executescript(SCHEMA)
+        self._migrate_columns()
         self.conn.commit()
+
+    def _migrate_columns(self) -> None:
+        """Add ``origin`` to a database created before ruling R9.
+
+        ``CREATE TABLE IF NOT EXISTS`` silently does nothing when the table already
+        exists, so a store opened on an existing file would otherwise miss the column and
+        every write would fail with a confusing ``no such column`` error. An
+        ``ALTER TABLE ... ADD COLUMN`` on an existing store is the whole migration: SQLite
+        supports it, the ``NOT NULL DEFAULT 'live'`` backfills every historical row with
+        the meaning it already had (those rows were live chain polls), and no data is
+        rewritten.
+        """
+        present = {row["name"] for row in self.conn.execute("PRAGMA table_info(iv_observations)")}
+        if "origin" not in present:
+            self.conn.execute(
+                "ALTER TABLE iv_observations ADD COLUMN origin TEXT NOT NULL DEFAULT 'live'"
+            )
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_iv_origin"
+            " ON iv_observations (underlying, tenor_key, origin, as_of)"
+        )
 
     # -- construction ----------------------------------------------------------
 
@@ -445,6 +496,7 @@ class IvRankStore:
         tenor: str,
         iv: float,
         source: IVSource = "alpaca_chain",
+        origin: IVOrigin = LIVE_ORIGIN,
         is_proxy: bool = False,
         expiry: str | None = None,
         right: str | None = None,
@@ -458,6 +510,12 @@ class IvRankStore:
         half-finished poll is worse than a corrected one.
 
         ``as_of`` accepts ``YYYY-MM-DD`` or a ``date``/``datetime``.
+
+        ``origin`` marks whether this row came from a live EOD poll or a historical
+        backfill. It is deliberately NOT folded into ``source``: uniqueness is
+        ``(underlying, as_of, tenor_key, source)``, so a backfilled row and a live row for
+        the same session can coexist and be compared, which is the whole point of keeping
+        them distinguishable.
         """
         day = _as_day(as_of)
         # Bound as an ISO string, not a date object: sqlite3's implicit date adapter is
@@ -472,17 +530,23 @@ class IvRankStore:
                 "proxy observations must not carry expiry/right/strike — a VIX row is "
                 "not an option tenor and must never be selectable as one"
             )
+        if origin not in ("live", "backfill"):
+            raise IvRankError(
+                f"origin must be 'live' or 'backfill', got {origin!r} — an unrecognised "
+                f"origin is exactly the kind of row that becomes invisible in an audit"
+            )
         self.conn.execute(
             """
             INSERT INTO iv_observations
-                (underlying, as_of, tenor_key, expiry, right, strike, iv, source,
+                (underlying, as_of, tenor_key, expiry, right, strike, iv, source, origin,
                  is_proxy, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (underlying, as_of, tenor_key, source) DO UPDATE SET
                 iv = excluded.iv,
                 expiry = excluded.expiry,
                 right = excluded.right,
                 strike = excluded.strike,
+                origin = excluded.origin,
                 is_proxy = excluded.is_proxy,
                 created_at = excluded.created_at
             """,
@@ -495,6 +559,7 @@ class IvRankStore:
                 strike,
                 float(iv),
                 source,
+                origin,
                 1 if is_proxy else 0,
                 _now_iso(),
             ),
@@ -510,6 +575,7 @@ class IvRankStore:
                 tenor=obs.tenor_key,
                 iv=obs.iv,
                 source=obs.source,
+                origin=obs.origin,  # type: ignore[arg-type]
                 is_proxy=obs.is_proxy,
                 expiry=obs.expiry,
                 right=obs.right,
@@ -527,10 +593,14 @@ class IvRankStore:
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
         include_proxy: bool = False,
         as_of: DateLike | None = None,
+        origin: IVOrigin | None = None,
     ) -> list[float]:
         """Stored IV values in the trailing window, oldest-first.
 
         Excludes proxy rows unless ``include_proxy`` — see the module docstring.
+        ``origin`` filters to ``live`` or ``backfill`` when given; ``None`` (the default)
+        reads both, which is what T5 does, because ruling R9 counts both toward the
+        warmup floor.
         """
         end_day = _as_day(as_of) if as_of is not None else _today()
         start_day = (end_day - timedelta(days=lookback_days)).isoformat()
@@ -541,6 +611,9 @@ class IvRankStore:
         params: list[object] = [underlying.upper(), tenor, start_day, end_day.isoformat()]
         if not include_proxy:
             sql.append("AND is_proxy = 0")
+        if origin is not None:
+            sql.append("AND origin = ?")
+            params.append(origin)
         sql.append("ORDER BY as_of ASC")
         rows = self.conn.execute(" ".join(sql), params).fetchall()
         return [float(r["iv"]) for r in rows]
@@ -553,6 +626,7 @@ class IvRankStore:
         lookback_days: int = DEFAULT_LOOKBACK_DAYS,
         include_proxy: bool = False,
         as_of: DateLike | None = None,
+        origin: IVOrigin | None = None,
     ) -> int:
         return len(
             self.history(
@@ -561,6 +635,7 @@ class IvRankStore:
                 lookback_days=lookback_days,
                 include_proxy=include_proxy,
                 as_of=as_of,
+                origin=origin,
             )
         )
 
@@ -603,6 +678,7 @@ class IvRankStore:
         include_proxy: bool = False,
         min_observations: int | None = None,
         as_of: DateLike | None = None,
+        origin: IVOrigin | None = None,
     ) -> IvRankResult:
         """Percentile rank (0-100) of ``current_iv`` within the stored window.
 
@@ -630,7 +706,7 @@ class IvRankStore:
         }
 
         total_rows = self.count_observations(
-            underlying, tenor, lookback_days=10_000, include_proxy=True
+            underlying, tenor, lookback_days=10_000, include_proxy=True, origin=origin
         )
         if total_rows == 0:
             return IvRankResult(
@@ -651,6 +727,7 @@ class IvRankStore:
             lookback_days=lookback_days,
             include_proxy=include_proxy,
             as_of=as_of,
+            origin=origin,
         )
         proxy_count = 0
         if include_proxy:
@@ -660,6 +737,7 @@ class IvRankStore:
                 lookback_days=lookback_days,
                 include_proxy=True,
                 as_of=as_of,
+                origin=origin,
             ) - len(window)
 
         if not window:
@@ -854,6 +932,7 @@ def _observation_from_row(row: sqlite3.Row) -> IvObservation:
         iv=float(row["iv"]),
         source=row["source"],
         is_proxy=bool(row["is_proxy"]),
+        origin=row["origin"] if "origin" in row.keys() else LIVE_ORIGIN,
         expiry=row["expiry"],
         right=row["right"],
         strike=row["strike"],
@@ -879,6 +958,10 @@ __all__ = [
     "IvRankStore",
     "IVSource",
     "MIN_OBSERVATIONS",
+    "LIVE_ORIGIN",
+    "BACKFILL_ORIGIN",
+    "BARS_INVERSION_SOURCE",
+    "IVOrigin",
     "VIX_CSV_URL",
     "VIX_PROXY_SOURCE",
     "VIX_PROXY_TENOR",
