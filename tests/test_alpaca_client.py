@@ -177,11 +177,18 @@ def test_bars_are_sorted_even_if_the_api_returns_them_newest_first():
     assert series.closes == [679.88, 681.95, 678.44]
 
 
-def test_malformed_bars_payload_is_an_error_not_an_empty_series():
-    """An empty ``bars: {}`` for the requested symbol is a legitimate "no data"; a
-    payload with no ``bars`` object at all is a shape error and must not be read as
-    "zero bars, indicators undefined"."""
+def test_envelope_only_payload_is_an_empty_window_not_an_error():
+    """SUPERSEDED 2026-10-02 (live-verified on deploy night): Alpaca answers an EMPTY
+    window with HTTP 200 and no 'bars' key at all — {"next_page_token": null} is a real
+    production payload, not a malformed one. Envelope-only payloads are empty series;
+    the loud-error case is now an envelope with UNKNOWN keys (shape drift)."""
     client = client_with({BARS_PATH: {"next_page_token": None}})
+    series = client.get_daily_bars("SPY", feed="sip")
+    assert len(series) == 0
+
+
+def test_unknown_keys_without_bars_is_a_shape_error():
+    client = client_with({BARS_PATH: {"surprise": True}})
     with pytest.raises(AlpacaError, match="bars payload"):
         client.get_daily_bars("SPY", feed="sip")
 
@@ -566,3 +573,18 @@ def test_mock_transport_records_calls_without_a_socket():
     assert transport.calls[0][0] == "https://data.alpaca.markets/v2/stocks/SPY/bars"
     assert transport.calls[0][1]["feed"] == "iex"
     assert json.dumps(dict(transport.calls[0][1]))  # params are plain JSON-safe scalars
+
+
+def test_empty_window_payload_without_bars_key_is_empty_series():
+    """LIVE-VERIFIED 2026-10-02: Alpaca answers an empty window with 200 and no
+    'bars' key at all (deploy-night prime hit this on a weekend chunk). Envelope-only
+    payloads parse as empty series; payloads with UNKNOWN keys and no bars still raise."""
+    from executor.alpaca_client import AlpacaError, _bar_series_from_payload
+
+    series = _bar_series_from_payload("SPY", "1Min", "sip", {})
+    assert series.bars == []
+    series = _bar_series_from_payload("SPY", "1Min", "sip", {"next_page_token": None})
+    assert series.bars == []
+    import pytest as _pytest
+    with _pytest.raises(AlpacaError):
+        _bar_series_from_payload("SPY", "1Min", "sip", {"unexpected": 1})

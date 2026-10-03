@@ -1116,7 +1116,17 @@ def _bar_series_from_payload(symbol: str, timeframe: str, feed: str, payload: An
         raise AlpacaError(f"unexpected bars payload type {type(payload).__name__}")
     bars_block = payload.get("bars")
     if bars_block is None:
-        raise AlpacaError("bars payload has no 'bars' object")
+        # LIVE-VERIFIED 2026-10-02 (deploy night): Alpaca answers an EMPTY window with
+        # HTTP 200 and no 'bars' key at all (e.g. {} or just {"next_page_token": null}),
+        # not {"bars": {}}. A weekend/holiday chunk therefore used to raise a shape
+        # error. Accept the empty-window payload as an empty series — but only when the
+        # dict carries nothing except the documented envelope keys, so a genuinely
+        # re-shaped response (new unknown keys, no bars) is still a loud error.
+        envelope_keys = {"bars", "symbol", "next_page_token"}
+        if set(payload.keys()) <= envelope_keys:
+            bars_block = []
+        else:
+            raise AlpacaError("bars payload has no 'bars' object")
     if isinstance(bars_block, dict):
         raw_bars = bars_block.get(symbol) or bars_block.get(symbol.upper()) or []
     elif isinstance(bars_block, list):
