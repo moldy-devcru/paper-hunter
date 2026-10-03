@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>paper-hunter terminal</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0d0f12;
+        color: #d8dce3;
+        font: 15px/1.6 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+      }
+      main { max-width: 44rem; padding: 2rem; }
+      h1 { font-size: 1.4rem; margin: 0 0 0.25rem; letter-spacing: 0.02em; }
+      .tag { color: #8a93a3; margin: 0 0 1.5rem; }
+      ul { padding-left: 1.1rem; }
+      li { margin: 0.3rem 0; }
+      code { color: #9ad1a5; }
+      .ro { color: #d9a441; }
+      footer { margin-top: 2rem; color: #6c7482; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>paper-hunter terminal</h1>
+      <p class="tag">U2 pending — the backend is up, the chart is not here yet.</p>
+      <p>
+        This server is read-only by construction. Every database is opened
+        <code>file:…?mode=ro</code> and the app has no non-GET routes, so the UI cannot
+        touch the experiment. <span class="ro">The window is a window, not a door.</span>
+      </p>
+      <p>The API is live and documented at <a href="/docs">/docs</a>:</p>
+      <ul>
+        <li><code>GET /api/health</code> — databases, counts, feed provenance</li>
+        <li><code>GET /api/bars?tf=15m</code> — session-aware candles, provenance per bar</li>
+        <li><code>GET /api/indicators?tf=15m&amp;set=ema50,ema200,rsi,macd,bb</code> —
+          computed by <code>executor.indicators</code>, the same code the checklist runs</li>
+        <li><code>GET /api/signals</code> · <code>GET /api/arms</code> · <code>GET /api/trades</code></li>
+        <li><code>GET /api/huntplan</code> · <code>GET /api/noshots</code> ·
+          <code>GET /api/histogram</code></li>
+        <li><code>GET /api/calibration</code> · <code>GET /api/rollup</code></li>
+      </ul>
+      <p>
+        Bars come from <code>data/barcache.db</code>, a cache and not a record: delete it
+        and a re-fetch rebuilds it. Nothing here is worth backing up.
+      </p>
+      <footer>Operation Hunting Blind — read-only research terminal</footer>
+    </main>
+  </body>
+</html>
