@@ -119,11 +119,27 @@ DEFAULT_DEEP_OTM_PCT = 3.0
 #: are documented as integer percentage points.
 DISTANCE_BUCKET_PCT = 1.0
 
-#: Expiries further out than this are not IV-polled. 45 DTE covers arm C's whole
-#: contract window (90-180 DTE is entered from a shorter-dated ATM proxy, so the
-#: *rank* history that matters is the near end) while keeping one EOD run to a few
-#: dozen rows instead of the chain's hundreds of expiries.
-IV_MAX_DTE = 45
+#: Expiries further out than this are not IV-polled. This is a BOUND ON THE SWEEP, not
+#: a statement about which tenors matter: ``IV_MAX_DTE`` was 45 while arm C's frozen entry
+#: band is 90-180 DTE (``arms.C.entry.dte``), so the sweep structurally could not observe
+#: the tenor arm C's own gate reads. That number was a fossil of the pre-``abb3d1a`` world
+#: — the comment here used to justify polling a "shorter-dated ATM proxy" for a
+#: quarter-year contract, which is precisely the mismatch ``abb3d1a`` removed from the
+#: gate side. The gate now reads the arm's own band, so the recorder must poll that band.
+#:
+#: 180 covers arm C's whole entry window. Rows stay bounded because one observation is
+#: written per (expiry, arm-matched contract) rather than per contract, and the sweep
+#: skips expiries outside it.
+IV_MAX_DTE = 180
+
+#: Per-arm IV bands, read from the rulebook at run time (see ``_bands_from_rules``) and
+#: defaulted here. Arm B trades DTE 0; arm C trades the 90-180 DTE deep-ITM band. Sweeping
+#: both is what lets one recorder serve both gates: each arm's row is written under the
+#: same key its gate reads, which is the only reason a rank can ever resolve.
+ARM_IV_BANDS: tuple[tuple[str, int, int], ...] = (
+    ("B", 0, 0),
+    ("C", 90, 180),
+)
 
 #: Bars pulled per run. Enough for the bar-date check with slack; this job does not
 #: compute indicators (the executor does that from its own pull).
@@ -394,6 +410,159 @@ def threshold_from_buckets(buckets: dict[str, float], threshold_pct: float) -> f
 # ---------------------------------------------------------------------------
 
 
+def _bands_from_rules(rules: Rulebook) -> tuple[tuple[str, int, int], ...]:
+    """Per-arm ``(arm, dte_min, dte_max)`` read from the frozen rulebook.
+
+    Arm B's ``entry.dte`` is a plain integer ``0``; arm C's is a ``DTERange``. Both
+    normalize to the same triple so the recorder cannot drift from the bands the gates
+    read — the drift being exactly the bug this fixes.
+    """
+    bands: list[tuple[str, int, int]] = []
+    for arm in ("B", "C"):
+        dte = getattr(rules.arms, arm).entry.dte
+        if isinstance(dte, int):
+            bands.append((arm, dte, dte))
+        else:
+            bands.append((arm, int(dte.min), int(dte.max)))
+    return tuple(bands)
+
+
+def arm_contract_for_band(
+    chain: OptionChain,
+    spot: float,
+    session: dt.date,
+    dte_min: int,
+    dte_max: int,
+) -> OptionContract | None:
+    """The contract an arm's IV gate would read: nearest-to-spot inside its DTE band.
+
+    Mirrors ``hunt_plan._iv_contract_for_arm`` deliberately, and the mirror is the whole
+    point of the change: the recorder must write the key the *gate* reads, or the store
+    accumulates a series T5 never queries and the gate stays in warmup forever. The gate
+    picks nearest-to-spot-within-band (not the delta-selected deep-ITM strike arm C
+    actually buys) — see ``abb3d1a`` and its note that moving the selector to the traded
+    strike is a store-accumulation question. Both sides must agree, so both read the same
+    rule.
+
+    # INTERPRETATION: ``right`` is deliberately NOT filtered. One EOD sweep serves both
+    arms and the gate filters by direction at read time, so recording both sides is what
+    lets a call-side rank warm without a second pass tomorrow.
+    """
+    best: OptionContract | None = None
+    for contract in chain.contracts:
+        try:
+            expiry_day = dt.datetime.strptime(contract.expiry or "", "%Y%m%d").date()
+        except ValueError:
+            continue
+        dte = (expiry_day - session).days
+        if not (dte_min <= dte <= dte_max):
+            continue
+        if best is None or abs(contract.strike - spot) < abs(best.strike - spot):
+            best = contract
+    return best
+
+
+def _observation_for(
+    contract: OptionContract,
+    *,
+    underlying: str,
+    session: dt.date,
+    bucket_size: float,
+    dte_bucket_days: int,
+) -> list[IvObservation]:
+    """Both tenor keys for one contract — expiry-keyed and rolling-DTE."""
+    try:
+        expiry_day = dt.datetime.strptime(contract.expiry or "", "%Y%m%d").date()
+    except ValueError:
+        return []
+    dte = (expiry_day - session).days
+    common = {
+        "underlying": underlying.upper(),
+        "as_of": session.isoformat(),
+        "iv": float(contract.implied_volatility),  # type: ignore[arg-type]
+        "source": "alpaca_chain",
+        "is_proxy": False,
+        "expiry": contract.expiry,
+        "right": contract.right,
+        "strike": contract.strike,
+    }
+    return [
+        IvObservation(
+            tenor_key=tenor_key(
+                expiry=contract.expiry,  # type: ignore[arg-type]
+                right=contract.right,
+                strike=contract.strike,
+                bucket_size=bucket_size,
+            ),
+            **common,
+        ),
+        IvObservation(
+            tenor_key=dte_tenor_key(
+                dte=dte,
+                right=contract.right,
+                strike_bucket=strike_bucket(contract.strike, bucket_size),
+                dte_bucket_days=dte_bucket_days,
+            ),
+            **common,
+        ),
+    ]
+
+
+def arm_iv_observations(
+    chain: OptionChain,
+    spot: float,
+    *,
+    session: dt.date,
+    underlying: str,
+    bands: tuple[tuple[str, int, int], ...] = ARM_IV_BANDS,
+    bucket_size: float = STRIKE_BUCKET_SIZE,
+    dte_bucket_days: int = DTE_BUCKET_DAYS,
+) -> tuple[list[IvObservation], int]:
+    """``(observations, skipped_bands)`` — one reading per arm, under that arm's own band.
+
+    # INTERPRETATION: this is a MEASUREMENT fix, not a rule change. The rulebook already
+    # defines T5 for arm C as a percentile within the traded contract's tenor
+    # (``iv_on_chosen_strike_within_normal_band``); the recorder simply never captured that
+    # tenor, so the gate read a bucket nothing had ever written. No threshold moves and no
+    # gate changes — a series starts accumulating where there was no series.
+
+    # INTERPRETATION: a band with no contract, or whose nearest contract carries no usable
+    # IV, is SKIPPED and counted, never filled from a neighbouring expiry. Filling would
+    # write a reading under a tenor key naming a contract nobody quoted, and the next
+    # session's fill would name a different one — an IV history that never described a
+    # single instrument. A gap is recoverable; a mislabelled series corrupts every
+    # percentile built on it.
+    """
+    observations: list[IvObservation] = []
+    skipped = 0
+    seen_keys: set[str] = set()
+    for _arm, dte_min, dte_max in bands:
+        contract = arm_contract_for_band(chain, spot, session, dte_min, dte_max)
+        if contract is None or contract.implied_volatility is None:
+            skipped += 1
+            continue
+        if float(contract.implied_volatility) <= 0:
+            skipped += 1
+            continue
+        for observation in _observation_for(
+            contract,
+            underlying=underlying,
+            session=session,
+            bucket_size=bucket_size,
+            dte_bucket_days=dte_bucket_days,
+        ):
+            # A band can resolve to the same contract as another (a 0DTE-only chain also
+            # satisfies arm C's band when it has no long-dated leg). The store's uniqueness
+            # key is (underlying, as_of, tenor_key, source), so a duplicate is harmless —
+            # but de-duplicating keeps ``iv_rows`` a count of facts rather than a count of
+            # bands that happened to agree.
+            if observation.tenor_key in seen_keys:
+                continue
+            seen_keys.add(observation.tenor_key)
+            observations.append(observation)
+    return observations, skipped
+
+
 def iv_observations(
     chain: OptionChain,
     spot: float,
@@ -542,6 +711,11 @@ class SoakRun:
     flow_row: FlowBaselineRow | None = None
     iv_rows: int = 0
     iv_skipped_expiries: int = 0
+    #: Arm bands that resolved to no contract (or an unreadable one) on this run. Kept
+    #: separate from ``iv_skipped_expiries`` because they are a different fact: this one
+    #: says "this arm has no tenor to rank today", which for arm C is the warm-up
+    #: clock, not a hole in the series.
+    iv_skipped_bands: int = 0
     details: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -688,6 +862,7 @@ def run_soak(
 
     iv_rows = 0
     iv_skipped = 0
+    iv_skipped_bands = 0
     if iv_store is not None:
         observations, iv_skipped = iv_observations(
             chain,
@@ -699,6 +874,21 @@ def run_soak(
             bucket_size=STRIKE_BUCKET_SIZE,
             dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
         )
+        # Per-arm rows on top of the per-expiry sweep. Without these the ATM sweep cannot
+        # write arm C's 90-180 DTE tenor at all: the nearest-to-spot contract in that band
+        # is not the ATM contract of any expiry the sweep visits, so the gate read a key
+        # that accumulated nothing and T5 sat in warmup by construction (see IV_MAX_DTE).
+        arm_observations, arm_skipped = arm_iv_observations(
+            chain,
+            spot,
+            session=session_day,
+            underlying=symbol,
+            bands=_bands_from_rules(rules),
+            bucket_size=STRIKE_BUCKET_SIZE,
+            dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+        )
+        observations = observations + arm_observations
+        iv_skipped_bands = arm_skipped
         iv_rows = iv_store.record_many(observations)
 
     if dry_run:
@@ -714,6 +904,7 @@ def run_soak(
             flow_row=row,
             iv_rows=iv_rows,
             iv_skipped_expiries=iv_skipped,
+            iv_skipped_bands=iv_skipped_bands,
             details=agg.to_dict() | {"session_spot": spot, "reason": reason},
         )
 
@@ -737,16 +928,17 @@ def run_soak(
             f"deep-OTM>={agg.threshold_pct:g}% call={agg.call_volume:.0f} "
             f"({_fmt_ratio(row.ratio_call)}x {lookback_days}d) "
             f"put={agg.put_volume:.0f} ({_fmt_ratio(row.ratio_put)}x), "
-            f"{_iv_note(iv_rows, iv_skipped)}"
+            f"{_iv_note(iv_rows, iv_skipped, iv_skipped_bands)}"
         ),
         flow_row=row,
         iv_rows=iv_rows,
         iv_skipped_expiries=iv_skipped,
+        iv_skipped_bands=iv_skipped_bands,
         details=agg.to_dict() | {"session_spot": spot, "reason": reason, "row_id": row_id},
     )
 
 
-def _iv_note(iv_rows: int, skipped: int) -> str:
+def _iv_note(iv_rows: int, skipped: int, skipped_bands: int = 0) -> str:
     """The IV half of the summary line.
 
     # INTERPRETATION: the skip count is reported *whenever it is non-zero*, not only
@@ -754,10 +946,19 @@ def _iv_note(iv_rows: int, skipped: int) -> str:
     and stops looking; a reader who sees ``3 expiries skipped`` learns that three
     days of IV history for those tenors are missing while it is still cheap to go
     back and find out why.
+
+    # INTERPRETATION: band skips are reported separately and labelled as the warm-up
+    clock rather than folded into the expiry count. "3 expiries skipped" means three
+    holes in a series that otherwise accumulates; "1 arm band skipped" means an arm
+    has no tenor to rank today, which is the expected state until T5 warms and would
+    be misread as corruption if it were summed into the other number.
     """
+    parts = [f"{iv_rows} IV row(s)"]
     if skipped:
-        return f"{iv_rows} IV row(s), {skipped} expiry(ies) skipped (no usable ATM IV)"
-    return f"{iv_rows} IV row(s)"
+        parts.append(f"{skipped} expiry(ies) skipped (no usable ATM IV)")
+    if skipped_bands:
+        parts.append(f"{skipped_bands} arm band(s) with no rankable contract")
+    return ", ".join(parts)
 
 
 def _fmt_ratio(value: float | None) -> str:
@@ -880,6 +1081,7 @@ def main(argv: list[str] | None = None) -> int:
                         "summary": run.summary,
                         "iv_rows": run.iv_rows,
                         "iv_skipped_expiries": run.iv_skipped_expiries,
+                        "iv_skipped_bands": run.iv_skipped_bands,
                         "details": run.details,
                         "row": run.flow_row.model_dump(mode="json") if run.flow_row else None,
                     },
@@ -896,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = [
+    "ARM_IV_BANDS",
     "BAR_FEED",
     "CHAIN_FEED",
     "CHAIN_FEED_IS_DELAYED",
@@ -907,6 +1110,8 @@ __all__ = [
     "SoakError",
     "SoakRun",
     "aggregate_flow",
+    "arm_contract_for_band",
+    "arm_iv_observations",
     "bucket_key",
     "build_flow_row",
     "build_parser",

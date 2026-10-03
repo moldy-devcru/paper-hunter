@@ -733,3 +733,156 @@ def test_summary_is_one_line(rules, journal):
     out = run(rules, journal, _StaticSource(bars_for(SESSION), deep_otm_chain()))
     assert "\n" not in out.summary
     assert out.summary.startswith("soak: ")
+
+
+# ---------------------------------------------------------------------------
+# 7. per-arm IV recording (P1: record what each arm's gate actually reads)
+# ---------------------------------------------------------------------------
+
+C_EXPIRY = SESSION + dt.timedelta(days=133)  # inside arm C's frozen 90-180 DTE band
+
+
+def _banded_chain() -> OptionChain:
+    """A chain carrying a 0DTE leg AND a 133-DTE leg, at clearly different IVs.
+
+    Shaped so a recorder that ignored tenor bands cannot pass by accident: the two legs
+    disagree on IV, so picking the wrong one changes the stored value.
+    """
+    return chain_of(
+        contract_with_volume(strike=625.00, right="call", volume=10.0, iv=0.18),
+        contract_with_volume(
+            strike=600.00,
+            right="call",
+            volume=5.0,
+            expiry=C_EXPIRY,
+            iv=0.27,
+        ),
+    )
+
+
+def test_arm_c_band_is_observed_even_when_the_sweep_cannot_reach_it():
+    """The regression this exists for: IV_MAX_DTE=45 could not see arm C's 90-180 DTE band.
+
+    Arm C's frozen entry band is 90-180 DTE. The sweep used to stop at 45, so the tenor
+    arm C's gate reads accumulated nothing and T5 was in warmup by construction.
+    """
+    assert soak.IV_MAX_DTE >= 180, (
+        "the IV sweep must reach arm C's frozen 90-180 DTE entry band; at 45 it "
+        "structurally cannot observe the tenor the gate reads"
+    )
+
+
+def test_arm_iv_observations_writes_both_arms_own_band():
+    """One row per arm, each under the tenor that arm's gate reads."""
+    observations, skipped = soak.arm_iv_observations(
+        _banded_chain(), SPOT, session=SESSION, underlying="SPY"
+    )
+    assert skipped == 0
+    strikes = {o.strike for o in observations}
+    # 625 (0DTE, arm B) and 600 (133 DTE, arm C) both get recorded...
+    assert strikes == {625.00, 600.00}
+    # ...and the IV stored for each is that contract's own, not the other's.
+    by_strike = {o.strike: o.iv for o in observations}
+    assert by_strike[625.00] == pytest.approx(0.18)
+    assert by_strike[600.00] == pytest.approx(0.27)
+
+
+def test_arm_c_row_key_names_the_long_dated_tenor():
+    """The point of the fix: a rolling-DTE key in arm C's band actually lands in the store.
+
+    Before this, the deepest key any observation carried was inside 45 DTE, so T5's
+    arm-C series could never accumulate a single observation.
+    """
+    observations, _skipped = soak.arm_iv_observations(
+        _banded_chain(), SPOT, session=SESSION, underlying="SPY"
+    )
+    keys = {o.tenor_key for o in observations}
+    assert "dte133-call-600.00" in keys
+    assert f"{C_EXPIRY:%Y%m%d}-call-600.00" in keys
+
+
+def test_arm_iv_observations_skips_an_empty_band_rather_than_filling_it():
+    """A band with nothing in it is a reported gap, not a reading borrowed from elsewhere."""
+    zero_dte_only = chain_of(
+        contract_with_volume(strike=625.00, right="call", volume=10.0, iv=0.18),
+    )
+    observations, skipped = soak.arm_iv_observations(
+        zero_dte_only, SPOT, session=SESSION, underlying="SPY"
+    )
+    # Arm B's 0DTE band resolves; arm C's 90-180 band does not and is counted.
+    assert skipped == 1
+    assert {o.strike for o in observations} == {625.00}
+
+
+def test_arm_iv_observations_skips_a_band_whose_iv_is_unusable():
+    """No IV, or a zero IV, is not a reading — same rule the ATM sweep already follows."""
+    chain = chain_of(
+        contract_with_volume(strike=625.00, right="call", volume=10.0, iv=0.18),
+        contract_with_volume(
+            strike=600.00, right="call", volume=5.0, expiry=C_EXPIRY, iv=None
+        ),
+    )
+    observations, skipped = soak.arm_iv_observations(
+        chain, SPOT, session=SESSION, underlying="SPY"
+    )
+    assert skipped == 1
+    assert {o.strike for o in observations} == {625.00}
+
+
+def test_arm_contract_for_band_reads_nearest_to_spot_inside_the_band():
+    """The recorder must agree with hunt_plan._iv_contract_for_arm, not with ATM."""
+    chain = chain_of(
+        # a 600-strike and a 640-strike both inside arm C's band; 625 is nearer to spot
+        contract_with_volume(strike=600.00, right="call", expiry=C_EXPIRY, volume=1.0),
+        contract_with_volume(strike=640.00, right="call", expiry=C_EXPIRY, volume=1.0),
+        contract_with_volume(strike=624.00, right="call", expiry=C_EXPIRY, volume=1.0),
+    )
+    chosen = soak.arm_contract_for_band(chain, SPOT, SESSION, 90, 180)
+    assert chosen is not None
+    assert chosen.strike == 624.00
+
+
+def test_arm_contract_for_band_excludes_expiries_outside_the_band():
+    chain = chain_of(
+        contract_with_volume(strike=625.00, right="call", expiry=SESSION, volume=1.0),
+        contract_with_volume(strike=600.00, right="call", expiry=C_EXPIRY, volume=1.0),
+    )
+    zero_dte = soak.arm_contract_for_band(chain, SPOT, SESSION, 0, 0)
+    assert zero_dte is not None and zero_dte.strike == 625.00
+    long_dated = soak.arm_contract_for_band(chain, SPOT, SESSION, 90, 180)
+    assert long_dated is not None and long_dated.strike == 600.00
+
+
+def test_bands_come_from_the_rulebook_not_from_a_constant(rules):
+    """The recorder must not drift from the bands the gates read."""
+    bands = soak._bands_from_rules(rules)
+    assert bands == (("B", 0, 0), ("C", 90, 180))
+    assert bands == soak.ARM_IV_BANDS, "the documented default and the rulebook disagree"
+
+
+def test_soak_run_records_per_arm_iv_rows(rules, journal, iv_store):
+    """End-to-end: a real run stores the arm-C tenor, not just the 0DTE one."""
+    out = run(rules, journal, _StaticSource(bars_for(SESSION), _banded_chain()), iv_store=iv_store)
+    keys = {
+        r["tenor_key"]
+        for r in iv_store.conn.execute("SELECT tenor_key FROM iv_observations")
+    }
+    assert "dte133-call-600.00" in keys
+    assert out.iv_rows > 0
+
+
+def test_band_skips_are_counted_separately_from_expiry_skips(rules, journal, iv_store):
+    """An empty arm band is the warm-up clock, not a hole in the series.
+
+    Summed into one number, "arm C has no tenor to rank today" would read as "3 days
+    of IV history are missing", which is a different fact and a scarier one.
+    """
+    # 0DTE leg readable; arm C's 90-180 band absent from the chain entirely.
+    chain = chain_of(
+        contract_with_volume(strike=625.00, right="call", volume=10.0, iv=0.18),
+    )
+    out = run(rules, journal, _StaticSource(bars_for(SESSION), chain), iv_store=iv_store)
+    assert out.iv_skipped_bands == 1
+    assert out.iv_skipped_expiries == 0
+    assert "arm band(s) with no rankable contract" in out.summary
+    assert "expiry(ies) skipped" not in out.summary

@@ -1,8 +1,9 @@
 # Ratification — one sitting, then the window opens
 
 **Status:** DRAFT — unsigned by the operator. Sections (b) and the delegation note in
-(a) carry operator rulings dated **2026-10-02**. **Date:** _(fill in when signed)_
-**Operator:** _(mads)_
+(a) carry operator rulings dated **2026-10-02**; section (e) and ruling **E1** were
+drafted 2026-10-03 after the frozen-rule rulings debate and are **awaiting operator
+signature**. **Date:** _(fill in when signed)_ **Operator:** _(mads)_
 
 > **Delegation note — 2026-10-02.** The operator explicitly delegated the *technical
 > interpretations* in section (a): he was told there are 55 judgment calls the code had
@@ -537,6 +538,123 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
 - [ ] **The pre-registration is pushed and the tag is public.** The value of a
       pre-registered experiment collapses the moment the rules can be edited after seeing
       results; a public, dated tag is what makes later edits visible as edits.
+
+---
+
+## (e) Empty-window pre-commitment — RULED 2026-10-03, drafted by the lead
+
+> **Drafted 2026-10-03, awaiting operator signature.** This is section (e), added after
+> the `2026-10-03` frozen-rule rulings debate. It is frozen-rule territory, so the text
+> below is exact and the operator ratifies it as written or not at all — it is not
+> "lead-ratified under delegation" the way section (a) is. Signature line at the bottom.
+
+**The one thing this section closes.** Every other control in this document defends
+against *editing* the rules — version bumps, monthly review only, journaled seams. None of
+them stops the cheaper failure: a quiet window, someone correctly noticing the rules look
+too tight, and a mid-flight loosening framed as "we learned the threshold was wrong." That
+response would destroy the only asset this experiment has that a normal trading system
+does not. **This is the only pre-commitment that closes it, which is why it is written
+before any results exist rather than after.**
+
+**An empty window is the designed outcome, for two independent reasons. Both are stated
+here so neither can be discovered later and mistaken for good news.**
+
+**(1) Structural — arm C cannot trade in this window at all.** This is deterministic, not
+probabilistic:
+
+- T5 is a blocking condition on arm C's frozen checklist (`arms.C.checklist`).
+- T5 reports **PENDING** when `iv_rank` is undefined, and PENDING *blocks*:
+  `checklist.evaluate` computes `fire = not any(blocking and status != "PASS")`.
+- An IV rank needs `MIN_OBSERVATIONS = 60` observations in the tenor key.
+- The window is 60 sessions and opens `2026-11-02`; the tenor series has not warmed.
+
+Therefore **P(arm C takes a position in this window) ≈ 0, deterministically.** This is
+stronger than the base rate below and it is the *first* reason, because it is structural
+rather than statistical.
+
+**(2) Base rate — even with T5 resolved, the checklist almost never fires.** Arm C fires
+on **5 of 5,522** SPY sessions in 22.7 years. P(at least one qualifying day in a
+60-session window) = **5.3%**; P(empty) = **94.7%**
+(`docs/reviews/2026-10-03-gate-base-rates.md`).
+
+> **A note on why 5.3% is an upper bound, so the number is not misquoted later.** That
+> measurement scored T5 with a Cboe VIX percentile-rank *proxy* (its own Limitations §2)
+> to get a per-gate marginal. Production T5 does not read a VIX proxy — it reads the SPY
+> option IV series for the arm's own traded tenor, and that series is not warm. So the
+> proxy figure describes what the checklist would do *if* T5 resolved. It is a ceiling,
+> not a forecast.
+
+**The pre-commitment:**
+
+> An empty or single-trade window is the **expected, pre-registered outcome**. It is
+> **INCONCLUSIVE** — not a failure, not a bug, not evidence that the gates are broken, and
+> **not evidence for loosening them**. **No gate or threshold changes mid-window.** The
+> window is not extended or re-tuned in response to its trade count; extension remains a
+> monthly-review decision per `window.extension`, made on schedule rather than on results.
+>
+> **Queued for the next pre-registration cycle (v2 design), explicitly NOT for mid-flight
+> amendment:**
+> 1. **T5's tenor key rotates with spot.** `dte_tenor_key` embeds a `$5` strike bucket, so
+>    the key changes as SPY moves — the same failure R4 fixed on the *DTE* axis, still live
+>    on the *strike* axis. Measured on real SPY closes: **no key has reached 60
+>    observations since 2020** (best 54). Affects arm B too. Candidate fix is
+>    moneyness-relative bucketing; it changes what T5 measures, so it needs its own
+>    ratification entry and version seam.
+> 2. **T1, T2 and T5 are redundant** at daily resolution — zero sole-vetoes, 100% pass
+>    given the others pass. T4 does nearly all the filtering.
+> 3. **T2b vs T3b friction** — the outsider review argues these charge twice for one
+>    observation. Both are binding, so neither is removable without weakening confluence.
+>
+> Items 1–3 are recorded **now, pre-window, before any results exist**, so that a later
+> reader sees them as *queued* rather than as *discovered after the window went quiet*.
+
+**Journal/UI wording.** The correct note on an empty session is: *"base rate predicts 0.05
+trades per window; 0 trades is unremarkable."* Not *"checklist is too tight."*
+
+**Operator signature:** ______________________  **Date:** ____________
+
+---
+
+---
+
+## (f) E1 — November window scope — DRAFTED 2026-10-03, AWAITING OPERATOR RULING
+
+> **This is a draft, not a ruling.** Both the lead and the outside reviewer independently
+> converged on it, which is why it is written as exact text rather than a recommendation.
+> The operator rules on it. It is placed in the frozen document so that it is signed
+> **before the window opens** — the whole value of an escalation is that it cannot be
+> reverse-engineered from results.
+
+**The finding.** The November window opens arms A and C. Arm C cannot trade in it: T5 is
+blocking, PENDING blocks, the IV rank needs 60 observations, and 21 weekdays separate this
+document from the window. Section (e) gives the arithmetic. The consequence is that the
+window's pre-registered predictions largely cannot be evaluated.
+
+**Escalated for ruling, with exact text:**
+
+> **E1(a) — Predictions 2 and 3 are NOT EVALUABLE IN THIS WINDOW.** Prediction 2 (arm B
+> is structurally negative-EV as an asset class) and prediction 3 (arm C tracks arm A with
+> leverage-amplified variance) both require trades that cannot occur. They are **deferred
+> to the next pre-registration cycle (v2)**, where T5 is warm and the arms can act. Their
+> criteria are **unchanged** — deferred, not rewritten to fit what the window produced.
+>
+> **E1(b) — Prediction 4's in-window result is recorded as VACUOUS, not confirmatory.**
+> Prediction 4 falsifies itself if "the rules were not frozen tight enough"; an empty
+> window satisfies that test without testing anything. It is recorded as *not run*, so a
+> later reader cannot cite "the rules passed prediction 4" as support.
+>
+> **E1(c) — The window's stated purpose is amended** to: **score arm A against cash, and
+> collect mechanism evidence** — NO-SHOT rows, the IV series, T6's flow baseline. This is a
+> legitimate thing to run and worth running, but it is a *different* experiment than the
+> one the brief described, and the difference should be on the record before day one rather
+> than discovered on it.
+
+**What E1 does NOT do.** It does not change a threshold, a gate, or a rule. It does not
+extend or shorten the window. It does not alter what arm A does. It is a statement about
+what the window can and cannot conclude — which is exactly the kind of claim that is
+cheap to make now and impossible to make honestly later.
+
+**Operator signature:** ______________________  **Date:** ____________
 
 ---
 
