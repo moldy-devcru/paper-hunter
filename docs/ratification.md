@@ -42,7 +42,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**71 interpretations across 8 domains.** Every one was a decision
+**75 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -118,15 +118,19 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`analysis/shadow_roll.py:27`** — what "quarterly roll" means. The brief says "fixed quarterly roll" without pinning the date. ([source](../analysis/shadow_roll.py#L27))
 - [ ] **`analysis/shadow_roll.py:36`** — lineage, not mutation. A roll does not close a row; it appends a new leg with `supersedes_leg_id` pointing at the leg it replaced. ([source](../analysis/shadow_roll.py#L36))
 
-### soak (7)
+### soak (11)
 
-- [ ] **`executor/soak.py:221`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L221))
-- [ ] **`executor/soak.py:291`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L291))
-- [ ] **`executor/soak.py:310`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L310))
-- [ ] **`executor/soak.py:335`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L335))
-- [ ] **`executor/soak.py:412`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L412))
-- [ ] **`executor/soak.py:426`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L426))
-- [ ] **`executor/soak.py:752`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L752))
+- [ ] **`executor/soak.py:237`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L237))
+- [ ] **`executor/soak.py:307`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L307))
+- [ ] **`executor/soak.py:326`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L326))
+- [ ] **`executor/soak.py:351`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L351))
+- [ ] **`executor/soak.py:447`** — `right` is deliberately NOT filtered. One EOD sweep serves both arms and the gate filters by direction at read time, so recording both sides is what lets a call-side rank warm without a second pass tomorrow. ([source](../executor/soak.py#L447))
+- [ ] **`executor/soak.py:523`** — this is a MEASUREMENT fix, not a rule change. ([source](../executor/soak.py#L523))
+- [ ] **`executor/soak.py:529`** — a band with no contract, or whose nearest contract carries no usable IV, is SKIPPED and counted, never filled from a neighbouring expiry. ([source](../executor/soak.py#L529))
+- [ ] **`executor/soak.py:581`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L581))
+- [ ] **`executor/soak.py:595`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L595))
+- [ ] **`executor/soak.py:944`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L944))
+- [ ] **`executor/soak.py:950`** — band skips are reported separately and labelled as the warm-up clock rather than folded into the expiry count. "3 expiries skipped" means three holes in a series that otherwise accumulates;. ([source](../executor/soak.py#L950))
 
 ### CLI / plumbing (7)
 

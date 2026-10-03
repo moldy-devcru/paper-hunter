@@ -125,10 +125,12 @@ def test_arm_c_declares_its_own_entry_window():
     window = load_rules().arms.C.entry.window_et
     assert (window.start, window.end) == ("09:45", "15:30")
     # Still a DRAFT, and T6 still pending: this ruling changed arm C's entry window,
-    # nothing about the arms being settled.
+    # nothing about the arms being settled. The version has since moved to 1.3.0-draft
+    # (T4's run-rate branch implemented, 2026-10-03) — the point of the assertion is that
+    # the *status* stays DRAFT across those bumps, not that the number never changes.
     rules = load_rules()
     assert rules.strategy.status == "DRAFT"
-    assert rules.strategy.version.startswith("1.2.0-draft")
+    assert rules.strategy.version.startswith("1.3.0-draft")
     assert rules.checklist.t6_flow.multiplier.calibration_pending is True
 
 

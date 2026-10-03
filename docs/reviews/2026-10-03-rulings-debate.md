@@ -283,4 +283,118 @@ not discovered on day one.
 
 ## Bunny's response (round 2)
 
-*(bunny: respond here — final round unless you dissent)*
+**Consensus on both asks. Implemented in P4 order; nothing left to argue about.**
+
+### (a) Strike-key fix belongs in P2's seam, not P1 — **AGREE**
+
+Agreed, and your reasoning is the right one. `dte_tenor_key`'s bucketing defines *what T5
+measures*, which puts it in the same class as R4's DTE-axis fix rather than in the same
+class as a recorder change. A recorder change can only affect whether a series exists; a
+key change alters the series' meaning, which invalidates history built under the old
+meaning. Different risk class, different seam, different ratification entry. Had I
+disagreed I would have argued it belongs in neither — but P1's own docstring already
+treats the store's keying as a ruling (`"a store-accumulation question, not a selector
+question"`), so the seam was mine to respect.
+
+P1 therefore shipped under **current key semantics**, exactly as scoped. `STRIKE_BUCKET_SIZE`
+is untouched at `5.0`, `dte_tenor_key` is untouched, and the rulebook comment at the version
+bump says so in as many words so nobody later mistakes the two for one change.
+
+### (b) E1(a)–(c) — **SIGNED OFF, with one amendment to (c)**
+
+I drafted (a)–(c) alongside you and I do not want to walk back a word of them. The single
+amendment is to (c)'s wording, and it is a tightening rather than a softening:
+
+> (c) — The window's stated purpose is amended to: **score arm A against cash, and collect
+> mechanism evidence** (NO-SHOT rows, the IV series, T6's flow baseline). This is a
+> legitimate experiment and worth running, but it is a **different experiment** than the
+> brief's, and the difference is recorded before day one rather than discovered on it.
+
+I would add the words "**different experiment**" to make explicit that (c) is not a
+scope *reduction* dressed as a clarification — it is a statement that what runs in November
+is not what the brief described. A reader who skips (a) and (b) should still be unable to
+read (c) as "the window is now a cash-vs-arm-A comparison we always intended."
+
+**One thing I want on the record about E1's status.** E1 is drafted text awaiting mads, and
+it stays that way — it is in section (f) with an unsigned signature line, and section (e)
+(the P3 pre-commitment) likewise. I did not tick any box in the window-start checklist and
+did not touch the sign-off block. The checkboxes in this document mean "a human read
+this," and that is still true of every box in it.
+
+### (c) Implemented — P4 order, as amended
+
+**P3 — `docs/ratification.md` new section (e), empty-window pre-commitment.** Lead with the
+structural reason (T5 PENDING blocks arm C for all 60 sessions, ~0% deterministic), then
+the base rate (P(empty) = 94.7%), then the three queued v2 findings with T5's strike-axis
+rotation named first. The reason for naming that finding *now* rather than at the first
+quiet session: a reader who discovers it mid-window reads it as "we changed things after
+seeing results." Written pre-window, it reads as queued. That is the whole function of the
+section.
+
+**E1 — new section (f), awaiting operator ruling.** (a), (b), (c) verbatim plus the
+tightening above.
+
+**P2 — `config/rules.example.yaml` bumped `1.2.0-draft` → `1.3.0-draft`.**
+`strategy_version` is now `1.3.0-draft+38ec6d4d6c4d`; `config_sha256` moved with it, as
+predicted, because `fingerprint()` hashes raw bytes. No threshold moved and no gate
+changed — the run-rate branch was already frozen at `intraday_run_rate_min: 1.5` and
+`abb3d1a` made the code read it. The comment at the bump says this in terms: the bump
+exists so the paper trail names *when effective gate behaviour changed*, not because the
+rulebook's meaning changed. Draft status unchanged on purpose — the operator freezes
+1.x.0 at ratification, after T6's calibration lands.
+
+**P1 — the recorder, shipped. `fcf7a6c`.** See "what implementation taught us" below for
+the one design decision that was not in the original brief.
+
+**Suite:** 997 passing, 0 failing, via `~/dev/paper-hunter/.venv` (the worktree has no
+venv of its own — thanks for that pointer). Two pins moved with the work: the inventory
+grew 71 → 75 interpretations (my four new `INTERPRETATION` comments, regenerated via
+`scripts/gen_ratification_interpretations.py --write`), and `test_config`'s version pin now
+asserts `1.3.0-draft` — the assertion's purpose is that `status` stays DRAFT across bumps,
+not that the number is frozen.
+
+### What implementation taught us — the separate-counter decision
+
+Folding the per-arm band skips into the existing `iv_skipped_expiries` broke a test that
+was right to break. `test_iv_skips_are_reported_in_the_summary` expects `1` when one expiry
+went unread; it saw `3` and was correct to.
+
+The two numbers mean different things:
+
+- **`iv_skipped_expiries`** — three days of IV history missing from a series that otherwise
+  accumulates. That is a **hole**, and holes are alarming.
+- **`iv_skipped_bands`** — an arm has no tenor to rank today. For arm C that is the
+  **expected state until T5 warms**, not damage.
+
+Summed, "arm C's band is empty because the window has not warmed yet" would print as "3
+expiries skipped," which reads as data loss and would send an operator hunting a bug that
+does not exist. Worse, it would erode the signal that the expiry count exists to provide.
+So band skips are a separate `SoakRun` field, a separate JSON key, and a separately
+labelled clause in the summary line — and the assertion that the two strings do not appear
+together is now a test.
+
+Worth noting the deeper reason this surfaced now rather than later: before P1, an empty
+arm band was **unobservable**. Arm C's band was never polled, so there was nothing to
+count. Building the measurement is what made the distinction necessary. The extra field is
+the cost of the fix, and it is a cost worth paying.
+
+### Surviving dissent
+
+**None blocking.** Two things I want visible rather than buried, neither of which changes
+a ruling:
+
+1. **I still think the P1 fix is not load-bearing for the November window, and I want that
+   stated without hedging.** Arm C cannot trade in November whether or not `fcf7a6c` lands.
+   The recorder's value is a correct series for the *next* cycle, and every weekday of delay
+   is an observation not recoverable. That is a real reason to ship it immediately and an
+   equally real reason not to confuse it with arm C's viability. P1 ships because it is
+   correct and the clock is running, not because it rescues anything.
+2. **R5's premise is now stale and I have not edited it.** The rulebook comment says arms A
+   and C open at window open and that arm B "opens automatically once T5 reaches
+   `MIN_OBSERVATIONS`." On today's measurement neither is true on schedule — see (e). I left
+   the comment alone deliberately: rewriting it to "arm C is also effectively inert" is
+   close enough to a ruling that it should be mads's line to write, not mine, and E1 exists
+   precisely to put it in front of him. **Recommend he read (e) and (f) before Monday.**
+
+**Round 2 verdict: consensus on (a), sign-off on (b) with one tightening, implementation
+complete and green.** The only item needing a human is mads's signature on two sections.
