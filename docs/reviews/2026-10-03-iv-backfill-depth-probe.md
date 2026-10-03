@@ -79,6 +79,46 @@ this probe establishes is the premise the doc could only cite: **the data to bui
 The doc's recommendation §6.2 — "scope it as seed the corrected series for v2" — is
 therefore buildable, and this run builds it.
 
+## ADDENDUM (f2614da, same day): that 403 is not a one-off, and it is not an error
+
+The first real backfill run hit this and the behaviour turned out to be worth writing down,
+because the error text is misleading and the naive reading of it is wrong.
+
+**The 403 arrives in WAVES.** Roughly 10-15 requests succeed, then every request on the
+route 403s for about two minutes, then the burst allowance returns. Observed sequence:
+
+| when | request | result |
+|---|---|---|
+| t0 | 8-symbol batch | `403` |
+| t0+~20m | 13 requests incl. 100-symbol batches | all `200` |
+| t0+~25m | 100 symbols / 410-day window | `403` |
+| t0+~25m | 90-day window, 100 symbols | `403` |
+| t0+~26m | 20 symbols / 410-day window | `403` |
+| t0+~27m | `get_option_chain("SPY")` | `200`, 10,000 contracts |
+| t0+~27m | **1 symbol / 3.5-month window** | `200`, 67 bars |
+| t0+~30m | **the exact 100-symbol request that 403'd above** | `200`, 50 symbols with data |
+| t0+~32m | pipeline dry-run, 4 retries w/ 2-16s backoff | all 5 attempts `403` |
+| t0+~34m | 3 more shapes incl. the one that just passed | all `403` |
+| t0+~36m | same request again, after ~2 min idle | `200` |
+
+**The identical request 403s and then succeeds with nothing changed on our side.** So this
+is a *throttle*, not a wall, and "the OPRA agreement is not signed" is simply the wrong
+error text for it. A client that treats the first 403 as terminal would have abandoned a
+backfill that was in fact buildable, and a client that treats it as "retry forever" would
+have escalated a ten-per-burst allowance into a self-inflicted ban. The build therefore
+paces requests to a minimum interval and cools down for 30s (doubling) on a 403, bounded
+at four retries — and **counts and reports both retries and cooldowns**, so a run that
+leaned on forty cooldowns is visibly a worse run than one that needed none.
+
+The documented Basic budget is 200 calls/min. **Nothing about the observed behaviour of
+this route on this plan resembles that number.** Treat the burst allowance as the real
+budget, and do not assume a rate-limit header is available to read back.
+
+One genuinely *honest* 403 does exist and is different: equities on SIP answer
+`403 subscription does not permit querying recent SIP data` when the query window ends less
+than 15 minutes ago. That one is fixed by the same 20-minute backoff the live soak already
+applies — it is a real entitlement boundary, not a throttle.
+
 ## Reproduction
 
 `scratch/iv_backfill_probe.py` (first pass, malformed OCC — kept for the error text),
