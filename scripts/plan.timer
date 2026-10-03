@@ -1,0 +1,24 @@
+# Daily pre-market plan timer — 09:20 ET, weekdays.
+#
+# Paired with plan.service. Mirrors soak.timer's conventions deliberately: OnCalendar in
+# an explicit timezone, Persistent=true, and an installed comment block, because these
+# files are read months later by whoever has to debug a missed session.
+#
+# Why 09:20 ET rather than "at the open": the plan is built from the prior session's
+# settled bar, so it wants to be late; and `executor/main.py` skips journalling a plan
+# decided at or after 09:30 ET, so it must be early. The window between those is about
+# ten minutes wide and 09:20 sits in the middle of it. Moving it later silently
+# converts the plan into an un-journalled no-op, which looks like a passing run.
+
+[Unit]
+Description=Run the paper-hunter pre-market plan once per weekday at 09:20 ET
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+
+[Timer]
+OnCalendar=Mon..Fri 09:20:00 America/New_York
+Persistent=true
+AccuracySec=30s
+Unit=plan.service
+
+[Install]
+WantedBy=timers.target

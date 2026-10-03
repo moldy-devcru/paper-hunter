@@ -1,0 +1,67 @@
+# EOD pass — mark positions, enforce time stops, close the journal, write NO-SHOTs.
+#
+# THE THIRD OF THREE MISSING DAILY LEGS. Paired with eod.timer at 16:15 ET.
+#
+# DO NOT `systemctl enable --now` without reading docs/ratification.md first. This job
+# places no orders and routes none, but it writes the NO-SHOT counterfactual ledger —
+# the experiment's primary artifact after the journal itself. A ledger row written under
+# the wrong `strategy_version` is not a cosmetic error; it is a counterfactual that the
+# monthly review cannot isolate and will silently double-count or drop.
+#
+# ORDERING: plan.timer 09:20 -> watch.timer 09:30 (loop exits 16:00) -> eod.timer 16:15
+# -> soak.timer 17:30. The EOD pass reads the intraday decisions it is meant to close
+# out, so it must run after the loop has stopped writing. Running it while the loop is
+# still alive is not a race that resolves safely: `decision_ids` resolves each cell to
+# its newest PRE-MARKET plan row precisely so an intraday re-verification cannot be
+# mistaken for the decision the session executed against, and a concurrent writer makes
+# "newest" mean something different between two cells in the same run.
+
+[Unit]
+Description=paper-hunter end-of-day pass (mark, time stops, NO-SHOT ledger)
+Documentation=file:/opt/paper-hunter/docs/ratification.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/paper-hunter
+
+# The EOD pass is the leg that genuinely needs credentials: it reads positions and the
+# day's option chain. Same file, paper only, mode 0640 root:paper-hunter.
+EnvironmentFile=-/etc/paper-hunter/soak.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+User=paper-hunter
+Group=paper-hunter
+ProtectSystem=strict
+ReadWritePaths=/opt/paper-hunter/data
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# `--dry-run` EXPLICIT, same reasoning as watch.service. It matters MORE here, not less:
+# `cmd_eod` reads open positions from the broker only when NOT dry-running, so `--live`
+# would make this job route no orders but would make it depend on live account state.
+#
+# `--offline` is deliberately NOT passed. It exists (R-rehearsal item 9) and it is the
+# right tool for rehearsing this pass offline; it is the wrong tool for production, where
+# the point is that the ledger is written from the real chain. Passing it here would make
+# the whole ledger a fixture replay.
+#
+# `--db` is REQUIRED: without it this writes nothing and exits clean, which is the worst
+# possible combination for a job whose entire purpose is the ledger.
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --dry-run --db /opt/paper-hunter/data/journal.db eod
+
+# Longer than plan.service's 180s: this pass pulls 400 daily bars, an EMA-50 streak, the
+# full chain, and the whole day's decision set. The margin is for a slow provider, not for
+# retries — `cmd_eod` does not retry internally, so a transient failure here is a failed
+# session's ledger, which is why eod.timer below does catch up.
+TimeoutStartSec=300
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paper-hunter-eod
+
+[Install]
+WantedBy=multi-user.target
