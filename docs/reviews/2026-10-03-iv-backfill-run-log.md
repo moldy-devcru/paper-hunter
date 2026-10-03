@@ -11,7 +11,8 @@ Branch `feature/frozen-rule-rulings`. Base: run A's tip `50e2c0f`.
 | `81f918d` | R9 provenance: `source="bars_bs_inversion"`, `origin="live"\|"backfill"` |
 | `c2da92b` | `executor/iv_backfill.py` + `scripts/backfill_iv_rank.py` + 23 tests |
 | `f2614da` | throttle pacing + bounded 403 cooldown, + 5 tests |
-| `e2b0b68` | ladder sized to the gate (50 chunks → 15), empty-ladder refusal |
+| `765c76c` | ladder sized to the gate (50 chunks → 15) |
+| `e2b0b68` | empty-ladder refusal (found by the ladder test) |
 
 The module is `executor/iv_backfill.py`; the CLI is `scripts/backfill_iv_rank.py`
 (`--dry-run`, `--days`, `--arms`, `--range-pct`, `--strike-step`, `--report`).

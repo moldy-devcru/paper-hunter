@@ -42,7 +42,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**76 interpretations across 8 domains.** Every one was a decision
+**78 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -80,9 +80,9 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/alpaca_client.py:737`** — the reference date is a UTC date. Alpaca expiry timestamps are exchange-local (America/New_York); for an after-hours decision the two agree in every case this executor cares about, and a documented UTC choice is better than an implicit local-time one. ([source](../executor/alpaca_client.py#L737))
 - [ ] **`executor/alpaca_client.py:753`** — ties break toward calls. Arm C is calls-only and arm B picks its own strike, so the only consumer of the ATM contract is the IV-rank tenor selection, and a deterministic tie-break keeps that key stable day to day. ([source](../executor/alpaca_client.py#L753))
 - [ ] **`executor/alpaca_client.py:1367`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1367))
-- [ ] **`executor/iv_rank.py:214`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L214))
-- [ ] **`executor/iv_rank.py:272`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L272))
-- [ ] **`executor/iv_rank.py:370`** — the key is NAMESPACED (`mte`/`mny`) rather than reusing the `dte`/dollar prefix, and this is load-bearing rather than cosmetic. ([source](../executor/iv_rank.py#L370))
+- [ ] **`executor/iv_rank.py:243`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L243))
+- [ ] **`executor/iv_rank.py:301`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L301))
+- [ ] **`executor/iv_rank.py:399`** — the key is NAMESPACED (`mte`/`mny`) rather than reusing the `dte`/dollar prefix, and this is load-bearing rather than cosmetic. ([source](../executor/iv_rank.py#L399))
 - [ ] **`config/loader.py:577`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L577))
 
 ### trading (19)
@@ -143,13 +143,15 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/main.py:915`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L915))
 - [ ] **`executor/main.py:948`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L948))
 
-### other (5)
+### other (7)
 
 - [ ] **`executor/backfill_flow.py:285`** — the grid step is a **parameter, not a fact about the world**. ([source](../executor/backfill_flow.py#L285))
 - [ ] **`executor/backfill_flow.py:294`** — strikes are snapped to a multiple of `strike_step` by `ceil(lo/step)*step` and emitted while `<= hi`, so the span is symmetric to within one step and contains no strike outside the window. ([source](../executor/backfill_flow.py#L294))
 - [ ] **`executor/backfill_flow.py:364`** — the contract is built by *parsing the OCC symbol back* rather than by remembering what we asked for, so strike/right/expiry in the row come from the same parser the live path uses. ([source](../executor/backfill_flow.py#L364))
 - [ ] **`executor/backfill_flow.py:559`** — the message keeps the exception type and text (Alpaca's HTTP status and body are the whole diagnosis — see the feasibility note's §5), and the run continues. ([source](../executor/backfill_flow.py#L559))
 - [ ] **`executor/backfill_flow.py:634`** — the honest-empty rule, inherited from the live soak. ([source](../executor/backfill_flow.py#L634))
+- [ ] **`executor/iv_backfill.py:307`** — this is a **reconstruction of a listing calendar, not a record of one.** Alpaca serves no point-in-time chain, so the calendar cannot be read back for a past session. ([source](../executor/iv_backfill.py#L307))
+- [ ] **`executor/iv_backfill.py:363`** — $1-wide is SPY's listed near-ATM spacing, and the width is sized to the GATE rather than to caution -- see DEFAULT_LADDER_RANGE_PCT for why that is 0.75% and not 3%. ([source](../executor/iv_backfill.py#L363))
 
 <!-- END GENERATED: INTERPRETATION INVENTORY -->
 
