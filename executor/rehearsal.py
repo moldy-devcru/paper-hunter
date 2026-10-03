@@ -1608,6 +1608,124 @@ def stage_watch_entry(r: Rehearsal, st: Stage) -> None:
 
 
 # ---------------------------------------------------------------------------
+# stage: arm C's declared entry window (RULED 2026-10-03, operator)
+# ---------------------------------------------------------------------------
+
+
+def _arm_c_entry_tick(
+    r: Rehearsal, *, now: dt.datetime
+) -> tuple[tuple[object, ...], tuple[object, ...], tuple[tuple[str, str], ...]]:
+    """One arm C entry tick in the shot world, at ``now``.
+
+    Same session, same spot, same chain: only the clock differs between the two calls,
+    so whatever changes between them is the window and nothing else.
+    """
+    provider, state, day = _watch_world(r, key="shot", at=now)
+    provider.chain = arm_c_chain(day=day, spot=provider.spot)
+    res = run_once(
+        provider=provider,
+        rules=r.rules,
+        state=state,
+        now=now,
+        router=r.router,
+        journal=MemoryJournalSink(),
+        calendar=_world(r)["calendar"],
+        iv_rank=_world(r)["iv_rank"],
+        flow_gate=_gate(r, "call"),
+    )
+    trades = tuple(a for a in res.actions if a.kind == "TRADE" and a.arm == "C")
+    vetoes = tuple(v for v in res.vetoes if v.arm == "C")
+    return trades, vetoes, tuple(res.reverified)
+
+
+def stage_arm_c_entry_window(r: Rehearsal, st: Stage) -> None:
+    """Arm C's entry window: the same tick inside it and outside it.
+
+    The ruling (operator, 2026-10-03) declared arm C an entry window of 09:45-15:30
+    ET. Before it, arm C had none and the code fell back to the whole session, so
+    R2's "a green plan arms the loop on the entry window alone" had no boundary to be
+    alone to. This stage runs the identical tick at 10:20 (inside) and 15:45 (outside,
+    and the tick that used to be allowed in) and asserts the window is what separates
+    them. The roll ladder is pinned by ``exits+roll``: an entry window that leaked
+    into the exits would strand a stale leg until the next session.
+    """
+    inside_at = _tick_times(r.plans["shot"]["plan"].day, 1, start="10:20")[0]
+    outside_at = _tick_times(r.plans["shot"]["plan"].day, 1, start="15:45")[0]
+    # The tick clock is UTC; the window is ET, and a report that printed one and
+    # compared against the other would read as a 5-hour discrepancy that isn't there.
+    inside_et = inside_at.astimezone(ET)
+    outside_et = outside_at.astimezone(ET)
+    window = r.rules.arms.C.entry.window_et
+
+    in_trades, in_vetoes, in_reverified = _arm_c_entry_tick(r, now=inside_at)
+    out_trades, out_vetoes, out_reverified = _arm_c_entry_tick(r, now=outside_at)
+
+    window_vetoes_inside = [v for v in in_vetoes if v.governor == "entry_window"]
+    window_vetoes_outside = [v for v in out_vetoes if v.governor == "entry_window"]
+    st.detail = {
+        "declared_window_et": f"{window.start}-{window.end}",
+        "inside_tick": {
+            "now": inside_et.isoformat(),
+            "c_trades": [a.symbol for a in in_trades],
+            "c_vetoes": [v.governor for v in in_vetoes],
+            "cells_reverified": [f"{a}/{d}" for a, d in in_reverified],
+        },
+        "outside_tick": {
+            "now": outside_et.isoformat(),
+            "c_trades": [a.symbol for a in out_trades],
+            "c_vetoes": [v.governor for v in out_vetoes],
+            "cells_reverified": [f"{a}/{d}" for a, d in out_reverified],
+        },
+    }
+    st.say(
+        f"arm C window {window.start}-{window.end} ET: inside {inside_et.strftime('%H:%M')} ET "
+        f"{len(in_trades)} TRADE / {len(in_vetoes)} VETO, outside "
+        f"{outside_et.strftime('%H:%M')} ET {len(out_trades)} TRADE / {len(out_vetoes)} VETO"
+    )
+    for label, trades, vetoes in (
+        ("inside", in_trades, in_vetoes),
+        ("outside", out_trades, out_vetoes),
+    ):
+        for a in trades:
+            st.say(f"  {label} TRADE {a.symbol}")
+        for v in vetoes:
+            st.say(f"  {label} VETO {v.governor}: {v.reason.splitlines()[0]}")
+
+    if window_vetoes_inside:
+        st.ok = False
+        st.error = (
+            f"arm C was vetoed by the entry window at {inside_et.isoformat()}, which is "
+            f"INSIDE {window.start}-{window.end}"
+        )
+        return
+    if out_trades:
+        st.ok = False
+        st.error = (
+            f"arm C entered {out_trades[0].symbol} at {outside_et.isoformat()}, outside "
+            f"the declared {window.start}-{window.end} window"
+        )
+        return
+    if not window_vetoes_outside and not out_reverified:
+        st.ok = False
+        st.error = (
+            "the outside tick neither entered nor said why: arm C was not evaluated at "
+            "all, so this stage proves nothing about the window"
+        )
+        return
+    st.find(
+        f"ENTRY WINDOW EXERCISED: arm C is {window.start}-{window.end} ET. The same tick "
+        f"at {inside_et.strftime('%H:%M')} ET was not blocked by the window; the same tick at "
+        f"{outside_et.strftime('%H:%M')} ET produced "
+        + (
+            f"a named {window_vetoes_outside[0].governor} veto"
+            if window_vetoes_outside
+            else "no entry at all (the cell was not armed)"
+        )
+        + "."
+    )
+
+
+# ---------------------------------------------------------------------------
 # stage: exits and the roll ladder
 # ---------------------------------------------------------------------------
 
@@ -2495,6 +2613,7 @@ STAGE_ORDER: list[tuple[str, Callable[[Rehearsal, Stage], None]]] = [
     ("watch/quiet", stage_watch_quiet),
     ("watch/stale", stage_watch_stale),
     ("watch/entry", stage_watch_entry),
+    ("arm-c-window", stage_arm_c_entry_window),
     ("exits+roll", stage_exits_and_roll),
     ("eod", stage_eod),
     ("soak", stage_soak),

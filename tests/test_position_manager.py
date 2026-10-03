@@ -28,6 +28,7 @@ from executor.position_manager import (
     arm_c_exits,
     arm_c_roll_replacement,
     arm_c_roll_trigger,
+    arm_entry_window_open,
     entry_window_open,
     et_week_key,
     half_quantity,
@@ -683,6 +684,109 @@ def test_arm_c_entry_requires_a_selected_contract(rules):
     )
     assert evaluation.actions == ()
     assert [v.governor for v in evaluation.vetoes] == ["no_candidate"]
+
+
+# ---------------------------------------------------------------------------
+# arm C's DECLARED entry window (RULED 2026-10-03, operator)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hh,mm,expected",
+    [
+        (9, 44, False),   # the opening drive, before the window
+        (9, 45, True),    # inclusive start
+        (11, 30, True),
+        (15, 29, True),
+        (15, 30, True),   # inclusive end
+        (15, 31, False),  # after the window
+        (16, 0, False),   # the old whole-session placeholder would have said True
+    ],
+)
+def test_arm_c_declares_0945_to_1530_et_inclusive(rules, hh, mm, expected):
+    """Arm C's entry window is a real boundary, not the whole session.
+
+    Before the ruling arm C declared no window and the code fell back to
+    09:30-16:00, so 09:35 and 15:45 were both inside it. The two rows at the
+    bottom are the placeholder's answers, asserted to be gone.
+    """
+    assert arm_entry_window_open("C", at(hh, mm), rules) is expected
+
+
+def test_both_arms_read_the_same_window_helper(rules):
+    """One definition of "inside the entry window", so the loop and the manager agree."""
+    for hh, mm in ((9, 45), (10, 0), (15, 30)):
+        assert arm_entry_window_open("B", at(hh, mm), rules) == entry_window_open(
+            at(hh, mm), rules
+        )
+    # The arms are genuinely different windows, not one number copied twice.
+    assert arm_entry_window_open("B", at(15, 0), rules) is False
+    assert arm_entry_window_open("C", at(15, 0), rules) is True
+
+
+def test_arm_c_entry_is_vetoed_outside_its_declared_window(rules):
+    """A fired trigger outside the window must not become an entry.
+
+    This is the path the green-plan arming does NOT cover: a cell with a live price
+    trigger reaches the manager whatever the clock says, so without a governor here a
+    declared window would only bind one of the two ways into an entry.
+    """
+    manager = PositionManager(rules)
+    for hh, mm in ((9, 30), (15, 45)):
+        evaluation = manager.evaluate_entry(
+            "C",
+            now=at(hh, mm),
+            state=ArmState(bankroll_usd=10_000.0),
+            price=625.0,
+            symbol="SPY270115C00580000",
+            replacement=OrderLeg("SPY270115C00580000", 1, "buy", limit_price=18.0),
+        )
+        assert evaluation.actions == ()
+        assert [v.governor for v in evaluation.vetoes] == ["entry_window"]
+        assert evaluation.vetoes[0].checks["window_et"] == {"start": "09:45", "end": "15:30"}
+
+
+def test_arm_c_entry_inside_the_window_still_buys(rules):
+    manager = PositionManager(rules)
+    evaluation = manager.evaluate_entry(
+        "C",
+        now=at(11, 0),
+        state=ArmState(bankroll_usd=10_000.0),
+        price=625.0,
+        symbol="SPY270115C00580000",
+        replacement=OrderLeg("SPY270115C00580000", 1, "buy", limit_price=18.0),
+    )
+    assert [a.kind for a in evaluation.actions] == ["TRADE"]
+    assert evaluation.next_state is not None
+    assert evaluation.next_state.position is not None
+
+
+def test_the_roll_is_not_gated_by_the_entry_window(rules):
+    """R1's roll runs whenever the loop runs, including outside the entry window.
+
+    The ruling declares an ENTRY window. A position already past its roll trigger is
+    not a new entry, and a leg that cannot be rolled until the next morning is a
+    different risk from one that is never rolled at all. So the exits ladder is
+    evaluated before any window question and must produce its ROLL at 09:30 and at
+    15:45 alike.
+    """
+    manager = PositionManager(rules)
+    chain = _chain(_c(100, 570.0, 0.81, 7.00))
+    selection = arm_c_roll_replacement(
+        chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+    )
+    for hh, mm in ((9, 30), (11, 0), (15, 45)):
+        evaluation = manager.evaluate_exits(
+            "C",
+            now=at(hh, mm),
+            state=ArmState(position=c_position()),
+            price=18.0,
+            delta=0.60,
+            dte=120,
+            replacement=selection.leg,
+            selection=selection,
+        )
+        assert [a.kind for a in evaluation.actions] == ["ROLL"], f"no roll at {hh}:{mm}"
 
 
 def test_a_calibrated_rulebook_does_not_change_the_governors(rules):

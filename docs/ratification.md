@@ -41,7 +41,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**66 interpretations across 8 domains.** Every one was a decision
+**67 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -77,9 +77,9 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/alpaca_client.py:1367`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1367))
 - [ ] **`executor/iv_rank.py:190`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L190))
 - [ ] **`executor/iv_rank.py:248`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L248))
-- [ ] **`config/loader.py:571`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L571))
+- [ ] **`config/loader.py:577`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L577))
 
-### trading (18)
+### trading (19)
 
 - [ ] **`executor/alpaca_trading.py:52`** — paper proof is `account.paper is True` OR an account id beginning `PA` (the prefix Alpaca issues paper accounts). ([source](../executor/alpaca_trading.py#L52))
 - [ ] **`executor/alpaca_trading.py:58`** — market orders are the default `time_in_force`. Alpaca rejects `DAY` market orders after 16:00 ET, and the brief's hard-close is 15:30 ET, so DAY is correct for every order this executor places. ([source](../executor/alpaca_trading.py#L58))
@@ -89,10 +89,11 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/position_manager.py:38`** — weekly entry counter — the "max 3 entries per week" counter resets on the **ISO week** (Monday 00:00 ET) and counts every entry order this manager emits for arm B, not just profitable ones. ([source](../executor/position_manager.py#L38))
 - [ ] **`executor/position_manager.py:44`** — journal vocabulary — enforcement maps onto `journal.store`'s `DecisionKind` as STOP (every liquidation, including arm C's exit-all), ROLL (arm C roll), TRADE (every entry, including arm A's single buy-and-hold) and VETO (a governor refusing an entry). ([source](../executor/position_manager.py#L44))
 - [ ] **`executor/position_manager.py:50`** — arm C exit-all journal kind — liquidating to cash on a T1 break is recorded as STOP, not ROLL, because it is a liquidation with no replacement leg. The brief: "liquidate to cash, wait for full checklist re-satisfaction". ([source](../executor/position_manager.py#L50))
-- [ ] **`executor/position_manager.py:411`** — the endpoints are inclusive. "09:45–14:00 ET only" reads as a closed interval, and the cost of the reading is one minute of entry eligibility at each edge while the cost of the other reading (excluding 14:00) is an arbitrary decision made by a parser. ([source](../executor/position_manager.py#L411))
-- [ ] **`executor/position_manager.py:989`** — this is the one arm where "no decisions" means the executor places exactly one order and then never touches it; there is no governor in this function beyond "already bought". ([source](../executor/position_manager.py#L989))
-- [ ] **`executor/position_manager.py:1185`** — arm C's entry criteria (90-180 DTE, delta >= 0.80, premium <= 50% of bankroll) are *contract-selection* facts that the selection step reports, not numbers this manager can re-derive from a chain snapshot without duplicating that module. ([source](../executor/position_manager.py#L1185))
-- [ ] **`executor/position_manager.py:1248`** — enforcement actions are not checklist evaluations, but the schema requires a snapshot dict. Rather than invent indicator values, this records the *facts the action was computed from* under an `enforcement` key and leaves the indicator block empty. ([source](../executor/position_manager.py#L1248))
+- [ ] **`executor/position_manager.py:432`** — the endpoints are inclusive. "09:45–14:00 ET only" reads as a closed interval, and the cost of the reading is one minute of entry eligibility at each edge while the cost of the other reading (excluding 14:00) is an arbitrary decision made by a parser. ([source](../executor/position_manager.py#L432))
+- [ ] **`executor/position_manager.py:1009`** — this is the one arm where "no decisions" means the executor places exactly one order and then never touches it; there is no governor in this function beyond "already bought". ([source](../executor/position_manager.py#L1009))
+- [ ] **`executor/position_manager.py:1205`** — the DECLARED entry window bounds NEW entries only, never R1's roll. ([source](../executor/position_manager.py#L1205))
+- [ ] **`executor/position_manager.py:1214`** — arm C's entry criteria (90-180 DTE, delta >= 0.80, premium <= 50% of bankroll) are *contract-selection* facts that the selection step reports, not numbers this manager can re-derive from a chain snapshot without duplicating that module. ([source](../executor/position_manager.py#L1214))
+- [ ] **`executor/position_manager.py:1289`** — enforcement actions are not checklist evaluations, but the schema requires a snapshot dict. Rather than invent indicator values, this records the *facts the action was computed from* under an `enforcement` key and leaves the indicator block empty. ([source](../executor/position_manager.py#L1289))
 - [ ] **`executor/watch_loop.py:22`** — staleness budget — the rulebook has no field for "how old may the snapshot be", and inventing a config key is a rule change. ([source](../executor/watch_loop.py#L22))
 - [ ] **`executor/watch_loop.py:33`** — trigger direction — a plan cell's triggers carry a `sense` ("above"/"below"). A trigger counts as fired when spot has reached the level *in the trade direction of the cell*: for a call cell, a "below" trigger (e.g. ([source](../executor/watch_loop.py#L33))
 - [ ] **`executor/watch_loop.py:40`** — re-entry — a cell that has already produced an entry action this session is not re-entered on a later tick, even if spot re-crosses the trigger. ([source](../executor/watch_loop.py#L40))
@@ -164,6 +165,8 @@ each one actually stands now.
 | 11 | *(added 2026-10-03)* **R3** — T6's intraday flow policy | **RULED 2026-10-03 00:43 EDT (operator-ratified, NOT delegated).** `carry_forward`. See below. |
 | 12 | *(added 2026-10-03)* **R4** — T5 tenor keying | **RULED 2026-10-03 (operator).** Rolling-DTE keyed, bucketed at 7 days. See below. |
 | 13 | *(added 2026-10-03)* **R5** — which arms open in November | **RULED 2026-10-03 (operator).** Arms **A + C** at window open; **B is inert** until T5 has enough observations to warm. See below. |
+| 14 | *(added 2026-10-03)* **R6** — arm C's entry window | **RULED 2026-10-03 01:38 EDT (operator-ratified, accepting the lead's recommendation).** Arm C declares `entry.window_et: 09:45–15:30 ET`, inclusive. It bounds NEW entries only — R1's roll is not window-gated. See below. |
+| 15 | *(added 2026-10-03)* **R7** — the 28 deployed IV rows under the old raw-DTE keys | **RULED 2026-10-03 01:38 EDT (operator-ratified, accepting the lead's recommendation):** orphaned by design. Warm-up restarts from zero under the rolling-DTE keying. No re-keying, no migration, no deletion. See below. |
 
 ### R3 — T6's intraday policy (operator-ratified 2026-10-03 00:43 EDT)
 
@@ -221,16 +224,12 @@ intraday re-verification per cell per session, inside the entry window.
 > ruling** — R2 said "arm on the entry window alone" and said nothing about frequency. It
 > is a one-line change in `watch_loop._green_cell_armed` if the operator wants it lifted.
 
-> **OPEN — arm C's entry window does not exist in the rulebook.** Arm B declares
-> `entry.window_et`; **arm C declares none**, so R2's "the entry window alone" has no
-> boundary to be "alone" *to* for arm C. The code currently treats a missing window as
-> **the whole session** (`09:30`–`16:00`). That is a placeholder, not a ruling: inventing
-> a window for arm C would be authoring a policy the operator has not decided, and it is
-> not merely cosmetic — arm C is the arm R1's roll can leave past its roll trigger, so an
-> unbounded arm-C window decides how long a stale-roll position may sit unsatisfied.
-> **Operator question:** does arm C get a declared entry window like arm B's, or is
-> "the whole session" the intent? Left open deliberately, and flagged here rather than
-> settled in code.
+> **CLOSED 2026-10-03 01:38 EDT — R6, arm C declares an entry window.** Arm C now
+> carries `entry.window_et: 09:45–15:30 ET`, inclusive on both ends, and the field is
+> **required** by the loader: a rulebook missing it is a load error, not a silent
+> fallback. The whole-session placeholder (`09:30`–`16:00`) is gone, and a missing
+> window is now read as **CLOSED** rather than open — the old fallback was a policy
+> nobody had voted for. See "R6 and R7 — encoded 2026-10-03" below.
 
 **R4 (rolling-DTE tenor).** `iv_rank.dte_tenor_key()` floors DTE to a 7-day bucket
 (`DTE_BUCKET_DAYS`, configurable at `checklist.t5_options_chain.dte_bucket_days`) and
@@ -247,6 +246,59 @@ dropped, and the watch loop skips deferred arms by name instead of trading them 
 Arm B opens automatically once T5 reaches `MIN_OBSERVATIONS` — **no new ruling needed**,
 because arm C's IV rank now uses the same rolling-DTE key as arm B, so T5 warms from the
 same series that arm B needs.
+
+### R6 and R7 — encoded 2026-10-03 01:38 EDT (operator-ratified)
+
+Both arrived together, on the same message: mads, shown the two items the full-cycle
+rehearsal left open, said *"good with your recs"*. Recorded as **operator-ratified,
+accepting the lead's recommendation** — the recommendation is mine, the ruling is his,
+and the difference is the only thing that makes this section worth having.
+
+**R6 — arm C's entry window is DECLARED: `09:45–15:30 ET`, inclusive.**
+`arms.C.entry.window_et` in the rulebook; `WindowET` is a required field on
+`ArmCEntry`, so a rulebook without one does not load. Arm C gets a real boundary for
+R2's "the entry window alone", and the boundary is checked in the two places it can
+bite:
+
+- `position_manager.arm_entry_window_open(arm, now, rules)` — one helper, used by the
+  arm B governor, the arm C governor, **and** `watch_loop._green_cell_armed`, so R2's
+  arming path and the entry governors cannot disagree about where the edge is.
+- `PositionManager._arm_c_entry` returns a named `entry_window` **VETO** with the
+  declared window and the clock in its checks. This is the path R2's arming does *not*
+  cover: a cell with a live price trigger reaches the manager whatever the clock says,
+  so without this governor a declared window would bind only one of the two ways into
+  an entry.
+
+The hunt plan carries `entry_window_et` in arm C's `arm_c_criteria` alongside arm B's,
+so a journalled cell explains its own timing at the monthly review.
+
+**The window bounds entries, and only entries.** R1's roll is not gated by it. A
+position already past its roll trigger (delta < 0.70 or DTE < 45) is managed whenever
+the loop runs, including after 15:30, because a leg that cannot be rolled until the next
+morning is a different risk from one that is never rolled at all. The exits ladder is
+evaluated before any window question, and two tests pin that boundary: the roll fires at
+09:30, 11:00 and 15:45 alike, while a *new* arm C entry at 09:35 or 15:45 is vetoed.
+This reading is recorded as an `# INTERPRETATION:` in `position_manager._arm_c_entry` —
+the operator ruled the window, the exemption for rolls is the one judgment call inside it.
+
+Strategy version `1.1.0-draft` → `1.2.0-draft`: a rulebook change that binds an arm.
+Status stays **DRAFT** and T6's multiplier stays `calibration_pending` — nothing about
+the arms being settled changed here.
+
+**R7 — the 28 deployed IV rows under the old raw-DTE keys are orphaned by design.**
+They were written before the rolling-DTE ruling (R4). The store keeps them; nothing is
+re-keyed, migrated, or deleted. The dead keys simply stop being read: under
+`tenor_key_mode: dte_tenor_key` the T5 series for the bucket keys starts from zero and
+warms again from the next soak session, and the old raw-DTE rows are never read by
+anything.
+
+The cost, stated rather than buried: **arm B's T5 warm-up restarts from zero.** T5
+reports PENDING until the bucket keys reach `MIN_OBSERVATIONS = 60`, which under R5
+means arm B stays inert at window open and arms A + C only. That was already the
+post-R4 state — this ruling does not make the warm-up longer, it declines to buy 28 rows
+of a series that cannot accumulate under a key that changes every session. Re-keying them
+would mean a migration script touching a live store for rows that could never be trusted
+as one continuous series anyway.
 
 ### The earnings veto — CLOSED 2026-10-02, by ruling
 
@@ -439,10 +491,11 @@ Nothing below is optional. Each line is a thing that is false today or unverifie
 - [ ] **IV warmup actually reached.** `MIN_OBSERVATIONS = 60`. If the soak's ATM tenor keys
       are still in warmup at window start, T5 reports PENDING and **blocks**. Decide now
       whether to open the window in that state (honest, T5 simply cannot pass) or to wait.
-- [ ] **Which tenor T5 reads** — the expiry-keyed `tenor_key` or the rolling
-      `dte_tenor_key`. Both are being stored; only one is read. See `executor/iv_rank.py`.
-      *This now matters for arm C as well as arm B: arm C reads an IV rank too (ruled
-      2026-10-02), so the choice is no longer arm-B-only.*
+- [x] ~~**Which tenor T5 reads**~~ — **RULED 2026-10-03 (R4): the rolling
+      `dte_tenor_key`**, bucket 7 days, both arms. *Consequence ratified the same day
+      (R7): the 28 deployed raw-DTE rows are orphaned, the store is not rewritten, and
+      T5's warm-up restarts from zero — so this box is ticked with a known cost, not
+      closed for free.*
 - [ ] **CPI/FOMC dates verified.** [`data/events/`](../data/events/README.md) covers
       scheduled dates, but the last few weeks before the window must be confirmed against
       the actual published calendar, and the calendar refreshed. An unverified event date

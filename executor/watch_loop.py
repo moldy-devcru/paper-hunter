@@ -625,11 +625,18 @@ def _green_cell_armed(
 
     RULED 2026-10-03 (operator): "a green plan arms the watch loop on the entry window
     alone". A cell qualifies when its PLAN checklist fired (it is green as of the
-    pre-market read) and the current time is inside the arm's entry window. The window
-    is the arm's own ``entry.window_et`` — arm C declares none, so for arm C the window
-    is the whole session. That asymmetry is recorded, not invented around: the rulebook
-    gives arm C no window, and inventing one would be authoring a policy the operator
-    has not ruled on. It is flagged as open in ``docs/ratification.md``.
+    pre-market read) and the current time is inside the arm's own ``entry.window_et``.
+
+    RULED 2026-10-03 (operator, second ruling): **arm C declares a window too**,
+    09:45-15:30 ET. Until then this function treated a missing window as the whole
+    session — a placeholder nobody had ruled, which also meant R2's "the entry window
+    alone" had no boundary to be alone *to* for the arm R1's roll can leave past its
+    trigger. The window is read through
+    :func:`executor.position_manager.arm_entry_window_open`, the same helper the entry
+    governors use, so the loop and the manager cannot disagree about the boundary.
+
+    The window bounds ENTRIES. R1's roll is not gated by it: a position already past
+    its roll trigger is managed whenever the loop runs.
 
     THROTTLE, and this is an interpretation rather than a ruling: each green cell is
     re-verified ONCE per session, on the first tick inside its window, not on every
@@ -643,13 +650,10 @@ def _green_cell_armed(
     """
     if cell.key in state.green_checked:
         return False
-    window = getattr(getattr(rules.arms, cell.arm).entry, "window_et", None)
-    clock = et_time(now)
-    if window is not None:
-        if not (
-            dt.time.fromisoformat(window.start) <= clock <= dt.time.fromisoformat(window.end)
-        ):
-            return False
+    from executor.position_manager import arm_entry_window_open
+
+    if not arm_entry_window_open(cell.arm, now, rules):
+        return False
     if not _cell_plan_green(cell):
         return False
     object.__setattr__(state, "green_checked", state.green_checked | {cell.key})

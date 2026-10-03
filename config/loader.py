@@ -274,6 +274,12 @@ class DTERange(FrozenModel):
 
 
 class ArmCEntry(FrozenModel):
+    # RULED 2026-10-03 (operator): arm C declares an entry window like arm B. It was
+    # optional in shape only — nothing read it while it was absent, and R2's "arm on
+    # the entry window alone" had no boundary to be alone *to* for this arm. It is
+    # required, so a rulebook that drops it fails to load rather than silently
+    # reverting to the whole-session placeholder.
+    window_et: WindowET
     instrument: Literal["option"]
     right: Literal["call"]
     dte: DTERange

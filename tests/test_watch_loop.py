@@ -341,6 +341,80 @@ def test_a_green_cell_after_the_entry_window_stays_quiet(rules, series):
 
 def test_a_non_green_cell_with_no_trigger_does_nothing_and_says_so(rules, series):
     """The pre-R2 quiet tick still exists — for a cell that was never green."""
+def test_arm_c_green_plan_arms_inside_its_declared_window(rules, series):
+    """RULED 2026-10-03: arm C's arming window is 09:45-15:30 ET, not the session.
+
+    The cell is green and has no live trigger (spot 625 is below its 630 level), so
+    the arming path is the one under test. 15:00 used to be inside this cell's
+    reach and now is not; 10:30 always was.
+    """
+    inside = run_once(
+        provider=provider(rules, series, spot=625.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules, _arm_c_cell(rules))),
+        now=at(10, 30),
+    )
+    assert ("C", "call") in inside.reverified
+    assert inside.quiet is False
+
+    late = run_once(
+        provider=provider(rules, series, spot=625.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules, _arm_c_cell(rules))),
+        now=at(15, 31),
+    )
+    assert ("C", "call") not in late.reverified
+    assert late.quiet is True
+
+
+def test_arm_c_green_plan_does_not_arm_before_0945(rules, series):
+    """The opening drive is outside the window: 09:35 is not in it."""
+    result = run_once(
+        provider=provider(rules, series, spot=625.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules, _arm_c_cell(rules))),
+        now=at(9, 35),
+    )
+    assert result.quiet is True
+    assert result.reverified == {}
+
+
+def test_a_roll_is_not_gated_by_the_entry_window(rules, series):
+    """The entry window must not reach the exits ladder.
+
+    Arm C is rolled at 15:45 with a live position whose delta has fallen through the
+    trigger. That is an R1 roll, not a new entry, so the declared ENTRY window has no
+    say in it — pinning this because the window and the roll share a module, and a
+    "reasonable" future edit to window-gate the whole arm would strand the position
+    until the next session with no row in the journal to explain why.
+    """
+    chain = _arm_c_chain(expiry="20270115", dte_ok=True, ask=7.00, delta=0.85)
+    state = state_for(rules, plan_for(rules, _arm_c_cell(rules)))
+    state.arms["C"] = ArmState(
+        bankroll_usd=rules.arms.C.bankroll_usd,
+        position=ManagedPosition(
+            arm="C",
+            symbol="SPY20270115C00500000",
+            qty=1,
+            entry_price=18.0,
+            entry_ts=at(10, 0),
+            kind="option",
+            right="call",
+            expiry="20270115",
+            strike=500.0,
+            delta=0.60,
+        ),
+    )
+    result = run_once(
+        provider=provider(rules, series, spot=625.0, chain=chain),
+        rules=rules,
+        state=state,
+        now=at(15, 45),
+    )
+    assert result.quiet is False
+    assert any(a.kind == "ROLL" for a in result.actions), [a.kind for a in result.actions]
+
+
     result = run_once(
         provider=provider(rules, series, spot=600.0),
         rules=rules,
@@ -897,6 +971,9 @@ def test_the_plan_writes_the_keys_the_arm_c_selector_reads(rules, series):
     # ``arm_c_criteria`` (only ``to_dict()`` spells it that way), which raised
     # AttributeError on the first arm C entry attempt of every session.
     assert isinstance(cell.watch.arm_criteria, dict)
+    # ...and the arm C ENTRY WINDOW the loop arms on is journalled with the cell, so a
+    # row explains its own timing at the monthly review without re-reading the YAML.
+    assert criteria["entry_window_et"] == {"start": "09:45", "end": "15:30"}
 
 
 def test_arm_c_selects_the_cheapest_contract_inside_the_premium_cap(rules, series):

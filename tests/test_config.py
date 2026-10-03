@@ -115,6 +115,36 @@ def test_arm_c_specifics_match_the_brief():
     assert c.limits.max_concurrent_positions == 1
 
 
+def test_arm_c_declares_its_own_entry_window():
+    """RULED 2026-10-03 (operator): arm C's window is 09:45-15:30 ET, inclusive.
+
+    The declaration is the whole ruling. A window the code invents (the old
+    whole-session fallback) is a policy nobody voted for, and R2's "the entry window
+    alone" had nothing to be alone to.
+    """
+    window = load_rules().arms.C.entry.window_et
+    assert (window.start, window.end) == ("09:45", "15:30")
+    # Still a DRAFT, and T6 still pending: this ruling changed arm C's entry window,
+    # nothing about the arms being settled.
+    rules = load_rules()
+    assert rules.strategy.status == "DRAFT"
+    assert rules.strategy.version.startswith("1.2.0-draft")
+    assert rules.checklist.t6_flow.multiplier.calibration_pending is True
+
+
+def test_arm_c_without_a_window_fails_to_load():
+    """The field is REQUIRED, not optional-with-a-default.
+
+    If a window can be absent then the closed-by-default governor below is the only
+    thing standing between a typo and a silently-open arm, and a typo in a YAML file
+    should be a load error the operator sees at startup.
+    """
+    data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    del data["arms"]["C"]["entry"]["window_et"]
+    with pytest.raises(RulesError):
+        load_rules_text(yaml.safe_dump(data))
+
+
 def test_arm_a_is_buy_and_hold_day_one():
     a = load_rules().arms.A
     assert a.entry.when == "first_market_open_of_window"

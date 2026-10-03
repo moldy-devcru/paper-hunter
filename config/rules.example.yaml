@@ -13,7 +13,11 @@
 # because a typo in a frozen rulebook must fail loudly, not quietly disable a veto.
 
 strategy:
-  version: "1.1.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
+  # 1.1.0-draft (2026-10-03): rulings R3/R4/R5 encoded. 1.2.0-draft (2026-10-03):
+  # arm C's entry window DECLARED (09:45-15:30 ET) — a rulebook change, not a code
+  # one, so it carries a version. Draft status is unchanged on purpose: the operator
+  # freezes 1.x.0 at ratification, after T6's calibration lands.
+  version: "1.2.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
   status: "DRAFT"                 # flipped to "FROZEN" by the operator at ratification
   symbol: SPY
   timezone: America/New_York
@@ -110,6 +114,16 @@ arms:
     bankroll_usd: 10000
     checklist: [T1, T2, T2b, T3, T4, T5]
     entry:
+      # RULED 2026-10-03 (operator): arm C's entry window, DECLARED. Until this ruling
+      # arm C declared none, so R2's "a green plan arms the loop on the entry window
+      # alone" had no boundary to be alone *to* for this arm and the code fell back to
+      # the whole session (09:30-16:00) — a placeholder, not a policy. The window bounds
+      # NEW ENTRIES only; it does not bound R1's roll, which stays available any time
+      # the loop runs, because a position already past its roll trigger must not wait
+      # for the window to reopen.
+      window_et:
+        start: "09:45"           # same open as arm B: no opening-drive entries
+        end: "15:30"             # 30 minutes before the close, matching arm B's hard close
       instrument: option
       right: call                           # the brief specifies calls for arm C
       dte:

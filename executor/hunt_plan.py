@@ -616,6 +616,14 @@ def _watch_levels(
     elif arm == "C":
         entry = rules.arms.C.entry
         arm_criteria = {
+            # RULED 2026-10-03 (operator): arm C declares an entry window, so the plan
+            # carries it the same way arm B's does. The watch loop's arming path and
+            # the entry governor both read the rulebook's own window; this copy is what
+            # lands on the journalled cell, so a row can explain its own timing later.
+            "entry_window_et": {
+                "start": entry.window_et.start,
+                "end": entry.window_et.end,
+            },
             "right": entry.right,
             "dte_min": entry.dte.min,
             "dte_max": entry.dte.max,

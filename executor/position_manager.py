@@ -405,17 +405,37 @@ def iso_ts(moment: dt.datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
+def arm_entry_window_open(arm: str, now: dt.datetime, rules: Rulebook) -> bool:
+    """``arm``'s own ``entry.window_et``, inclusive on both ends.
+
+    One helper for both arms because the R2 arming path in ``executor/watch_loop.py``
+    and the entry governors here must not be able to disagree about what "inside the
+    entry window" means: a window the loop reads one way and the manager another is a
+    rulebook that changes shape depending on who asks.
+
+    RULED 2026-10-03 (operator): arm C declares a window too (09:45–15:30 ET), so
+    R2's "a green plan arms the loop on the entry window alone" has a real boundary for
+    that arm instead of the whole-session placeholder. An arm with no declared window
+    is CLOSED, not open — the old fallback treated a missing window as 09:30–16:00,
+    which is a policy nobody ruled.
+    """
+    window = getattr(getattr(rules.arms, arm).entry, "window_et", None)
+    if window is None:
+        return False
+    clock = et_time(now)
+    return parse_et(window.start) <= clock <= parse_et(window.end)
+
+
 def entry_window_open(now: dt.datetime, rules: Rulebook) -> bool:
-    """Arm B's entry window, inclusive on both ends (09:45–14:00 ET).
+    """Arm B's entry window (09:45–14:00 ET), inclusive on both ends.
 
     # INTERPRETATION: the endpoints are inclusive. "09:45–14:00 ET only" reads as a
     closed interval, and the cost of the reading is one minute of entry eligibility at
     each edge while the cost of the other reading (excluding 14:00) is an arbitrary
-    decision made by a parser.
+    decision made by a parser. The same reading is applied to arm C's declared window,
+    so the two arms do not differ at the edges for a reason nobody can find later.
     """
-    window = rules.arms.B.entry.window_et
-    clock = et_time(now)
-    return parse_et(window.start) <= clock <= parse_et(window.end)
+    return arm_entry_window_open("B", now, rules)
 
 
 def premium_within_cap(premium_usd: float, rules: Rulebook) -> bool:
@@ -1180,23 +1200,44 @@ class PositionManager:
     def _arm_c_entry(
         self, *, now: dt.datetime, state: ArmState, replacement: OrderLeg | None
     ) -> Evaluation:
-        """Arm C's entry governor: only the concurrency limit (checklist does the rest).
+        """Arm C's entry governors: the declared entry window, and the slot limit.
+
+        # INTERPRETATION: the DECLARED entry window bounds NEW entries only, never
+        # R1's roll. A position already past its roll trigger (delta < 0.70 or
+        # DTE < 45) is managed any time the loop runs, including outside this window,
+        # because gating the roll on an entry window would mean a stale-roll leg sits
+        # unsatisfied for the rest of the session for the sake of a rule that exists to
+        # keep *new* money out of the opening drive. The cost of that reading is
+        # visible and accepted: a roll can execute after 15:30, and the journal row
+        # shows the clock it happened at.
 
         # INTERPRETATION: arm C's entry criteria (90-180 DTE, delta >= 0.80, premium
-        <= 50% of bankroll) are *contract-selection* facts that the selection step
-        reports, not numbers this manager can re-derive from a chain snapshot without
-        duplicating that module. So the manager enforces the one governor it owns
-        (max_concurrent_positions) and records the selection facts it was handed in the
-        journal payload. If the selection step ever hands a contract that violates the
-        DTE/delta/premium criteria, that is a bug in the selection step, and hiding it
-        here would hide it. The selection is re-validated in ``executor/watch_loop.py``
-        before the manager is asked for an opinion.
+        # <= 50% of bankroll) are *contract-selection* facts that the selection step
+        # reports, not numbers this manager can re-derive from a chain snapshot without
+        # duplicating that module. So the manager enforces the governors it owns (the
+        # entry window and max_concurrent_positions) and records the selection facts it
+        # was handed in the journal payload. If the selection step ever hands a contract
+        # that violates the DTE/delta/premium criteria, that is a bug in the selection
+        # step, and hiding it here would hide it. The selection is re-validated in
+        # ``executor/watch_loop.py`` before the manager is asked for an opinion.
         """
         limits = self.rules.arms.C.limits
-        checks = {
+        entry = self.rules.arms.C.entry
+        checks: dict[str, Any] = {
+            "window_et": entry.window_et.model_dump(),
             "max_concurrent_positions": limits.max_concurrent_positions,
             "open_positions": state.open_positions(),
         }
+        if not arm_entry_window_open("C", now, self.rules):
+            veto = Veto(
+                "C",
+                "entry_window",
+                f"entry window {entry.window_et.start}-{entry.window_et.end} ET is closed "
+                f"at {et_time(now).isoformat(timespec='seconds')} ET",
+                checks,
+                state.to_dict(),
+            )
+            return Evaluation(vetoes=(veto,), next_state=state)
         if state.open_positions() >= limits.max_concurrent_positions:
             veto = Veto(
                 "C",
@@ -1321,6 +1362,7 @@ __all__ = [
     "Veto",
     "arm_a_entry",
     "arm_b_entry_vetoes",
+    "arm_entry_window_open",
     "arm_b_exits",
     "arm_b_position_after",
     "arm_c_exit_all_needed",
