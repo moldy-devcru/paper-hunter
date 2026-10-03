@@ -42,7 +42,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**75 interpretations across 8 domains.** Every one was a decision
+**76 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -72,7 +72,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/checklist.py:377`** — a non-finite value on either branch is a FAIL, not an exception and not a pass: the ratio is what it is, the window behind it was unusable, and volume did not confirm. ([source](../executor/checklist.py#L377))
 - [ ] **`executor/checklist.py:426`** — an event day is checked FIRST and short-circuits T5. The brief calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it outranks a healthy IV rank rather than being one AND-condition among several. ([source](../executor/checklist.py#L426))
 
-### data (9)
+### data (10)
 
 - [ ] **`executor/alpaca_client.py:47`** — `timeframe` values are the Alpaca wire strings ("1Min", "5Min", "1Day"). Daily and intraday bars use the *same* single-symbol route `GET /v2/stocks/{symbol}/bars` with different `timeframe` values — the symbol is a path segment. ([source](../executor/alpaca_client.py#L47))
 - [ ] **`executor/alpaca_client.py:127`** — this splits rather than truncates. ([source](../executor/alpaca_client.py#L127))
@@ -80,8 +80,9 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/alpaca_client.py:737`** — the reference date is a UTC date. Alpaca expiry timestamps are exchange-local (America/New_York); for an after-hours decision the two agree in every case this executor cares about, and a documented UTC choice is better than an implicit local-time one. ([source](../executor/alpaca_client.py#L737))
 - [ ] **`executor/alpaca_client.py:753`** — ties break toward calls. Arm C is calls-only and arm B picks its own strike, so the only consumer of the ATM contract is the IV-rank tenor selection, and a deterministic tie-break keeps that key stable day to day. ([source](../executor/alpaca_client.py#L753))
 - [ ] **`executor/alpaca_client.py:1367`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1367))
-- [ ] **`executor/iv_rank.py:190`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L190))
-- [ ] **`executor/iv_rank.py:248`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L248))
+- [ ] **`executor/iv_rank.py:214`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L214))
+- [ ] **`executor/iv_rank.py:272`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L272))
+- [ ] **`executor/iv_rank.py:370`** — the key is NAMESPACED (`mte`/`mny`) rather than reusing the `dte`/dollar prefix, and this is load-bearing rather than cosmetic. ([source](../executor/iv_rank.py#L370))
 - [ ] **`config/loader.py:577`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L577))
 
 ### trading (19)
@@ -111,7 +112,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/hunt_plan.py:31`** — a non-blocking condition can still get a trigger, for T3 only. The rulebook's `t3_bollinger.satisfied_if_any_of` makes T3 an OR group, so when one T3 arm PASSes the sibling is reported FAIL (or whatever it is) but `blocking=False`: it cannot veto. ([source](../executor/hunt_plan.py#L31))
 - [ ] **`executor/hunt_plan.py:61`** — plan-time conviction is a deterministic function of how far the checklist is from firing — 10 when it fires, otherwise `10 - 3*failed - 1*pending` clipped to 1..10. ([source](../executor/hunt_plan.py#L61))
 - [ ] **`executor/hunt_plan.py:68`** — "spot" for chain tenor selection defaults to the newest daily close, because the plan is built pre-market and there is no pre-market option price to use. ([source](../executor/hunt_plan.py#L68))
-- [ ] **`executor/hunt_plan.py:222`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L222))
+- [ ] **`executor/hunt_plan.py:223`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L223))
 - [ ] **`executor/noshot.py:354`** — DTE is computed against the **session date**, never against `datetime.now()`. ([source](../executor/noshot.py#L354))
 - [ ] **`analysis/rollup.py:40`** — the window. `since`/`until` are inclusive calendar dates. `positions` are filtered on the **UTC date component of `exit_ts`** because that is the journal's only clock (`ts` columns are UTC ISO-8601; there is no ET column on positions). ([source](../analysis/rollup.py#L40))
 - [ ] **`analysis/rollup.py:49`** — what counts as a "trade" in the counts. A trade is a `decisions` row with kind `TRADE` — the decision ledger is the record of truth, and `positions` is the convenience view (per its own schema comment). ([source](../analysis/rollup.py#L49))
@@ -120,17 +121,17 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### soak (11)
 
-- [ ] **`executor/soak.py:237`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L237))
-- [ ] **`executor/soak.py:307`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L307))
-- [ ] **`executor/soak.py:326`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L326))
-- [ ] **`executor/soak.py:351`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L351))
-- [ ] **`executor/soak.py:447`** — `right` is deliberately NOT filtered. One EOD sweep serves both arms and the gate filters by direction at read time, so recording both sides is what lets a call-side rank warm without a second pass tomorrow. ([source](../executor/soak.py#L447))
-- [ ] **`executor/soak.py:523`** — this is a MEASUREMENT fix, not a rule change. ([source](../executor/soak.py#L523))
-- [ ] **`executor/soak.py:529`** — a band with no contract, or whose nearest contract carries no usable IV, is SKIPPED and counted, never filled from a neighbouring expiry. ([source](../executor/soak.py#L529))
-- [ ] **`executor/soak.py:581`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L581))
-- [ ] **`executor/soak.py:595`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L595))
-- [ ] **`executor/soak.py:944`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L944))
-- [ ] **`executor/soak.py:950`** — band skips are reported separately and labelled as the warm-up clock rather than folded into the expiry count. "3 expiries skipped" means three holes in a series that otherwise accumulates;. ([source](../executor/soak.py#L950))
+- [ ] **`executor/soak.py:238`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L238))
+- [ ] **`executor/soak.py:308`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L308))
+- [ ] **`executor/soak.py:327`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L327))
+- [ ] **`executor/soak.py:352`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L352))
+- [ ] **`executor/soak.py:448`** — `right` is deliberately NOT filtered. One EOD sweep serves both arms and the gate filters by direction at read time, so recording both sides is what lets a call-side rank warm without a second pass tomorrow. ([source](../executor/soak.py#L448))
+- [ ] **`executor/soak.py:536`** — this is a MEASUREMENT fix, not a rule change. ([source](../executor/soak.py#L536))
+- [ ] **`executor/soak.py:542`** — a band with no contract, or whose nearest contract carries no usable IV, is SKIPPED and counted, never filled from a neighbouring expiry. ([source](../executor/soak.py#L542))
+- [ ] **`executor/soak.py:599`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L599))
+- [ ] **`executor/soak.py:614`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L614))
+- [ ] **`executor/soak.py:966`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L966))
+- [ ] **`executor/soak.py:972`** — band skips are reported separately and labelled as the warm-up clock rather than folded into the expiry count. "3 expiries skipped" means three holes in a series that otherwise accumulates;. ([source](../executor/soak.py#L972))
 
 ### CLI / plumbing (7)
 
@@ -176,6 +177,8 @@ each one actually stands now.
 | 13 | *(added 2026-10-03)* **R5** — which arms open in November | **RULED 2026-10-03 (operator).** Arms **A + C** at window open; **B is inert** until T5 has enough observations to warm. See below. |
 | 14 | *(added 2026-10-03)* **R6** — arm C's entry window | **RULED 2026-10-03 01:38 EDT (operator-ratified, accepting the lead's recommendation).** Arm C declares `entry.window_et: 09:45–15:30 ET`, inclusive. It bounds NEW entries only — R1's roll is not window-gated. See below. |
 | 15 | *(added 2026-10-03)* **R7** — the 28 deployed IV rows under the old raw-DTE keys | **RULED 2026-10-03 01:38 EDT (operator-ratified, accepting the lead's recommendation):** orphaned by design. Warm-up restarts from zero under the rolling-DTE keying. No re-keying, no migration, no deletion. See below. |
+| 16 | *(added 2026-10-03)* **R8** — T5's tenor-key strike axis | **RULED 2026-10-03 ~14:44 EDT (operator, ratifying both items together):** the absolute `$5` strike bucket is replaced by a **moneyness-relative** bucket at 2% of spot. Strategy version `1.3.0-draft` → `1.4.0-draft`. See below. |
+| 17 | *(added 2026-10-03)* **R9** — do BACKFILLED historical observations count toward T5's 60? | **RULED 2026-10-03 ~14:44 EDT (operator, ratifying both items together):** **yes.** Frozen T5 "observations" is unqualified, so a backfilled historical observation that occupies the same key counts. See below. |
 
 ### R3 — T6's intraday policy (operator-ratified 2026-10-03 00:43 EDT)
 
@@ -308,6 +311,83 @@ post-R4 state — this ruling does not make the warm-up longer, it declines to b
 of a series that cannot accumulate under a key that changes every session. Re-keying them
 would mean a migration script touching a live store for rows that could never be trusted
 as one continuous series anyway.
+
+### R8 and R9 — the T5 key schema, RULED 2026-10-03 ~14:44 EDT (operator)
+
+**Both arrived together, on the same message, and are recorded together because the
+feasibility study said they only make sense together.** mads, having read
+`docs/reviews/2026-10-03-iv-backfill-feasibility.md` and the round-2 consensus in
+`docs/reviews/2026-10-03-rulings-debate.md`, ruled on both items at once: the tenor key
+moves to moneyness-relative buckets, and frozen "observations" includes backfilled
+history. The recommendation was the lead's; the ruling is the operator's.
+
+**R8 — the rolling tenor key's strike axis becomes MONEYNESS-RELATIVE, at 2% of spot.**
+`MONEYNESS_BUCKET_PCT` in `executor/iv_rank.py`; keys are namespaced
+`mte<dte>-<side>-mny<bucket>` (`iv_rank.moneyness_tenor_key`).
+
+The arithmetic that made this a ruling rather than a preference: under the absolute `$5`
+axis, **no key reaches `MIN_OBSERVATIONS = 60` at any depth of history** — 22
+observations best-case inside the frozen 1-year lookback, 25 across the entire
+718-session backfill (feasibility doc §2b). The strike axis rotates with spot, so an ATM
+contract's series changes every few percent and never accumulates. At 2% moneyness the
+same study measures **210 observations** inside the same frozen lookback — the only
+variant of the five tried that clears the floor with room. This is the same failure R4
+fixed on the DTE axis, still live on the strike axis.
+
+Two properties of the implementation are load-bearing and are pinned by tests:
+
+- **The DTE axis is untouched.** R4's 7-day bucketing stands; only the strike axis moved.
+- **The keys are namespaced, not merely renamed.** Nothing in the store records which
+  bucketing produced a `tenor_key`, so a schema that reused the old spelling could
+  silently mix a "roughly ATM" series with a "$650 strike" series. Under `mte`/`mny`,
+  old rows are simply never looked up by a new reader — the R7 disposition obtained by
+  construction, with no migration script and no deletion.
+
+**What this costs, stated rather than buried: T5's warm-up restarts from zero, again.**
+That is the second time the same 60-observation floor has been restarted, and it is the
+price of a schema that can ever reach it. Every row written under the R4 dollar axis is
+orphaned by this ruling. Nothing is re-keyed.
+
+**What did NOT move:** `MIN_OBSERVATIONS = 60`, `iv_rank_lookback: "1y"`,
+`iv_rank_max = 50` for both arms, `dte_bucket_days: 7`, and every other threshold in the
+rulebook. The feasibility study's own finding is that **no longer lookback was ruled**,
+so the ~1y requirement still discards history older than a year — R9 is what makes the
+history inside that year count.
+
+**R9 — frozen T5 "observations" includes BACKFILLED historical observations.**
+The frozen text says *observations* (`docs/brief.md` §T5), *history*
+(`iv_rank_lookback`), and `MIN_OBSERVATIONS` observations in the tenor key
+(`docs/ratification.md` §T5). None of it says *live-recorded* or *EOD-polled*. So a
+backfilled observation occupying the same key, under a defensible `source`, counts
+toward the 60.
+
+The alternative reading — that `iv_rank.py`'s "one EOD poll per day" line is part of the
+freeze — was on the table and was declined by ruling, not by oversight. Its cost is
+real and is stated here so it cannot be discovered later: a backfilled IV is a
+Black-Scholes inversion of a daily bar close, while a live one is a model output read off
+a chain snapshot. **Mixing them inside one percentile series is a methodological splice,
+not a single measurement**, and the build that does it (a separate, later run) must
+carry the provenance to make that visible: a new `source` value, an `origin='backfill'`
+marker, and the same delayed-indicative-feed labelling the live soak writes. Reusing
+`is_proxy` is explicitly refused — that bit means "Cboe VIX, a different index", and a
+bar-inverted SPY IV is not a different index, it is the right index built the wrong way.
+Reusing `manual` is refused for the same reason: that column exists to keep provenance
+honest.
+
+**Fresh NO-SHOT baseline, by version query filter — not by deletion.** Every draft row
+stamps `strategy_version` (`noshot.build_noshots`), and `config_sha256` moves with this
+rulebook edit because `Rulebook.fingerprint()` hashes raw file bytes. The baseline for
+`1.4.0-draft` is therefore isolable with a version filter, exactly as R7 did it: nothing
+is deleted, and rows written under `1.3.0-draft` stay on disk and stay readable.
+
+**What is deliberately NOT done here.** Section (e) item 1 still describes the strike-axis
+rotation as "queued for the next pre-registration cycle", which this ruling resolves.
+Rewriting (e) — and (f) — waits for the backfill build, because the rewrite has to state
+**real** observation counts for the new schema, not hopes. Until then a reader of (e)
+sees a pre-window record of the finding as queued, and a reader of this section sees the
+ruling; both are true, and the reconciliation lands with the numbers.
+
+---
 
 ### The earnings veto — CLOSED 2026-10-02, by ruling
 

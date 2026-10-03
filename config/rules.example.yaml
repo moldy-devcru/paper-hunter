@@ -27,9 +27,25 @@ strategy:
   # docs/ratification.md (e).
   #
   # Also carried at this seam, per the same 2026-10-03 debate: the T5 tenor-key
-  # strike-axis finding is a CANDIDATE for the next ruling cycle, NOT a change made
+  # strike-axis finding was a CANDIDATE for the next ruling cycle, NOT a change made
   # here. `STRIKE_BUCKET_SIZE` is unchanged in this version. See (e) queued items.
-  version: "1.3.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
+  #
+  # 1.4.0-draft (2026-10-03): the T5 tenor key's STRIKE axis switches from absolute
+  # $5 buckets to MONEYNESS-relative buckets at 2% (`MONEYNESS_BUCKET_PCT`). RULED by
+  # the operator the same day, on the measurement in
+  # docs/reviews/2026-10-03-iv-backfill-feasibility.md: inside the frozen 1y lookback
+  # the $5 axis collects at most 22 observations in any key (25 across all available
+  # history), against `MIN_OBSERVATIONS = 60`, so the series could never warm at any
+  # depth. 2% moneyness collects 210 in the same window.
+  #
+  # This IS a change to what T5 measures, and it is versioned for that reason. No
+  # threshold moved: `MIN_OBSERVATIONS` stays 60, `iv_rank_lookback` stays "1y",
+  # `iv_rank_max` stays 50, and the DTE axis is untouched (R4). The keys are also
+  # NAMESPACED (`mte...mny...` vs the old `dte...<dollars>`), so rows written under the
+  # old axis can never be counted toward the new one — the R7 disposition, by
+  # construction. Warm-up restarts from zero a second time; that cost is stated in
+  # docs/ratification.md, not buried here.
+  version: "1.4.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
   status: "DRAFT"                 # flipped to "FROZEN" by the operator at ratification
   symbol: SPY
   timezone: America/New_York
@@ -241,6 +257,14 @@ checklist:
     # ALREADY the frozen arm C roll trigger (delta < 0.70 or DTE < 45); IV rank gates
     # ENTRY, not roll timing, so the two do not fight.
     tenor_key_mode: rolling_dte
+    # RULED 2026-10-03 (operator, key schema): the strike axis of this rolling key is
+    # MONEYNESS-relative — `strike/spot - 1`, bucketed at 2 percentage points
+    # (`MONEYNESS_BUCKET_PCT` in `executor/iv_rank.py`, the single constant the soak
+    # writes and the plan reads). The absolute `$5` axis it replaced rotated with spot,
+    # so an ATM contract's key changed every few percent and no key ever reached 60
+    # observations. Keys are namespaced `mte<dte>-<side>-mny<bucket>`; rows written
+    # under the old dollar axis are orphaned, not migrated (the R7 disposition).
+    #
     # Days per rolling-DTE bucket. One week, because every option expiry steps down
     # the DTE axis by exactly 7 between two Fridays — with a 7-day bucket the SET of
     # buckets written each session is stable, so each keeps collecting one observation
