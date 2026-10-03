@@ -739,3 +739,53 @@ def test_unknown_origin_is_refused_at_the_door(store):
     today = dt.datetime.now(dt.UTC).date()
     with pytest.raises(IvRankError, match="origin must be"):
         store.record(underlying="SPY", as_of=today, tenor=TENOR, iv=0.2, origin="guessed")
+
+
+def test_unwritable_store_still_opens_and_still_reads():
+    """A store on read-only media must be readable, or a deployment cannot see its own data.
+
+    Not hypothetical: the rehearsal and the UI open the DEPLOYED store under
+    ``/opt/paper-hunter``, owned by the ``paper-hunter`` service user. R9 added a
+    ``CREATE INDEX`` that is a genuine write, where the pre-R9 ``CREATE TABLE IF NOT
+    EXISTS`` was a no-op on an existing table -- so R9 turned "we could not add an index"
+    into "the fixture cannot be built at all", and that regression broke three rehearsal
+    tests. The fixture below is deliberately LEGACY (no ``origin`` column, no index) so
+    the migration genuinely has work it cannot do.
+    """
+    import os
+    import sqlite3
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "deployed.db")
+        legacy = sqlite3.connect(path)
+        legacy.execute(
+            "CREATE TABLE iv_observations ("
+            " underlying TEXT NOT NULL, as_of TEXT NOT NULL, tenor_key TEXT NOT NULL,"
+            " iv REAL NOT NULL, source TEXT NOT NULL, is_proxy INTEGER NOT NULL DEFAULT 0,"
+            " expiry TEXT, right TEXT, created_at TEXT,"
+            " PRIMARY KEY (underlying, as_of, tenor_key, source))"
+        )
+        legacy.execute(
+            "INSERT INTO iv_observations (underlying, as_of, tenor_key, iv, source)"
+            " VALUES ('SPY', '2026-10-01', 'mte91-call-mny+0.00', 0.18, 'alpaca_chain')"
+        )
+        legacy.commit()
+        legacy.close()
+        os.chmod(path, 0o444)
+
+        conn = sqlite3.connect(path)      # readable, not writable, as the deployment is
+        conn.row_factory = sqlite3.Row
+        reopened = IvRankStore(conn)
+
+        # 1. It OPENED, and the legacy row is still readable through the shipped reader.
+        assert reopened.count_observations("SPY", "mte91-call-mny+0.00") == 1
+        res = reopened.iv_rank(0.20, "SPY", "mte91-call-mny+0.00",
+                              min_observations=2, as_of="2026-10-02")
+        assert res.status == "warmup"
+
+        # 2. The migration it could not do is REPORTED, not swallowed -- a reader must be
+        #    able to tell a skipped migration from a current one.
+        assert reopened.migration_note is not None
+        assert "skipped" in reopened.migration_note
+        conn.close()

@@ -451,9 +451,23 @@ class IvRankStore:
             raise IvRankError(f"min_observations must be >= 2, got {min_observations}")
         self.conn = conn
         self.min_observations = min_observations
-        self.conn.executescript(SCHEMA)
+        #: Set by :meth:`_migrate_columns` when the store is unwritable and part of the
+        #: R9 migration had to be skipped. ``None`` means the store is current.
+        self.migration_note: str | None = None
+        # SCHEMA is all ``IF NOT EXISTS``, so on a current store it is a no-op -- but
+        # ``executescript`` still opens a write transaction, which an unwritable store
+        # rejects outright. Same reasoning as the migration below: the schema is a
+        # convenience for a fresh file, never a correctness precondition for reading one.
+        try:
+            self.conn.executescript(SCHEMA)
+            self.conn.commit()
+        except sqlite3.OperationalError as exc:
+            self.migration_note = f"schema create skipped ({exc})"
         self._migrate_columns()
-        self.conn.commit()
+        try:
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
     def _migrate_columns(self) -> None:
         """Add ``origin`` to a database created before ruling R9.
@@ -465,16 +479,56 @@ class IvRankStore:
         supports it, the ``NOT NULL DEFAULT 'live'`` backfills every historical row with
         the meaning it already had (those rows were live chain polls), and no data is
         rewritten.
+
+        A store may also be **unwritable**, and that is not hypothetical: the rehearsal and
+        the UI open the DEPLOYED store under ``/opt/paper-hunter``, which is owned by the
+        ``paper-hunter`` service user. Opening it is fine; writing to it is not, and
+        SQLite says so with ``attempt to write a readonly database`` on the first DDL that
+        actually has to change something.
+
+        So the migration is best-effort by design, and it is split by what each half is
+        FOR:
+
+        * the ``ALTER TABLE`` is a *correctness* step -- without it, every insert fails
+          with ``no such column: origin``, which is a clear error, so skipping it on a
+          read-only store costs nothing but that same clear error on the first write;
+        * the ``CREATE INDEX`` is a *speed* step, and a store without it is still exactly
+          as correct.
+
+        Failing the whole open over an index would mean a read-only deployment cannot be
+        read at all -- turning "we could not add an index" into "the experiment cannot see
+        its own data". The reason is recorded on ``self.migration_note`` rather than
+        swallowed, so a reader can tell a skipped migration from a silent one.
         """
-        present = {row["name"] for row in self.conn.execute("PRAGMA table_info(iv_observations)")}
-        if "origin" not in present:
+        note: str | None = None
+        try:
+            present = {
+                row["name"] for row in self.conn.execute("PRAGMA table_info(iv_observations)")
+            }
+            if "origin" not in present:
+                self.conn.execute(
+                    "ALTER TABLE iv_observations ADD COLUMN origin TEXT NOT NULL DEFAULT 'live'"
+                )
+        except sqlite3.OperationalError as exc:
+            note = f"origin column migration skipped ({exc})"
+        try:
             self.conn.execute(
-                "ALTER TABLE iv_observations ADD COLUMN origin TEXT NOT NULL DEFAULT 'live'"
+                "CREATE INDEX IF NOT EXISTS idx_iv_origin"
+                " ON iv_observations (underlying, tenor_key, origin, as_of)"
             )
-        self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_iv_origin"
-            " ON iv_observations (underlying, tenor_key, origin, as_of)"
-        )
+        except sqlite3.OperationalError as exc:
+            note = f"{note}; origin index skipped ({exc})" if note else (
+                f"origin index skipped ({exc})"
+            )
+        self.migration_note = note
+        if note is not None:
+            # The commit below is best-effort for the same reason: it has nothing to write
+            # on a store that is already current.
+            try:
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            return
 
     # -- construction ----------------------------------------------------------
 
