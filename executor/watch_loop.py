@@ -59,7 +59,7 @@ from __future__ import annotations
 
 import datetime as dt
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, runtime_checkable
 
@@ -78,6 +78,7 @@ from executor.position_manager import (
     NullJournalSink,
     OrderLeg,
     PositionManager,
+    RollSelection,
     Veto,
     et_time,
     iso_ts,
@@ -377,6 +378,10 @@ class WatchState:
     plan: HuntPlan
     arms: dict[str, ArmState] = field(default_factory=dict)
     traded_cells: frozenset[ArmKey] = frozenset()
+    #: Cells already given their one green-plan re-verification this session (R2).
+    #: Mutated in place by the watch loop via :func:`_green_cell_armed` rather than
+    #: threaded through ``TickResult``; ``run_loop`` re-seeds it per session.
+    green_checked: set[ArmKey] = field(default_factory=set)
     ticks: int = 0
     last_notes: tuple[str, ...] = ()
 
@@ -560,6 +565,150 @@ def _arm_b_contract(
 # ---------------------------------------------------------------------------
 
 
+def _iv_rank_for_cell(
+    iv_rank: float | Mapping[str, float] | None,
+    cell: ArmPlan,
+) -> float | None:
+    """Resolve the IV rank for one cell.
+
+    R4 (2026-10-03): T5's rank is read per tenor, and the tenors differ per cell — arm
+    B's 0DTE call and arm C's 150-DTE call are different series with different warm-up
+    states. The CLI used to compute ONE number and forward it to every cell, so a rank
+    that warmed up for one contract was asserted for all of them. Accepted forms:
+    ``None`` (no read at all — T5 PENDING, which is the honest default), a bare float
+    (one number for every cell, kept for tests and for ``--iv-rank``), or a mapping
+    keyed by :data:`executor.hunt_plan.ArmKey` (an ``(arm, direction)`` tuple).
+    """
+    if iv_rank is None:
+        return None
+    if isinstance(iv_rank, Mapping):
+        value = iv_rank.get(cell.key)
+        return float(value) if isinstance(value, (int, float)) else None
+    return float(iv_rank)
+
+
+def _t5_iv_rank_defined(
+    iv_rank: float | Mapping[str, float] | None, plan: HuntPlan | None
+) -> bool:
+    """Whether the rulebook's arm-B gate condition (``t5_iv_rank_defined``) holds.
+
+    RULED 2026-10-03 (operator, R5): the window opens arms A + C; arm B waits for T5.
+    The gate is checked against what this session ACTUALLY resolved, not against a
+    stored flag, so a run that failed to read the store cannot inherit yesterday's
+    "warm" answer and quietly start trading arm B.
+
+    Any cell's rank counts, not just arm B's: the condition the ruling names is "T5
+    can be evaluated", and T5 is one checklist condition shared by both arms. Once a
+    tenor is warm the store keeps it warm; the question is whether we can read it.
+    """
+    if isinstance(iv_rank, Mapping):
+        if any(isinstance(v, (int, float)) for v in iv_rank.values()):
+            return True
+        return False
+    if isinstance(iv_rank, (int, float)):
+        return True
+    if plan is not None:
+        for cell in plan.arms:
+            if isinstance(cell.snapshot_dict.get("iv_rank"), (int, float)):
+                return True
+    return False
+
+
+def _green_cell_armed(
+    cell: ArmPlan,
+    state: WatchState,
+    snapshot: Any,
+    now: dt.datetime,
+    rules: Rulebook,
+) -> bool:
+    """Whether a cell whose plan-time triggers all decayed is armed anyway (R2).
+
+    RULED 2026-10-03 (operator): "a green plan arms the watch loop on the entry window
+    alone". A cell qualifies when its PLAN checklist fired (it is green as of the
+    pre-market read) and the current time is inside the arm's entry window. The window
+    is the arm's own ``entry.window_et`` — arm C declares none, so for arm C the window
+    is the whole session. That asymmetry is recorded, not invented around: the rulebook
+    gives arm C no window, and inventing one would be authoring a policy the operator
+    has not ruled on. It is flagged as open in ``docs/ratification.md``.
+
+    THROTTLE, and this is an interpretation rather than a ruling: each green cell is
+    re-verified ONCE per session, on the first tick inside its window, not on every
+    tick. Un-throttled, a green cell that does not fire writes a NO_TRADE row every 15
+    seconds for 4h15m — ~1000 identical rows per cell per day, which
+    ``analysis.rollup.checklist_failure_histogram`` would then report as T1 (or
+    whichever condition failed) vetoing ~99% of all decisions. In a project whose whole
+    claim is honest measurement, a corrupted veto histogram is a worse outcome than a
+    missed entry, and a missed entry is at least visible as a NO-SHOT row. Lifting the
+    throttle is a one-line change here.
+    """
+    if cell.key in state.green_checked:
+        return False
+    window = getattr(getattr(rules.arms, cell.arm).entry, "window_et", None)
+    clock = et_time(now)
+    if window is not None:
+        if not (
+            dt.time.fromisoformat(window.start) <= clock <= dt.time.fromisoformat(window.end)
+        ):
+            return False
+    if not _cell_plan_green(cell):
+        return False
+    object.__setattr__(state, "green_checked", state.green_checked | {cell.key})
+    return True
+
+
+def _roll_selection_for(
+    arm_state: ArmState,
+    snapshot: WatchSnapshot,
+    day: dt.date,
+    rules: Rulebook,
+    provider: WatchDataProvider,
+) -> tuple[RollSelection | None, str | None]:
+    """Pick arm C's roll replacement from the tick's own chain (R1).
+
+    The chain rides along on :class:`WatchSnapshot` — ``AlpacaWatchData`` already
+    fetched it for the contract quote — so the roll costs no extra network call. A
+    missing chain means no roll this pass, which the manager reports.
+
+    Returns ``(selection, error)``. The error is returned rather than swallowed so a
+    selection bug shows up in the tick's notes instead of presenting as "no
+    replacement available" — the two look identical from the outside and only one of
+    them is a bug.
+    """
+    from executor.position_manager import arm_c_roll_replacement
+
+    if snapshot.chain is None:
+        return None, None
+    try:
+        selection = arm_c_roll_replacement(
+            chain=snapshot.chain,
+            spot=snapshot.spot,
+            day=day,
+            rules=rules,
+            state=arm_state,
+        )
+    except Exception as exc:  # noqa: BLE001 - a roll-selection bug must not kill a tick
+        # The tick continues, so the exits that already ran are not lost with it.
+        return None, f"arm C roll selection raised {type(exc).__name__}: {exc}"
+    return selection, None
+
+
+def _cell_plan_green(cell: ArmPlan) -> bool:
+    """Whether the cell's pre-market checklist fired.
+
+    Read from the plan's own snapshot rather than re-evaluated: the point is "the plan
+    was green", which is a fact about 08:30, not a second opinion about now. Arm A is
+    excluded because it is a pre-market single order with no intraday checklist.
+    """
+    if cell.arm == "A":
+        return False
+    # `cell.checklist` is the plan-time evaluation; the fallback to `fire` covers a
+    # plan loaded from a file written before either field was recorded.
+    checklist = getattr(cell, "checklist", None)
+    if checklist is not None and hasattr(checklist, "fire"):
+        return bool(checklist.fire)
+    return bool(cell.snapshot_dict.get("plan_green", False))
+
+
 def run_once(
     *,
     provider: WatchDataProvider,
@@ -571,7 +720,7 @@ def run_once(
     manager: PositionManager | None = None,
     calendar: EventCalendar | None = None,
     max_snapshot_age_seconds: float = DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
-    iv_rank: float | None = None,
+    iv_rank: float | Mapping[str, float] | None = None,
     flow_gate: Any | None = None,
 ) -> TickResult:
     """One intraday tick. Pure-ish: no sleep, no clock read, no network of its own.
@@ -621,6 +770,19 @@ def run_once(
         else:
             mark = price
         delta, dte = _greeks_for(position, snapshot)
+        # RULED 2026-10-03 (operator, R1): arm C's roll needs a replacement leg, and
+        # selecting it requires the option chain — which the watch provider does not
+        # currently expose. Until it does, the roll cannot be taken live and the
+        # manager says so in a note rather than holding the position in silence. This
+        # is the one place the intraday loop is known-incomplete, and it is named in
+        # `docs/ratification.md` rather than papered over.
+        selection = roll_error = None
+        if arm == "C":
+            selection, roll_error = _roll_selection_for(
+                arm_state, snapshot, state.day, rules, provider
+            )
+            if roll_error is not None:
+                notes.append(roll_error)
         evaluation = manager.evaluate_exits(
             arm,  # type: ignore[arg-type]
             now=now,
@@ -628,7 +790,10 @@ def run_once(
             price=mark,
             delta=delta,
             dte=dte,
+            replacement=selection.leg if selection is not None else None,
+            selection=selection,
         )
+        notes.extend(evaluation.notes)
         arms[arm] = evaluation.next_state or arm_state
         for action in evaluation.actions:
             journaled += (
@@ -652,15 +817,34 @@ def run_once(
         notes.extend(evaluation.notes)
 
     # -- 4. entries ------------------------------------------------------------
+    # RULED 2026-10-03 (operator, R2): a GREEN plan arms the watch loop on the entry
+    # window alone. Previously a cell whose pre-market triggers had all decayed was
+    # skipped before any live re-verification, so a plan that was genuinely green at
+    # 08:30 became unreachable the moment the day's first trigger decayed — the loop
+    # could only ever enter on a trigger it had already seen, which is the opposite of
+    # "the checklist decides". "Green" here means the PLAN's checklist fired; whether
+    # it still fires is exactly the question the live re-verification exists to answer,
+    # so re-verifying costs one evaluation and the answer is journalled either way.
+    window_arms = rules.active_arms(
+        t5_iv_rank_defined=_t5_iv_rank_defined(iv_rank, state.plan)
+    )
     for cell in state.plan.arms:
         if cell.arm not in ("B", "C"):
             continue  # arm A is a pre-market single order, handled by main.py
         if cell.key in state.traded_cells:
             continue
+        if cell.arm not in window_arms:
+            # R5: the window defers this arm. Skipped BEFORE any evaluation so it
+            # costs nothing and produces no journal row per tick — a deferred arm
+            # leaving a NO_TRADE trail would read at the monthly review as an arm
+            # that was trading and finding nothing.
+            continue
         arm_state = arms.get(cell.arm, ArmState())
         fired_triggers = trigger_fired(cell, snapshot.spot)
         if not fired_triggers:
-            continue
+            if not _green_cell_armed(cell, state, snapshot, now, rules):
+                continue
+            fired_triggers = ("green_plan_entry_window",)
         if stale:
             veto = Veto(
                 cell.arm,  # type: ignore[arg-type]
@@ -680,7 +864,7 @@ def run_once(
             snapshot=snapshot,
             rules=rules,
             calendar=calendar,
-            iv_rank=iv_rank,
+            iv_rank=_iv_rank_for_cell(iv_rank, cell),
             flow_gate=flow_gate,
         )
         reverified[cell.key] = result
@@ -874,6 +1058,24 @@ def _apply_exit(arm: str, arm_state: ArmState, action: Action) -> ArmState:
         buy_leg = next((leg for leg in action.legs if leg.side == "buy"), None)
         if position is None or buy_leg is None:
             return replace(arm_state, position=None)
+        # FIX 2026-10-03 (R1): the replacement's own identity is carried across, not
+        # just its symbol. Previously the new position inherited the OLD contract's
+        # delta, DTE, expiry and strike — so the tick after a roll re-evaluated the
+        # roll trigger against the pre-roll Greeks (delta 0.60, DTE 40), the trigger
+        # fired again immediately, and the position would have rolled on every single
+        # pass until the chain ran dry. A roll that re-triggers its own trigger is not
+        # a roll; the Greeks are the state the trigger reads, so they are part of the
+        # state a roll has to update.
+        selection = (action.gov_checks or {}).get("selection") or {}
+        meta = dict(position.meta)
+        if selection:
+            meta["roll"] = {
+                "from_symbol": position.symbol,
+                "from_delta": position.delta,
+                "from_dte": (action.gov_checks or {}).get("dte"),
+                "to_symbol": buy_leg.symbol,
+                "selection": selection,
+            }
         return replace(
             arm_state,
             position=replace(
@@ -881,6 +1083,18 @@ def _apply_exit(arm: str, arm_state: ArmState, action: Action) -> ArmState:
                 symbol=buy_leg.symbol,
                 entry_price=buy_leg.limit_price or position.entry_price,
                 qty=buy_leg.qty,
+                delta=selection.get("delta"),
+                strike=selection.get("strike"),
+                expiry=(
+                    f"{selection['expiry']}"
+                    if selection.get("expiry")
+                    else position.expiry
+                ),
+                # Arm C is a long call and never takes profit, so the flag is cleared:
+                # leaving it set would make the new leg look like a position already
+                # scaled out.
+                profit_taken=False,
+                meta=meta,
             ),
         )
     return arm_state
@@ -946,7 +1160,7 @@ def run_loop(
     clock: Callable[[], dt.datetime] | None = None,
     tick_hook: Callable[[TickResult], None] | None = None,
     max_snapshot_age_seconds: float = DEFAULT_MAX_SNAPSHOT_AGE_SECONDS,
-    iv_rank: float | None = None,
+    iv_rank: float | Mapping[str, float] | None = None,
     flow_gate: Any | None = None,
 ) -> list[TickResult]:
     """Poll :func:`run_once` until the stop time, ``max_ticks``, or an error.
@@ -965,7 +1179,6 @@ def run_loop(
     blocking for arm B, so the loop could never enter a position no matter what the
     caller knew. A parameter that is accepted and dropped is worse than one that does
     not exist.
-
     Returns every tick result, so a whole session's reasoning is inspectable after the
     fact rather than only in the journal.
     """

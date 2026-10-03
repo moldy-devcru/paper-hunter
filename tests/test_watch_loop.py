@@ -160,6 +160,29 @@ def firing_cell(rules, *, direction: str = "call", level: float = 624.0,
     )
 
 
+def not_green_cell(rules, *, direction: str = "call") -> ArmPlan:
+    """A plan cell whose checklist did NOT fire at plan time.
+
+    Built by forcing a failing condition into the snapshot rather than by stubbing
+    ``fire``: the ruling's "green" test reads the same field the plan writes, so a
+    fixture that faked the field would not prove the field means what it claims.
+    """
+    snapshot = dataclasses.replace(snapshot_for(direction), rsi=10.0)
+    result = evaluate(snapshot, rules, direction, "B")  # type: ignore[arg-type]
+    assert result.fire is False, "fixture must not be green"
+    return ArmPlan(
+        arm="B",
+        direction=direction,
+        checklist=result,
+        triggers=(),
+        watch=WatchLevels(close=625.0, ema_fast=620.0, strike_projection={}),
+        decision_kind="NO_TRADE",
+        conviction=0,
+        reasoning="fixture cell, checklist did not fire",
+        snapshot_dict=result.indicators,
+    )
+
+
 def plan_for(rules, *cells: ArmPlan) -> HuntPlan:
     return HuntPlan(
         day=DAY,
@@ -243,12 +266,85 @@ def test_a_cell_with_no_level_is_not_watchable(rules):
 # ---------------------------------------------------------------------------
 
 
-def test_a_tick_with_no_trigger_does_nothing_and_says_so(rules, series):
+def test_a_green_plan_arms_the_loop_on_the_entry_window_alone(rules, series):
+    """R2 (2026-10-03): a green plan re-verifies intraday even with no live trigger.
+
+    Before the ruling, a cell whose pre-market triggers had all decayed was skipped
+    before any live evaluation, so a plan that was green at 08:30 became unreachable
+    the moment the day's first trigger decayed. The cell here is green (``firing_cell``
+    asserts ``fire is True``) and 10:30 is inside arm B's 09:45-14:00 window, so the
+    loop owes it a live re-verification.
+    """
     plan = plan_for(rules)
     result = run_once(
         provider=provider(rules, series, spot=600.0),
         rules=rules,
         state=state_for(rules, plan),
+        now=at(10, 30),
+    )
+    # The checklist re-verified. T6 is PENDING with no flow gate supplied, so the
+    # honest outcome is a veto naming the condition, not an entry.
+    assert result.quiet is False
+    assert ("B", "call") in result.reverified
+    assert any("T6" in v.reason for v in result.vetoes)
+
+
+def test_a_green_cell_is_reverified_once_per_session_not_every_tick(rules, series):
+    """R2's throttle: one re-verification, so the veto histogram is not flooded.
+
+    Un-throttled this writes ~1000 identical NO_TRADE rows per cell per day, which
+    ``analysis.rollup.checklist_failure_histogram`` would report as a single condition
+    vetoing ~99% of all decisions.
+    """
+    plan = plan_for(rules)
+    state = state_for(rules, plan)
+    first = run_once(
+        provider=provider(rules, series, spot=600.0),
+        rules=rules,
+        state=state,
+        now=at(10, 30),
+    )
+    second = run_once(
+        provider=provider(rules, series, spot=600.0),
+        rules=rules,
+        state=state,
+        now=at(10, 31),
+    )
+    assert ("B", "call") in first.reverified
+    assert ("B", "call") not in second.reverified
+    assert state.green_checked == {("B", "call")}
+
+
+def test_a_green_cell_outside_the_entry_window_stays_quiet(rules, series):
+    """R2 arms the loop on the ENTRY WINDOW, so 09:44 is not in it."""
+    result = run_once(
+        provider=provider(rules, series, spot=600.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules)),
+        now=at(9, 44),
+    )
+    assert result.quiet is True
+    assert result.reverified == {}
+
+
+def test_a_green_cell_after_the_entry_window_stays_quiet(rules, series):
+    """14:01 is past arm B's 14:00 close — "no late hero entries"."""
+    result = run_once(
+        provider=provider(rules, series, spot=600.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules)),
+        now=at(14, 1),
+    )
+    assert result.quiet is True
+    assert result.reverified == {}
+
+
+def test_a_non_green_cell_with_no_trigger_does_nothing_and_says_so(rules, series):
+    """The pre-R2 quiet tick still exists — for a cell that was never green."""
+    result = run_once(
+        provider=provider(rules, series, spot=600.0),
+        rules=rules,
+        state=state_for(rules, plan_for(rules, not_green_cell(rules))),
         now=at(10, 30),
     )
     assert result.quiet is True
@@ -638,7 +734,11 @@ def test_a_tick_error_is_recorded_and_the_session_continues(rules, series):
     # it is carried exactly once
     assert any("tick error" in note for note in results[1].notes)
     assert not any("tick error" in note for note in results[2].notes)
-    assert results[1].quiet is True and results[2].quiet is True
+    # Tick 1 raised before reaching the entries, so R2's green-cell re-verification is
+    # still owed on tick 2 — which is why tick 2 is not quiet. Tick 3 is, having spent
+    # the one re-verification R2 allows per cell per session.
+    assert results[1].quiet is False
+    assert results[2].quiet is True
 
 
 def test_a_provider_for_the_wrong_symbol_is_refused(rules, series):
@@ -721,7 +821,10 @@ def test_the_loop_can_use_a_manager_with_a_persistent_sink(rules, series):
         journal=sink,
     )
     assert len(sink.records) == result.journaled >= 1
-    assert sink.records[-1].kind == "STOP"
+    # The exit ladder's STOP is journalled, and under R2 the green arm-B cell is then
+    # re-verified for an entry, so an entry VETO follows it. The ordering assertion
+    # that matters is "the STOP is there", not "the STOP is last".
+    assert "STOP" in {r.kind for r in sink.records}
 
 
 # ---------------------------------------------------------------------------

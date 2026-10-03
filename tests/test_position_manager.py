@@ -26,6 +26,7 @@ from executor.position_manager import (
     arm_b_position_after,
     arm_c_exit_all_needed,
     arm_c_exits,
+    arm_c_roll_replacement,
     arm_c_roll_trigger,
     entry_window_open,
     et_week_key,
@@ -350,6 +351,189 @@ def test_a_roll_without_a_replacement_contract_does_not_close_the_position(rules
 
 def test_roll_is_not_discretionary(rules):
     assert rules.arms.C.exits.roll.discretionary is False
+
+
+# ---------------------------------------------------------------------------
+# arm C roll replacement (RULED 2026-10-03, R1)
+# ---------------------------------------------------------------------------
+
+
+DAY = dt.date(2026, 10, 2)
+
+
+def _c(dte: int, strike: float, delta: float | None, price: float, *, right: str = "call"):
+    """One arm-C-shaped contract, ``dte`` calendar days out.
+
+    ``price`` is the ASK, because that is what a buy leg pays and the premium cap is
+    checked against what the roll would actually spend.
+    """
+    from executor.alpaca_client import Greeks, OptionContract, OptionQuote, OptionTrade
+
+    return OptionContract(
+        symbol=f"SPY{DAY + dt.timedelta(days=dte):%Y%m%d}{'C' if right == 'call' else 'P'}"
+        f"{strike * 1000:08.0f}",
+        underlying="SPY",
+        expiry=f"{DAY + dt.timedelta(days=dte):%Y%m%d}",
+        right=right,
+        strike=strike,
+        greeks=Greeks(delta=delta),
+        implied_volatility=0.20,
+        latest_quote=OptionQuote(bid=price - 0.05, ask=price),
+        latest_trade=OptionTrade(p=price),
+    )
+
+
+def _chain(*contracts):
+    from executor.alpaca_client import OptionChain
+
+    return OptionChain(underlying="SPY", feed="opra", contracts=list(contracts))
+
+
+def test_r1_picks_the_nearest_delta_080_strike_on_the_next_qualifying_expiry(rules):
+    """R1: next expiry in the 90-180 band, strike nearest delta 0.80, same cap."""
+    chain = _chain(
+        # A nearer expiry than 90 DTE is OUTSIDE the band and must be ignored.
+        _c(60, 580.0, 0.80, 2.00),
+        # The next QUALIFYING expiry (100 DTE), several deltas around.
+        _c(100, 560.0, 0.72, 6.00),
+        _c(100, 570.0, 0.81, 7.00),  # <- nearest to 0.80
+        _c(100, 580.0, 0.88, 8.00),
+        _c(100, 590.0, 0.60, 9.00),
+        # A further qualifying expiry must not be chosen while 100 DTE qualifies.
+        _c(150, 570.0, 0.80, 11.00),
+    )
+    selection = arm_c_roll_replacement(
+        chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+    )
+    assert selection is not None
+    assert selection.expiry == f"{DAY + dt.timedelta(days=100):%Y%m%d}"
+    assert selection.strike == 570.0
+    assert selection.delta == pytest.approx(0.81)
+    assert selection.leg.side == "buy" and selection.leg.qty == 1
+
+
+def test_r1_target_delta_is_read_from_the_rulebook_not_hardcoded(rules):
+    """One number in the rulebook, so R1 and the entry cannot drift apart."""
+    chain = _chain(_c(100, 570.0, 0.81, 7.00))
+    selection = arm_c_roll_replacement(
+        chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+    )
+    assert selection is not None
+    assert selection.target_delta == rules.arms.C.entry.delta_min
+
+
+def test_r1_refuses_a_replacement_over_the_premium_cap(rules):
+    """The band is the cash buffer; a roll that spends it is not this trade."""
+    cap = rules.arms.C.entry.premium_pct_of_bankroll_max * rules.arms.C.bankroll_usd
+    chain = _chain(_c(100, 570.0, 0.81, cap / 100.0 + 1.0))
+    assert (
+        arm_c_roll_replacement(
+            chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+        )
+        is None
+    )
+
+
+def test_r1_refuses_when_no_contract_in_the_band_exists(rules):
+    chain = _chain(_c(30, 570.0, 0.81, 7.00), _c(250, 570.0, 0.81, 7.00))
+    assert (
+        arm_c_roll_replacement(
+            chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+        )
+        is None
+    )
+
+
+def test_r1_refuses_when_the_nearest_delta_still_fails_the_entry_floor(rules):
+    """Rolling into a sub-0.80 contract would re-arm the roll trigger immediately."""
+    chain = _chain(_c(100, 570.0, 0.65, 7.00))
+    assert (
+        arm_c_roll_replacement(
+            chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+        )
+        is None
+    )
+
+
+def test_r1_refuses_to_guess_when_no_greeks_are_readable(rules):
+    """No delta means no way to honour "nearest delta 0.80" — so it waits."""
+    chain = _chain(_c(100, 570.0, None, 7.00), _c(100, 580.0, None, 8.00))
+    assert (
+        arm_c_roll_replacement(
+            chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+        )
+        is None
+    )
+
+
+def test_r1_ignores_puts_even_when_they_are_a_closer_delta_match(rules):
+    """Arm C is calls-only; the ruling says nothing about changing that."""
+    chain = _chain(
+        _c(100, 570.0, 0.80, 7.00, right="put"),  # the exact target delta...
+        _c(100, 580.0, 0.82, 7.00, right="call"),  # ...but arm C is calls-only
+    )
+    selection = arm_c_roll_replacement(
+        chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+    )
+    assert selection is not None and selection.strike == 580.0
+
+
+def test_a_fired_roll_trigger_with_no_replacement_now_reports_itself(rules):
+    """The silence case is the one that hid a stuck position.
+
+    Before this, an unfillable roll and a healthy position both returned an empty
+    action tuple, so a position whose roll could never be satisfied was invisible.
+    """
+    manager = PositionManager(rules)
+    evaluation = manager.evaluate_exits(
+        "C",
+        now=at(11, 0),
+        state=ArmState(position=c_position()),
+        price=18.0,
+        delta=0.60,
+        dte=120,
+        replacement=None,
+    )
+    assert evaluation.actions == ()
+    assert evaluation.notes
+    assert "roll trigger fired" in evaluation.notes[0]
+    assert "HELD, not rolled" in evaluation.notes[0]
+
+
+def test_a_position_that_does_not_need_a_roll_says_nothing(rules):
+    manager = PositionManager(rules)
+    evaluation = manager.evaluate_exits(
+        "C",
+        now=at(11, 0),
+        state=ArmState(position=c_position()),
+        price=18.0,
+        delta=0.90,
+        dte=120,
+        replacement=None,
+    )
+    assert evaluation.actions == ()
+    assert evaluation.notes == ()
+
+
+def test_the_roll_action_carries_r1_provenance_into_the_journal(rules):
+    chain = _chain(_c(100, 570.0, 0.81, 7.00))
+    selection = arm_c_roll_replacement(
+        chain=chain, spot=600.0, day=DAY, rules=rules, state=ArmState(position=c_position())
+    )
+    action = arm_c_exits(
+        now=at(11, 0),
+        rules=rules,
+        state=ArmState(position=c_position()),
+        price=18.0,
+        delta=0.60,
+        dte=120,
+        replacement=selection.leg,
+        selection=selection,
+    )[0]
+    assert action.kind == "ROLL"
+    assert action.gov_checks["selection"]["strike"] == 570.0
+    assert "next qualifying expiry" in action.reason
+    assert [leg.side for leg in action.legs] == ["sell", "buy"]
 
 
 # ---------------------------------------------------------------------------

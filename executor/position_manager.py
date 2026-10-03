@@ -56,12 +56,14 @@ Python 3.12+, stdlib + ``config.loader`` + ``journal.store``.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 from config.loader import Rulebook
+from executor.alpaca_client import OptionChain, OptionContract
 
 Arm = Literal["A", "B", "C"]
 DecisionKind = Literal["TRADE", "NO_TRADE", "ROLL", "STOP", "PROPOSAL", "VETO"]
@@ -686,6 +688,166 @@ def arm_c_roll_trigger(
     return None
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class RollSelection:
+    """A chosen replacement leg plus WHY it was chosen.
+
+    The provenance is the point. "Rolled" in a journal is unauditable; "rolled to the
+    2027-01-15 95 call, delta 0.79 (nearest 0.80), premium $410 of a $5,000 cap" is a
+    row the monthly review can check against the rulebook, and a row that can be checked
+    is the only kind that tells the operator whether R1 is being followed or drifted
+    from.
+    """
+
+    leg: OrderLeg
+    expiry: str
+    dte: int
+    strike: float
+    delta: float
+    target_delta: float
+    premium_usd: float
+    cap_usd: float
+
+    def reason(self) -> str:
+        return (
+            f"R1 roll: next qualifying expiry {self.expiry} "
+            f"({self.dte} DTE), strike {self.strike:g} at delta {self.delta:.2f} "
+            f"(nearest target {self.target_delta:.2f}), premium ${self.premium_usd:,.2f} "
+            f"of the ${self.cap_usd:,.2f} cap"
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "expiry": self.expiry,
+            "dte": self.dte,
+            "strike": self.strike,
+            "delta": self.delta,
+            "target_delta": self.target_delta,
+            "premium_usd": self.premium_usd,
+            "cap_usd": self.cap_usd,
+        }
+
+
+def _ask_mark(contract: OptionContract) -> float | None:
+    """What a BUY of ``contract`` would actually cost, per share.
+
+    ask → mid → bid. The mirror of ``watch_loop.contract_price`` (bid → mid → ask),
+    which marks a long being SOLD. Using the bid here would understate the premium the
+    roll is about to spend and make the cap check pass trades that would breach it, so
+    the two directions deliberately do not share a function.
+    """
+    quote = contract.latest_quote
+    if quote is not None:
+        for value in (quote.ask, quote.mid, quote.bid):
+            if value is not None:
+                return float(value)
+    trade = contract.latest_trade
+    return float(trade.p) if trade is not None else None
+
+
+def arm_c_roll_replacement(
+    *,
+    chain: OptionChain,
+    spot: float,
+    day: dt.date,
+    rules: Rulebook,
+    state: ArmState,
+) -> RollSelection | None:
+    """The buy leg for arm C's roll, per the frozen roll rule.
+
+    RULED 2026-10-03 (operator, R1): the replacement is **the next qualifying expiry**
+    — the earliest expiry inside the same 90-180 DTE band entry uses — **at the strike
+    nearest delta 0.80**, **subject to the same premium cap** as entry. Operator's
+    wording, all three parts load-bearing:
+
+    * *next qualifying expiry*, not the same expiry. Rolling to a further-out month is
+      the whole point of a roll; "next" is the earliest one that still qualifies, which
+      keeps theta cost as low as the band allows.
+    * *nearest delta 0.80*, not nearest-the-money. The roll exists to restore the delta
+      the entry was sized on; rolling to ATM would hand back a 0.50-delta contract and
+      the position would re-trigger its own roll trigger on the very next pass. 0.80 is
+      read from ``arms.C.entry.delta_min`` so there is one number in the rulebook, not
+      two that can disagree.
+    * *the same premium cap*. The band is the cash buffer the brief describes; a roll
+      that spends it is not the same trade.
+
+    Returns ``None`` — meaning "no roll this pass", never "close and hope" — when the
+    chain carries no qualifying contract, when no contract's delta is readable, or when
+    the best one breaches the cap. The caller reports that as a veto rather than
+    silently doing nothing, because a roll trigger that fires every session and can
+    never be satisfied is a stuck position the operator needs to see.
+
+    ``spot`` is accepted for symmetry with the entry path and deliberately unused: the
+    ruling targets a DELTA, and a strike rule written in terms of spot would be a second,
+    competing definition of the same contract.
+    """
+    entry = rules.arms.C.entry
+    position = state.position
+    if position is None or position.qty <= 0:
+        return None
+
+    target_delta = float(entry.delta_min)
+    cap = float(entry.premium_pct_of_bankroll_max) * float(rules.arms.C.bankroll_usd)
+
+    qualifying: list[tuple[int, str]] = []
+    for expiry in chain.expiries():
+        try:
+            expiry_day = dt.datetime.strptime(expiry, "%Y%m%d").date()
+        except ValueError:
+            continue
+        dte = (expiry_day - day).days
+        if entry.dte.min <= dte <= entry.dte.max:
+            qualifying.append((dte, expiry))
+    if not qualifying:
+        return None
+    # "Next" = earliest qualifying expiry, which is also the least DTE in the band.
+    _, expiry = min(qualifying, key=lambda pair: (pair[0], pair[1]))
+
+    candidates = [
+        c
+        for c in chain.contracts
+        if c.expiry == expiry
+        and c.right == entry.right
+        and c.greeks is not None
+        and c.greeks.delta is not None
+    ]
+    if not candidates:
+        return None
+    # No readable Greeks means no way to honour "nearest delta 0.80". Choosing the
+    # strike that happens to be closest to spot would be guessing at the one number
+    # the ruling is about, so the roll waits instead.
+    best = min(
+        candidates, key=lambda c: (abs(float(c.greeks.delta) - target_delta), c.strike)
+    )
+    delta_value = float(best.greeks.delta)  # type: ignore[union-attr]
+    if delta_value < entry.delta_min:
+        # The nearest-delta contract still fails the entry's own delta floor, so it is
+        # not an entry-grade contract and rolling into it is not this trade.
+        return None
+    price = _ask_mark(best)
+    if price is None:
+        return None
+    premium = price * 100.0 * position.qty
+    if premium > cap:
+        return None
+    return RollSelection(
+        leg=OrderLeg(
+            best.symbol,
+            position.qty,
+            "buy",
+            order_type="limit",
+            limit_price=price,
+        ),
+        expiry=expiry,
+        dte=next(dte for dte, exp in qualifying if exp == expiry),
+        strike=float(best.strike),
+        delta=delta_value,
+        target_delta=target_delta,
+        premium_usd=premium,
+        cap_usd=cap,
+    )
+
+
 def arm_c_exit_all_needed(streak_below_ema50: int, rules: Rulebook) -> bool:
     """T1 broken for 3 consecutive EODs → liquidate to cash.
 
@@ -713,13 +875,22 @@ def arm_c_exits(
     delta: float | None = None,
     dte: int | None = None,
     replacement: OrderLeg | None = None,
+    selection: RollSelection | None = None,
 ) -> tuple[Action, ...]:
     """Arm C's exit ladder: exit-all (T1 break) outranks roll.
 
-    A roll needs a ``replacement`` leg. Without one the roll is not taken — the
-    manager reports the trigger as a VETO-shaped note instead, because a "roll" with
-    nowhere to roll to is a naked close, and closing a 90-day deep-ITM call because the
-    chain page had not loaded yet is not a mechanical rule, it is a bug.
+    A roll needs a ``replacement`` leg. Without one the roll is not taken — and as of
+    FIX 2026-10-03 the reason is *reported* rather than swallowed. The ladder used to
+    ``return ()`` in both the "no trigger" and the "trigger but nowhere to roll to"
+    cases, which the caller could not tell apart: a healthy position and a position
+    whose roll trigger has been firing every session with no qualifying contract in the
+    chain both looked like silence. :attr:`Evaluation.notes` now carries the
+    difference, because a stuck roll is exactly the failure this project is trying not
+    to have.
+
+    ``selection`` is the :class:`RollSelection` that produced ``replacement``; it is
+    recorded in ``gov_checks`` so the journal carries R1's provenance (which expiry,
+    which delta, what premium against what cap) and not just the word "roll".
     """
     position = state.position
     if position is None:
@@ -776,6 +947,7 @@ def arm_c_exits(
             reason=(
                 f"mechanical roll ({fired}) → {exits.roll.to}; "
                 f"discretionary={exits.roll.discretionary}"
+                + (f"; {selection.reason()}" if selection is not None else "")
             ),
             legs=(
                 OrderLeg(position.symbol, position.qty, "sell"),
@@ -787,6 +959,8 @@ def arm_c_exits(
                 "delta": delta,
                 "dte": dte,
                 "roll_to": exits.roll.to,
+                "replacement_symbol": replacement.symbol,
+                "selection": selection.to_dict() if selection is not None else None,
             },
             state=common,
         ),
@@ -882,9 +1056,18 @@ class PositionManager:
         delta: float | None = None,
         dte: int | None = None,
         replacement: OrderLeg | None = None,
+        selection: RollSelection | None = None,
     ) -> Evaluation:
-        """Exit ladder for ``arm``. Returns no actions when nothing fires."""
+        """Exit ladder for ``arm``. Returns no actions when nothing fires.
+
+        FIX 2026-10-03 (R1): for arm C, when the roll TRIGGER fires but no replacement
+        leg was supplied, the reason travels out in ``Evaluation.notes``. Previously
+        this returned the same empty result as "no trigger fired", so a position whose
+        roll could not be satisfied was indistinguishable from a healthy one — silent,
+        and permanent.
+        """
         state = state.with_week_rolled(now)
+        notes: tuple[str, ...] = ()
         if arm == "B":
             actions = (
                 arm_b_exits(now=now, price=price, position=state.position, rules=self.rules)
@@ -900,10 +1083,25 @@ class PositionManager:
                 delta=delta,
                 dte=dte,
                 replacement=replacement,
+                selection=selection,
             )
+            trigger = (
+                arm_c_roll_trigger(delta=delta, dte=dte, rules=self.rules)
+                if state.position
+                else None
+            )
+            if trigger is not None and not actions:
+                notes = (
+                    f"arm C roll trigger fired ({trigger}) but no replacement leg was "
+                    f"available — position {state.position.symbol if state.position else '?'} "
+                    f"is HELD, not rolled. The roll rule stays satisfied every pass, so "
+                    f"this repeats until the chain offers a contract meeting R1 "
+                    f"(next expiry in the 90-180 DTE band, strike nearest delta 0.80, "
+                    f"within the premium cap).",
+                )
         else:
             actions = ()  # arm A never exits
-        return Evaluation(actions=actions, next_state=state)
+        return Evaluation(actions=actions, next_state=state, notes=notes)
 
     # -- entries ---------------------------------------------------------------
 
@@ -1116,7 +1314,9 @@ __all__ = [
     "MemoryJournalSink",
     "NullJournalSink",
     "OrderLeg",
+    "OrderLeg",
     "PositionManager",
+    "RollSelection",
     "SqliteJournalSink",
     "Veto",
     "arm_a_entry",
@@ -1125,6 +1325,7 @@ __all__ = [
     "arm_b_position_after",
     "arm_c_exit_all_needed",
     "arm_c_exits",
+    "arm_c_roll_replacement",
     "arm_c_roll_trigger",
     "entry_window_open",
     "iso_ts",
