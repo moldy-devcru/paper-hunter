@@ -105,7 +105,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/watch_loop.py:33`** — trigger direction — a plan cell's triggers carry a `sense` ("above"/"below"). A trigger counts as fired when spot has reached the level *in the trade direction of the cell*: for a call cell, a "below" trigger (e.g. ([source](../executor/watch_loop.py#L33))
 - [ ] **`executor/watch_loop.py:40`** — re-entry — a cell that has already produced an entry action this session is not re-entered on a later tick, even if spot re-crosses the trigger. ([source](../executor/watch_loop.py#L40))
 - [ ] **`executor/watch_loop.py:212`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L212))
-- [ ] **`executor/watch_loop.py:594`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L594))
+- [ ] **`executor/watch_loop.py:618`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L618))
 - [ ] **`journal/store.py:242`** — `ALTER TABLE ... ADD COLUMN` is the *only* statement used here, and that is the append-only guarantee talking, not caution. ([source](../journal/store.py#L242))
 
 ### analysis (9)

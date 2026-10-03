@@ -837,6 +837,75 @@ def test_a_provider_with_no_intraday_bars_cannot_watch(rules, series):
         AlpacaWatchData(client).watch_snapshot("SPY")
 
 
+def test_the_live_provider_is_also_the_plans_data_provider(series):
+    """``hunt-plan`` hands this class to ``build_hunt_plan``; the plan reads differently.
+
+    REGRESSION 2026-10-03 — plan.service died with
+    ``AttributeError: 'AlpacaWatchData' object has no attribute 'daily_series'`` on
+    every run. Phase 3b introduced the class for the watch loop's ``watch_snapshot``
+    interface and Phase 4a introduced the plan's ``MarketDataProvider``
+    (``daily_series`` / ``option_chain``); ``cmd_hunt_plan`` wired the two together
+    with nothing in between. No test caught it because every plan test injects
+    ``StaticMarketData`` and no test drove the CLI past the parser.
+
+    The ``isinstance`` check is the pin: ``MarketDataProvider`` is a
+    ``runtime_checkable`` Protocol, so it verifies *method presence* — exactly the
+    contract that was broken — without a live client.
+    """
+    from executor.hunt_plan import MarketDataProvider
+    from executor.watch_loop import AlpacaWatchData
+
+    class _Client:
+        def get_daily_bars(self, symbol, *, feed, limit=None, **kwargs):
+            return series
+
+        def get_option_chain(self, symbol):
+            return _chain(symbol, [])
+
+    provider = AlpacaWatchData(_Client())
+    assert isinstance(provider, MarketDataProvider)
+    assert provider.daily_series("SPY") is series
+    assert provider.option_chain("SPY") is not None
+
+
+def test_hunt_plan_over_the_live_provider_writes_a_plan(tmp_path, monkeypatch, capsys):
+    """The whole CLI seam, offline: ``cmd_hunt_plan`` + the live provider, no keys.
+
+    Reads the same seam end to end, so the regression above cannot pass on a provider
+    the plan never actually reads through.
+    """
+    from executor.alpaca_client import AlpacaClient
+    from executor.main import build_parser, cmd_hunt_plan
+    from executor.watch_loop import AlpacaWatchData
+
+    class _Client:
+        def get_daily_bars(self, symbol, *, feed, limit=None, **kwargs):
+            return series_from(synthetic_daily_payload(count=LONG))
+
+        def get_option_chain(self, symbol):
+            return _chain(symbol, [])
+
+    monkeypatch.setattr(AlpacaClient, "from_env", classmethod(lambda _cls: _Client()))
+    out = tmp_path / "plan.json"
+    args = build_parser().parse_args(
+        [
+            "hunt-plan",
+            "--out",
+            str(out),
+            "--ivrank",
+            str(tmp_path / "absent-ivrank.db"),
+            "--flow-gate",
+            "none",
+        ]
+    )
+    assert cmd_hunt_plan(args, at(8, 0)) == 0
+    assert out.exists()
+    plan = load_plan_file(out)
+    assert plan.symbol == "SPY"
+    assert plan.arms, "the plan wrote no cells — the provider fed it nothing"
+    assert AlpacaWatchData(_Client()).daily_series("SPY").bars
+
+
 # ---------------------------------------------------------------------------
 # the plan file is the loop's input contract
 # ---------------------------------------------------------------------------

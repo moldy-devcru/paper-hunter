@@ -214,6 +214,17 @@ class AlpacaWatchData:
     is explicit), and a stale-by-15s last trade is better than nothing for trigger
     watching. ``fetched_at`` is stamped after the read completes, so the staleness
     budget measures read latency, not bar age.
+
+    FIX 2026-10-03 (plan.service crash: ``'AlpacaWatchData' object has no attribute
+    'daily_series'``). This class is also the *plan*'s provider:
+    :func:`~executor.main.cmd_hunt_plan` constructs one of these and hands it to
+    :func:`~executor.hunt_plan.build_hunt_plan`, which reads through
+    :class:`~executor.hunt_plan.MarketDataProvider` (``daily_series`` /
+    ``option_chain``). Those two methods landed with Phase 3b's class but were never
+    written, so every ``hunt-plan`` run raised AttributeError on its first read. The
+    two methods below close the seam. They fetch exactly what ``watch_snapshot``
+    already fetched (which now goes through them), so there is one daily-bar fetch
+    policy, not two.
     """
 
     def __init__(
@@ -282,6 +293,19 @@ class AlpacaWatchData:
         self._run_rate_fetched_at = now
         return series
 
+    def daily_series(self, symbol: str) -> BarSeries:
+        """Daily bars for ``symbol`` — the plan's signal-bar source.
+
+        Not cached: the plan is built once per session, and the watch loop takes its
+        daily series inside a freshly-stamped snapshot where caching would hide
+        staleness rather than measure it.
+        """
+        return self.client.get_daily_bars(symbol, feed=self.daily_feed, limit=self.daily_limit)
+
+    def option_chain(self, symbol: str) -> OptionChain | None:
+        """The options chain for ``symbol``; ``None`` when the read yields none."""
+        return self.client.get_option_chain(symbol)
+
     def watch_snapshot(self, symbol: str) -> WatchSnapshot:
         started = dt.datetime.now(dt.UTC)
         intraday = self.client.get_intraday_bars(
@@ -291,8 +315,8 @@ class AlpacaWatchData:
             raise WatchLoopError(
                 f"no {self.timeframe} bars for {symbol}; cannot watch a trigger without a price"
             )
-        daily = self.client.get_daily_bars(symbol, feed=self.daily_feed, limit=self.daily_limit)
-        chain = self.client.get_option_chain(symbol)
+        daily = self.daily_series(symbol)
+        chain = self.option_chain(symbol)
         self._run_rate_error = None
         run_rate_series = self._run_rate_series(symbol)
         notes = [f"read started {started.isoformat(timespec='seconds')}"]
