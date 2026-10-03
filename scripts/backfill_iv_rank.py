@@ -174,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             "observations_written": report.observations_written,
             "api_calls": report.api_calls,
             "retries": report.retries,
-            "cooldowns": report.cooldowns,
+            "refusals": report.refusals,
             "bands_seen": [list(b) for b in report.bands_seen],
             "tenor_key_counts": report.tenor_key_counts,
             "origin_counts": report.origin_counts,

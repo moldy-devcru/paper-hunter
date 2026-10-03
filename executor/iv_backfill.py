@@ -153,7 +153,47 @@ EQUITY_ADJUSTMENT = "all"
 #: answerable. Costs the last 20 minutes of today, which no completed daily bar needs.
 EQUITY_END_BACKOFF_MINUTES = 20
 
+#: Options bars have the SAME free-tier recency gate, and it is disguised. Alpaca refuses
+#: ``/v1beta1/options/bars`` whose ``end`` falls within the last 15 minutes unless the
+#: account pays for Algo Trader Plus — and the refusal text is ``OPRA agreement is not
+#: signed``, which is not what that means (Alpaca staff, 2026-02-18, forum thread 18445:
+#: "you are requesting real time OPRA data and do not have an Algo Trader Plus market data
+#: subscription. Real time in this case means the latest 15 minutes."). The route takes no
+#: ``feed`` parameter at all, so there is no indicative-feed escape hatch; ``end`` is the
+#: only lever.
+#:
+#: MEASURED A/B, 2026-10-03, same second, same 100 symbols, same credential, ``end`` the
+#: only variable: ``end=<today>T23:59:59Z`` → ``403 OPRA agreement is not signed``;
+#: ``end=<now-20min>`` → ``200`` with all 100 symbols populated. Because ``end`` was
+#: end-of-today, EVERY run 403'd on its first options call, deterministically, on any
+#: credential. See ``docs/reviews/2026-10-03-opra-403-investigation.md``.
+#:
+#: Same 20 minutes as equities, for the same reason, and it is the right answer twice over:
+#: the boundary is satisfied AND IV rank is a percentile over CLOSED sessions, so today's
+#: partial session was never wanted.
+OPTIONS_END_BACKOFF_MINUTES = 20
+
 Right = str
+
+
+def options_end_iso(end: dt.date, *, now: dt.datetime | None = None) -> str:
+    """The ``end`` to send ``/v1beta1/options/bars``, clamped off the recency boundary.
+
+    End-of-day on ``end`` is what the caller means, and it is also — whenever ``end`` is
+    today — permanently inside Alpaca's 15-minute real-time gate. Clamping to
+    ``min(end-of-day, now - OPTIONS_END_BACKOFF_MINUTES)`` keeps the caller's intent
+    whenever ``end`` is in the past (the ordinary case: a 100-day backfill is bounded by
+    its own end date, not by the clock) and yields an answerable window when it is today.
+
+    Extracted as a function rather than inlined so the invariant is testable without an
+    HTTP call: whatever the clock says, the returned ``end`` is never inside the window.
+    """
+    if now is None:
+        now = dt.datetime.now(dt.UTC)
+    end_of_day = dt.datetime.combine(end, dt.time(23, 59, 59), tzinfo=dt.UTC)
+    latest_answerable = now - dt.timedelta(minutes=OPTIONS_END_BACKOFF_MINUTES)
+    clamped = min(end_of_day, latest_answerable)
+    return clamped.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 class IvBackfillError(RuntimeError):
@@ -177,35 +217,37 @@ class IvSource(Protocol):
 
 #: Bounded retry policy for the options-bars route.
 #:
-#: MEASURED behaviour of this plan, 2026-10-03: the route answers ``403 OPRA agreement is
-#: not signed`` in WAVES. A burst of ~10-15 requests succeeds, then every request 403s for
-#: roughly two minutes, then the burst allowance returns. The documented Basic budget is
-#: 200 calls/min; the observed behaviour of THIS route on THIS plan is nothing like it.
-#: The identical request 403s twice, succeeds minutes later with no change on our side, and
-#: 403s again — so the error text is misleading and refusing on the first one would have
-#: abandoned a backfill that was in fact buildable.
+#: **403 is NOT in this set, and that is the correction.** An earlier version of this file
+#: (f2614da) read the 403 as a burst throttle in waves — ~10-15 successes, then a blanket
+#: 403 for ~2 minutes, then the allowance back — and put 403 in here with a 180s doubling
+#: cooldown on the strength of it. That reading was wrong. Root-caused in
+#: ``docs/reviews/2026-10-03-opra-403-investigation.md``: the 403 was a 15-minute recency
+#: gate on ``end`` wearing the text ``OPRA agreement is not signed``, which is not what
+#: that text means. Three measurements refuted the throttle — the rate-limit budget never
+#: dipped (199 → 193 across a 15-call burst), the 403s did not CONSUME rate budget, and
+#: two calls in the same second with ``end`` as the only variable returned 403 and 200
+#: respectively. A throttle cannot do that.
 #:
-#: Two consequences, both implemented below rather than argued about:
+#: So the honest classification is the boring one: a 403 is a refusal of the request as
+#: written, and the request does not change on its own. Retrying it spends a 180s sleep
+#: ladder in front of an answer that is never going to move — that is how two runs each
+#: burned ~9 minutes to arrive at "no". It now fails in one call, which surfaces a genuine
+#: entitlement problem immediately instead of nine minutes later.
 #:
-#: 1. **Pace.** Requests are spaced by :data:`DEFAULT_MIN_INTERVAL_SECONDS`. The throttle
-#:    is per unit time, not per request count, and voluntarily spacing is strictly cheaper
-#:    than discovering the limit by being throttled.
-#: 2. **Cool down properly.** A 403 gets :data:`FORBIDDEN_COOLDOWN_SECONDS` before the next
-#:    attempt, not the 2s a rate limit would want — because recovery was measured at ~2
-#:    minutes and retrying faster just burns attempts.
+#: What survives from f2614da is worth keeping, and is kept because it is cheap rather
+#: than because it was measured here:
 #:
-#: The bounds are the point. An unbounded loop is a storm, and a storm against a throttle
-#: is how a transient 403 becomes a self-inflicted ban. Retries are counted and reported, so
-#: a run that leaned on twenty of them is visibly a worse run than one that needed none.
-RETRYABLE_STATUS = frozenset({403, 429, 500, 502, 503, 504})
+#: 1. **Pace.** Requests are spaced by :data:`DEFAULT_MIN_INTERVAL_SECONDS`. Volunarily
+#:    spacing is strictly cheaper than discovering a limit by being throttled.
+#: 2. **Bounded retries on genuinely transient statuses.** A 429 or a 5xx really can clear
+#:    on its own, so those ramp on the short :data:`DEFAULT_RETRY_BASE_SECONDS`.
+#:
+#: The bound is the point either way. An unbounded loop is a storm, and a storm is how a
+#: transient failure becomes a self-inflicted ban. Retries are counted and reported, so a
+#: run that leaned on twenty of them is visibly a worse run than one that needed none.
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_BASE_SECONDS = 5.0
-#: A 403 gets a LONG cooldown before retrying, because recovery was measured at ~2 minutes
-#: of IDLE and a short ramp just burns attempts — worse, actively retrying may keep the
-#: window from clearing. 180s doubling, three attempts, is 21 minutes of patience for a
-#: chunk, which is why :data:`DEFAULT_LADDER_RANGE_PCT` is tight: fewer chunks is fewer
-#: places to spend it.
-FORBIDDEN_COOLDOWN_SECONDS = 180.0
 DEFAULT_MIN_INTERVAL_SECONDS = 1.2
 
 
@@ -225,7 +267,8 @@ class AlpacaIvSource:
         self.client = client
         self.calls = 0
         self.retries = 0
-        self.cooldowns = 0
+        #: Terminal 403s surfaced (not slept through). See :data:`RETRYABLE_STATUS`.
+        self.refusals = 0
         self.max_retries = max_retries
         self.retry_base_seconds = retry_base_seconds
         self.min_interval_seconds = min_interval_seconds
@@ -265,19 +308,19 @@ class AlpacaIvSource:
             try:
                 return self.client.get_option_daily_bars(symbols, start=start, end=end, **kwargs)
             except AlpacaAPIError as exc:
+                if exc.status == 403:
+                    # Counted, not retried. The count is the operational fact worth
+                    # keeping from the throttle era: "the run hit the wall N times" is
+                    # still worth knowing. What is NOT worth keeping is the sleep ladder
+                    # in front of it.
+                    self.refusals += 1
                 if exc.status not in RETRYABLE_STATUS or attempt == self.max_retries:
                     raise
-                # Exponential backoff, but a 403 starts from a much higher floor because
-                # recovery was measured at ~2 minutes. A 429 or a 5xx gets the short ramp:
-                # those genuinely are transient.
-                base = (
-                    FORBIDDEN_COOLDOWN_SECONDS if exc.status == 403 else self.retry_base_seconds
-                )
-                delay = base * (2**attempt)
-                if exc.status == 403:
-                    self.cooldowns += 1
+                # Plain exponential ramp. Whatever is in RETRYABLE_STATUS is genuinely
+                # transient — a 429 or a 5xx — and there is no longer a second, longer
+                # ramp for a status we no longer consider recoverable.
                 self.retries += 1
-                self._sleep(delay)
+                self._sleep(self.retry_base_seconds * (2**attempt))
         raise AssertionError("retry loop exited without returning or raising")
 
 
@@ -452,10 +495,11 @@ class BackfillReport:
     #: Retries the source needed. Reported because a run that leaned on twenty is a worse
     #: run than one that needed none, even when both produce the same rows.
     retries: int = 0
-    #: How many of those retries were 403 cooldowns — the number that says how hard the
-    #: upstream throttle pushed back, which is an operational fact about the plan and not
-    #: about this code.
-    cooldowns: int = 0
+    #: Terminal 403s that surfaced rather than being slept through. Under the corrected
+    #: diagnosis a 403 is a permanent refusal of the request as written, so a non-zero
+    #: count is a bug in the request (a recency clamp that regressed, or a real entitlement
+    #: change) rather than weather to be waited out.
+    refusals: int = 0
     #: ``(arm, dte_min, dte_max, sessions_planned)`` per band, so an empty band is visible
     #: in the report instead of silently contributing nothing.
     bands_seen: list[tuple[str, int, int, int]] = field(default_factory=list)
@@ -468,8 +512,8 @@ class BackfillReport:
             f"  sessions with >=1 obs   : {self.sessions_written}",
             f"  observations written    : {self.observations_written}",
             f"  api calls               : {self.api_calls}",
-            f"  retries (transient 403/429/5xx): {self.retries}",
-            f"  403 cooldowns           : {self.cooldowns}",
+            f"  retries (transient 429/5xx): {self.retries}",
+            f"  terminal 403 refusals    : {self.refusals}",
             f"  bands (arm, dte, sessions): {self.bands_seen}",
             f"  origins                 : {self.origin_counts}",
             "  tenor key -> observations:",
@@ -737,7 +781,7 @@ def run_backfill(
                 series = source.option_daily_bars(
                     chunk,
                     start=start.isoformat(),
-                    end=end.isoformat() + "T23:59:59Z",
+                    end=options_end_iso(end),
                     page_token=page_token,
                 )
                 report.api_calls += 1
@@ -752,7 +796,7 @@ def run_backfill(
                 )
             )
         report.retries = getattr(source, "retries", 0)
-        report.cooldowns = getattr(source, "cooldowns", 0)
+        report.refusals = getattr(source, "refusals", 0)
 
         for plan in plans:
             observations, session_report = observations_for_session(
@@ -804,6 +848,7 @@ __all__ = [
     "ladder_strikes",
     "occ_symbol",
     "observations_for_session",
+    "options_end_iso",
     "plan_sessions",
     "run_backfill",
     "select_expiry",
