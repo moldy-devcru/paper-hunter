@@ -519,3 +519,317 @@ def test_noshot_index_survives_an_empty_payload() -> None:
         " pop: M.markerPopup(null, []).counterfactual.state}; })()"
     )
     assert out == {"found": 0, "hist": True, "grid": True, "pop": "pending"}
+
+
+# ---------------------------------------------------------------------------
+# 8. calibration (U4): the forming P90, the baseline mean, the histogram threshold
+# ---------------------------------------------------------------------------
+
+# Mirrors the ramp test_ui_api._write_flow_rows writes: 20 sessions with total volume
+# 1500 + 150i, so the interpolated P90 of the whole set is index 0.9*19 = 17.1.
+FLOW = [
+    {
+        "date": f"2026-08-{3 + i:02d}",
+        "underlying": "SPY",
+        "feed": "indicative",
+        "is_delayed": True,
+        "session_spot": 500.0 + i,
+        "deep_otm_threshold_pct": 3.0,
+        "deep_otm_call_volume": 1000.0 + 100 * i,
+        "deep_otm_put_volume": 500.0 + 50 * i,
+        "deep_otm_total_volume": 1500.0 + 150 * i,
+        "call_by_distance": {"1": 400.0 + 10 * i, "2": 600.0 + 90 * i},
+        "put_by_distance": {"1": 200.0 + 5 * i, "2": 300.0 + 45 * i},
+        "baseline_days": min(i, 20),
+    }
+    for i in range(20)
+]
+P90_META = {
+    "status": "defined",
+    "value": 1500.0 + 150 * 17.1,
+    "sessions": 20,
+    "sessions_needed": 20,
+    "method": "linear-interpolation percentile of per-session deep-OTM total volume",
+}
+
+
+def test_percentile_matches_the_servers_linear_interpolation_convention() -> None:
+    """The panel's P90 must be the server's P90. numpy's convention: position
+    (n-1)*q, then interpolate between the two neighbours."""
+    out = run_js(
+        "[M.percentile([10, 20, 30, 40], 0.9), M.percentile([5], 0.9),"
+        " M.percentile([], 0.9)]"
+    )
+    # position 2.7 -> 30*0.3 + 40*0.7
+    assert out[0] == pytest.approx(30 * 0.3 + 40 * 0.7)
+    assert out[1] == 5, "a single observation is its own percentile"
+    assert out[2] is None, "the percentile of nothing is undefined, not zero"
+
+
+def test_percentile_excludes_missing_values_instead_of_zero_filling() -> None:
+    """A session with no recorded volume is not a session with zero volume. Zero-filling
+    would drag the forming P90 down by a fabricated data point."""
+    out = run_js("M.percentile([10, null, 30], 0.5)")
+    assert out == pytest.approx(20.0), "the hole is excluded, not counted as 0"
+
+
+def test_forming_p90_is_recomputed_on_every_session_not_extended_backwards() -> None:
+    """index i is the P90 of everything collected UP TO i. Drawing today's P90 as a line
+    over history it did not see would be the lie this series exists to avoid."""
+    series = run_js("M.percentileSeries([10, 20, 30, 40], 0.9)")
+    assert series[0] == pytest.approx(10.0), "one session: the P90 is that session"
+    assert series[1] == pytest.approx(19.0), "two sessions: interpolate between them"
+    assert series[3] == pytest.approx(30 * 0.3 + 40 * 0.7)
+
+
+def test_baseline_mean_is_a_trailing_window_not_a_full_series_average() -> None:
+    """The 20-session baseline line moves as the window fills; drawing the mean of the
+    whole window on every point would show the future in the past."""
+    out = run_js("M.trailingMean([10, 20, 30], 2)")
+    assert out == pytest.approx([10.0, 15.0, 25.0])
+
+
+def test_flow_volume_model_reports_needs_n_more_and_the_applied_threshold() -> None:
+    out = run_js(
+        "M.flowVolume(" + js(FLOW[:2]) + ", " + js({**P90_META, "status": "forming"}) + ")"
+    )
+    assert out["sessions"] == 2
+    assert out["sessionsNeeded"] == 20
+    assert out["needs"] == 18, "the page must be able to say how many sessions are missing"
+    assert out["complete"] is False
+    assert out["p90Status"] == "forming"
+    assert out["appliedThresholdPct"] == 3.0, "the threshold comes from the store, not a guess"
+    assert out["empty"] is False
+    assert out["holes"] == 0
+
+
+def test_flow_volume_model_is_empty_before_the_soak_runs() -> None:
+    """No rows must render as an honest empty state, never as a zero-height chart."""
+    out = run_js("M.flowVolume([], " + js({"status": "no_data", "value": None}) + ")")
+    assert out["empty"] is True and out["sessions"] == 0
+    assert out["p90Value"] is None and out["baselineMeanLatest"] is None
+    assert out["appliedThresholdPct"] is None
+
+
+def test_flow_volume_model_sorts_sessions_and_keeps_the_holes_visible() -> None:
+    """The endpoint returns DESC (newest first); the line must not run backwards. And a
+    session with a null volume is a hole the model counts, not one it silently drops."""
+    rows = [
+        {"date": "2026-08-04", "deep_otm_total_volume": 20.0},
+        {"date": "2026-08-02", "deep_otm_total_volume": None},
+        {"date": "2026-08-03", "deep_otm_total_volume": 10.0},
+    ]
+    out = run_js("M.flowVolume(" + js(rows) + ", " + js({"sessions_needed": 20}) + ")")
+    assert [point["date"] for point in out["points"]] == [
+        "2026-08-02",
+        "2026-08-03",
+        "2026-08-04",
+    ]
+    assert out["holes"] == 1
+    assert out["measured"] == 2
+
+
+def test_distance_histogram_marks_the_threshold_and_splits_deep_from_near() -> None:
+    """The soak counts a bucket as deep-OTM at or beyond the threshold
+    (executor.soak.threshold_from_buckets); the panel must not restate that differently."""
+    hist = {"call": {"1": 100.0, "2": 200.0, "3": 300.0, "4": 400.0},
+            "put": {"1": 10.0, "2": 20.0, "3": 30.0, "4": 40.0}}
+    out = run_js("M.distanceHistogram(" + js(hist) + ", 3)")
+    assert [bucket["pct"] for bucket in out["buckets"]] == [1, 2, 3, 4]
+    assert out["threshold"] == 3
+    assert out["deepVolume"] == pytest.approx(770.0), "buckets 3 and 4, both sides"
+    assert out["nearVolume"] == pytest.approx(330.0), "buckets 1 and 2, both sides"
+    assert out["max"] == 400.0
+
+
+def test_distance_histogram_defaults_to_the_working_threshold_and_handles_nothing() -> None:
+    out = run_js("M.distanceHistogram({}, undefined)")
+    assert out["empty"] is True
+    assert out["buckets"] == [] and out["max"] == 0
+    assert out["threshold"] == 3.0, (
+        "with no store row to read it from, the working 3% is what gets labelled"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. IV provenance: the seed must never read as the chain
+# ---------------------------------------------------------------------------
+
+IV_ROWS = [
+    # VIX proxy seed: warmup history, is_proxy=1 AND underlying=VIX (both guards agree).
+    {"underlying": "VIX", "as_of": "2026-06-01", "tenor_key": "proxy", "iv": 14.2,
+     "source": "cboe_daily_csv", "is_proxy": 1, "expiry": None, "right": None, "strike": None},
+    {"underlying": "VIX", "as_of": "2026-06-02", "tenor_key": "proxy", "iv": 14.9,
+     "source": "cboe_daily_csv", "is_proxy": 1, "expiry": None, "right": None, "strike": None},
+    {"underlying": "VIX", "as_of": "2026-06-03", "tenor_key": "proxy", "iv": 13.8,
+     "source": "cboe_daily_csv", "is_proxy": 1, "expiry": None, "right": None, "strike": None},
+    # The real chain starts AFTER the seed ends.
+    {"underlying": "SPY", "as_of": "2026-06-04", "tenor_key": "260619|ATM|call", "iv": 15.1,
+     "source": "alpaca_option_chain", "is_proxy": 0, "expiry": "260619", "right": "call",
+     "strike": 500.0},
+    {"underlying": "SPY", "as_of": "2026-06-05", "tenor_key": "260619|ATM|call", "iv": 16.4,
+     "source": "alpaca_option_chain", "is_proxy": 0, "expiry": "260619", "right": "call",
+     "strike": 500.0},
+]
+
+
+def test_iv_series_splits_proxy_from_real_into_separate_segments() -> None:
+    out = run_js("M.ivHistory(" + js(IV_ROWS) + ")")
+    assert len(out["series"]) == 2, "VIX proxy and SPY chain are different series, not one line"
+    # Keyed `underlying|tenor_key` and sorted by that key, so SPY comes before VIX.
+    real = out["series"][0]
+    proxy = out["series"][1]
+    assert proxy["isProxy"] is True and proxy["proxyPoints"] == 3 and proxy["realPoints"] == 0
+    assert real["isProxy"] is False and real["realPoints"] == 2
+    assert [segment["provenance"] for segment in proxy["segments"]] == ["proxy"]
+    assert [segment["provenance"] for segment in real["segments"]] == ["real"]
+
+
+def test_a_provenance_change_mid_series_splits_it_rather_than_drawing_through() -> None:
+    """Same underlying+tenor, one proxy row and then real ones: the seam is a segment
+    break, so the chart cannot interpolate across it."""
+    rows = [
+        {"underlying": "SPY", "as_of": "2026-06-01", "tenor_key": "k", "iv": 14.0, "is_proxy": 1},
+        {"underlying": "SPY", "as_of": "2026-06-02", "tenor_key": "k", "iv": 15.0, "is_proxy": 0},
+        {"underlying": "SPY", "as_of": "2026-06-03", "tenor_key": "k", "iv": 16.0, "is_proxy": 0},
+    ]
+    out = run_js("M.ivHistory(" + js(rows) + ")")
+    segments = out["series"][0]["segments"]
+    assert [segment["provenance"] for segment in segments] == ["proxy", "real"]
+    assert segments[1]["points"] == [
+        {"date": "2026-06-02", "iv": 15.0, "provenance": "real", "source": None},
+        {"date": "2026-06-03", "iv": 16.0, "provenance": "real", "source": None},
+    ]
+
+
+def test_the_two_provenance_guards_disagreeing_is_reported_not_resolved() -> None:
+    """`is_proxy` and the VIX underlying key are two independent guards. A row where they
+    disagree is a real finding (the ratification calls it out explicitly), so it is
+    surfaced rather than silently resolved in favour of either flag."""
+    rows = [
+        {"underlying": "SPY", "as_of": "2026-06-01", "tenor_key": "k", "iv": 14.0, "is_proxy": 0},
+        {"underlying": "VIX", "as_of": "2026-06-02", "tenor_key": "proxy",
+         "iv": 15.0, "is_proxy": 0},
+    ]
+    out = run_js("M.ivHistory(" + js(rows) + ")")
+    assert len(out["guardConflicts"]) == 1
+    conflict = out["guardConflicts"][0]
+    assert conflict["underlying"] == "VIX" and conflict["as_of"] == "2026-06-02"
+    assert "could reach a real SPY rank" in conflict["note"]
+    # A VIX row with is_proxy=0 counts as "real" for warmup purposes and must not inflate
+    # the warmup count — the seam state is what flags it, not a silent exclusion.
+    assert out["seam"]["state"] == "no_proxy_seed"
+
+
+def test_warmup_counts_real_observations_only_and_reports_the_seam() -> None:
+    out = run_js("M.ivHistory(" + js(IV_ROWS) + ")")
+    assert out["realCount"] == 2 and out["proxyCount"] == 3
+    assert out["warm"] is False and out["minObservations"] == 60
+    assert out["seam"] == {
+        "proxyLast": "2026-06-03",
+        "realFirst": "2026-06-04",
+        "state": "ordered",
+    }
+
+
+def test_iv_warmup_flips_when_the_real_series_passes_sixty() -> None:
+    rows = [
+        {"underlying": "SPY", "as_of": f"2026-06-{1 + i:02d}", "tenor_key": "k",
+         "iv": 15.0 + i * 0.01, "is_proxy": 0}
+        for i in range(60)
+    ]
+    out = run_js("M.ivHistory(" + js(rows) + ")")
+    assert out["realCount"] == 60 and out["warm"] is True
+
+
+# ---------------------------------------------------------------------------
+# 10. the window-start checklist
+# ---------------------------------------------------------------------------
+
+
+def checklist_payload(**overrides):
+    payload = {
+        "flow": FLOW[:5],
+        "p90": {**P90_META, "status": "forming", "sessions": 5},
+        "ivrank": {"series": IV_ROWS},
+        "pending_calibrations": ["checklist.t6_flow.deep_otm.calls"],
+        "strategy_version": "1.0.0-draft+abcdef012345",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_window_checklist_states_the_pending_calibrations_as_a_blocker() -> None:
+    out = run_js("M.windowChecklist(" + js(checklist_payload()) + ")")
+    item = next(entry for entry in out["items"] if entry["id"] == "pending_calibrations")
+    assert item["state"] == "blocked"
+    assert "checklist.t6_flow.deep_otm.calls" in item["reason"]
+    assert out["ready"] is False
+    assert "1/" in out["summary"] or "0/" in out["summary"]
+
+
+def test_window_checklist_counts_the_sessions_still_needed() -> None:
+    out = run_js("M.windowChecklist(" + js(checklist_payload()) + ")")
+    n_item = next(entry for entry in out["items"] if entry["id"] == "t6_n_frozen")
+    assert "5/20" in n_item["reason"] and "needs 15 more" in n_item["reason"]
+
+
+def test_the_frozen_threshold_is_never_derived_from_the_store() -> None:
+    """Every stored row agreeing on one number is not evidence that the monthly-review
+    freeze happened: the working 3% is the INPUT to the calibration. So this item never
+    reads 'done' on store evidence alone."""
+    out = run_js("M.windowChecklist(" + js(checklist_payload()) + ")")
+    item = next(entry for entry in out["items"] if entry["id"] == "t6_threshold_frozen")
+    assert item["state"] == "progress"
+    assert "WORKING value" in item["reason"]
+    empty = run_js(
+        "M.windowChecklist("
+        + js(checklist_payload(flow=[], p90={"status": "no_data"}))
+        + ")"
+    )
+    assert next(e for e in empty["items"] if e["id"] == "t6_threshold_frozen")["state"] == "unknown"
+
+
+def test_a_draft_strategy_version_blocks_and_a_frozen_one_does_not() -> None:
+    draft = run_js("M.windowChecklist(" + js(checklist_payload()) + ")")
+    draft_item = next(e for e in draft["items"] if e["id"] == "strategy_version_frozen")
+    assert draft_item["state"] == "blocked"
+    frozen = run_js(
+        "M.windowChecklist("
+        + js(checklist_payload(strategy_version="1.0.0+abcdef012345", pending_calibrations=[]))
+        + ")"
+    )
+    item = next(e for e in frozen["items"] if e["id"] == "strategy_version_frozen")
+    assert item["state"] == "progress"
+
+
+def test_proxy_seed_without_real_observations_says_so_instead_of_claiming_a_seam() -> None:
+    payload = checklist_payload(ivrank={"series": IV_ROWS[:3]})
+    out = run_js("M.windowChecklist(" + js(payload) + ")")
+    seam = next(entry for entry in out["items"] if entry["id"] == "proxy_seam")
+    assert seam["state"] == "blocked"
+    assert "no real chain observation" in seam["reason"]
+    warm = next(entry for entry in out["items"] if entry["id"] == "iv_warmup")
+    assert warm["state"] == "unknown", "no real observations means warmup cannot be assessed"
+
+
+def test_every_checklist_item_carries_a_reason_and_a_known_state() -> None:
+    """A checkbox with no reason is a vibe. Every item states WHY it is what it is."""
+    out = run_js("M.windowChecklist(" + js(checklist_payload()) + ")")
+    states = {"done", "blocked", "progress", "todo", "unknown"}
+    assert out["items"], "the checklist rendered nothing"
+    for item in out["items"]:
+        assert item["state"] in states, f"{item['id']} has state {item['state']!r}"
+        assert item["label"] and len(item["reason"]) > 20, f"{item['id']} has no usable reason"
+
+
+def test_checklist_survives_the_pre_window_empty_payload() -> None:
+    out = run_js(
+        "M.windowChecklist({flow: [], p90: {status: 'no_data', value: null},"
+        " ivrank: {series: []}, pending_calibrations: ['rulebook unreadable: boom'],"
+        " strategy_version: null})"
+    )
+    baseline = next(entry for entry in out["items"] if entry["id"] == "baseline_accumulating")
+    assert baseline["state"] == "blocked"
+    assert all(item["state"] in {"done", "blocked", "progress", "todo", "unknown"}
+               for item in out["items"])

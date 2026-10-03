@@ -1,5 +1,5 @@
 // paper-hunter terminal — Phase U2 frontend, extended by U3 with the journal-facing
-// pages (Arms, Ledger, Hunt) and the marker popups.
+// pages (Arms, Ledger, Hunt) and the marker popups, and by U4 with the Calibration page.
 //
 // U3 split the frontend into ES modules rather than growing this file: the pages are
 // independent (each owns its own poll and its own teardown) and the parts worth testing
@@ -33,6 +33,10 @@
 import { startArms, stopArms } from "./arms.js";
 import { wireLedger, startLedger, stopLedger } from "./ledger.js";
 import { startHunt, stopHunt, wireHunt } from "./hunt.js";
+import {
+  startCalibration,
+  stopCalibration,
+} from "./calibration.js";
 import { getJSON, getAll } from "./net.js";
 import { indexNoshots, noshotsForDecision } from "./model.js";
 import { openMarkerPopup, closeMarkerPopup, wireMarkerPopupDismissal } from "./markers.js";
@@ -80,17 +84,12 @@ const OVERLAY_COLOR = {
   macd_histogram: "#7f8c9b",
 };
 
-// # INTERPRETATION — routing. `null` means "built"; an object means "not built, say so
-// honestly". Calibration is the only page still pending (U4); Arms, Ledger and Hunt
-// became real pages in U3 and are started/stopped on entry so their polls stop when the
-// operator is looking at a different tab.
-const PAGES = {
-  terminal: null,
-  arms: null,
-  ledger: null,
-  hunt: null,
-  calibration: { phase: "U4", body: "Flow baselines, threshold-distance histogram, IV-rank history, pending calibrations. The endpoints are live; the page is not built." },
-};
+// # INTERPRETATION — routing. Every spec'd page is built (U2 terminal, U3 arms/ledger/
+// hunt, U4 calibration), so PAGES is a list of page names with no phase information left
+// to render. An unknown hash falls back to the terminal rather than to a dead end, and
+// the phase/placeholder markup is gone from index.html with it — a "not built yet" badge
+// that can never appear is a place for a stale claim to live.
+const PAGES = ["terminal", "arms", "ledger", "hunt", "calibration"];
 
 const el = (id) => document.getElementById(id);
 const state = {
@@ -782,32 +781,23 @@ function toggleIndicator(name) {
 
 function route() {
   const hash = (location.hash || "#/terminal").replace(/^#\/?/, "");
-  const page = PAGES[hash] !== undefined ? hash : "terminal";
+  const page = PAGES.includes(hash) ? hash : "terminal";
   state.page = page;
   for (const link of document.querySelectorAll("#tabbar a")) {
     link.classList.toggle("active", link.dataset.page === page);
   }
-  const terminal = el("page-terminal");
-  const placeholder = el("page-placeholder");
   // Each page is started on entry and stopped on exit, so a hidden page is not polling
   // the journal behind the operator's back — the same reason the terminal pauses when
   // the tab is hidden.
-  if (page !== "terminal") {
-    stopArms();
-    stopLedger();
-    stopHunt();
-  }
+  stopArms();
+  stopLedger();
+  stopHunt();
+  stopCalibration();
+  const terminal = el("page-terminal");
   terminal.hidden = page !== "terminal";
-  for (const name of ["arms", "ledger", "hunt"]) {
+  for (const name of ["arms", "ledger", "hunt", "calibration"]) {
     const node = el(`page-${name}`);
     if (node) node.hidden = name !== page;
-  }
-  placeholder.hidden = PAGES[page] === null;
-  if (PAGES[page] !== null) {
-    el("ph-title").textContent = page;
-    el("ph-phase").textContent = PAGES[page].phase;
-    el("ph-body").textContent = PAGES[page].body;
-    return;
   }
   if (page === "terminal") {
     if (!state.chart) buildChart();
@@ -819,6 +809,8 @@ function route() {
     startLedger();
   } else if (page === "hunt") {
     startHunt();
+  } else if (page === "calibration") {
+    startCalibration();
   }
 }
 

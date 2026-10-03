@@ -618,7 +618,7 @@ def app_script() -> FileResponse:
     return _static_file(APP_SCRIPT, "text/javascript")
 
 
-#: The U3 ES modules, each served by its own explicit GET route. A loop rather than
+#: The U3/U4 ES modules, each served by its own explicit GET route. A loop rather than
 #: seven copy-pasted functions: the route list is the security posture, so it is one
 #: list next to the ``app_script`` docstring that explains the rule, not seven places
 #: to forget. Every entry is a named file with a literal path — no path parameter, no
@@ -633,6 +633,7 @@ STATIC_MODULES: tuple[tuple[str, Path], ...] = (
     ("/arms.js", STATIC_DIR / "arms.js"),
     ("/ledger.js", STATIC_DIR / "ledger.js"),
     ("/hunt.js", STATIC_DIR / "hunt.js"),
+    ("/calibration.js", STATIC_DIR / "calibration.js"),
 )
 
 

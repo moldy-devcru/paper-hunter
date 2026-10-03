@@ -1,0 +1,86 @@
+# paper-hunter UI — read-only research terminal on the LAN
+#
+# The terminal is a WINDOW, not a door: uvicorn serving FastAPI, whose every database is
+# opened mode=ro and whose route table contains no non-GET method. This unit is LAN-only
+# by binding rule and by policy — 0.0.0.0 covers the LAN interfaces (and any other
+# interface this host happens to have, which is why the firewall matters; see
+# docs/ui-runbook.md). There is no auth in front of it, so exposing it publicly means
+# putting auth there FIRST, not after.
+#
+# Install (as the deployer, on the host that holds /opt/paper-hunter):
+#   sudo cp scripts/paper-hunter-ui.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now paper-hunter-ui.service
+#
+# Check it is serving, from the SAME host:
+#   curl -s http://127.0.0.1:8478/api/health | head -c 400
+#   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8478/
+#
+# Check it is reachable from a SECOND LAN host (the real smoke test — the bind and the
+# firewall both have to be right for this to pass):
+#   curl -s http://<LAN-IP>:8478/api/health | head -c 200
+#   find the LAN IP with:  hostname -I | awk '{print $1}'
+#
+# Restart after a code change (WorkingDirectory is a checkout, so the change is already
+# on disk — this only re-execs the server):
+#   sudo systemctl restart paper-hunter-ui.service
+#   journalctl -u paper-hunter-ui.service -n 20
+#
+# NOT NEEDED for the cache-only default: the server starts and serves whatever is already
+# in data/barcache.db with no credentials at all (ui.api.UISettings.allow_fetch defaults
+# to False, and ui.barcache.open_cache only builds a live client when credentials exist).
+# The EnvironmentFile below is therefore OPTIONAL and prefixed with `-`: it is here so
+# that a future gap-only fetch has somewhere to read paper credentials from, NOT because
+# the read-only view needs them. The variables it would carry are the same two the soak
+# uses: ALPACA_PAPER_KEY / ALPACA_PAPER_SECRET (executor.alpaca_client.KEY_ENV/SECRET_ENV).
+# Never put live keys here — paper only, mode 0640 root:paper-hunter, same as soak.env.
+
+[Unit]
+Description=paper-hunter read-only research terminal (LAN :8478)
+Documentation=file:/opt/paper-hunter/docs/ui-runbook.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/paper-hunter
+
+# The repo virtualenv, same one the soak uses. uvicorn is imported only here — the module
+# refuses to start without it rather than falling back to a system package that may be a
+# different version than the tests ran against.
+EnvironmentFile=-/etc/paper-hunter/soak.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# No reload in production: a reload on every edit is a research tool that changes under
+# the operator while they are reading a number off it.
+ExecStart=/opt/paper-hunter/.venv/bin/python -m uvicorn ui.api:app --host 0.0.0.0 --port 8478 --no-server-header
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Same posture as soak.service, for the same reason: this process has no reason to reach
+# the rulebook, the code, or anything but data/, and a bug in a read-only view should not
+# be able to edit the files the experiment's integrity rests on.
+User=paper-hunter
+Group=paper-hunter
+ProtectSystem=strict
+# The ONE writable path: the bar cache. It is a cache of a public feed, explicitly
+# outside the append-only zone, and it rebuilds by re-fetching (docs/ui-runbook.md).
+ReadWritePaths=/opt/paper-hunter/data
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+# A LAN research tool: no systemd hardening that would break a laptop on the same wifi,
+# but the cheap ones are free.
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=paper-hunter-ui
+
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

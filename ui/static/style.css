@@ -498,3 +498,71 @@ footer.ro {
   font-size: 10px;
   letter-spacing: 0.04em;
 }
+
+/* ---- calibration ------------------------------------------------------ */
+
+.calib-chart { height: 220px; margin: 8px 0 4px; }
+#calib-iv-chart { height: 200px; }
+
+.calib-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 6px 0 2px;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.calib-facts > div { display: flex; gap: 6px; align-items: baseline; }
+.calib-facts b { color: var(--fg); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* Distance histogram: paired call/put bars per 1pp bucket with the threshold marked.
+   Plain divs rather than a chart — the threshold is an x-axis quantity, and a price line
+   in a charting library is horizontal, so marking it there would mark the wrong axis. */
+.dist {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 160px;
+  padding: 6px 2px 0;
+  border-bottom: 1px solid var(--line-bright);
+}
+.dbar {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  height: 100%;
+  position: relative;
+}
+.dpair { display: flex; flex-direction: column; gap: 2px; width: 100%; }
+.dpair i { display: block; min-height: 2px; }
+.dbar.deep .dpair { opacity: 1; }
+.dbar.near .dpair { opacity: 0.55; }
+.dmark {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--bad);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+table.chk-table { max-width: 60rem; }
+tr.chk td { vertical-align: top; }
+tr.chk .glyph { width: 2.2rem; text-align: center; font-size: 13px; }
+tr.chk.blocked .glyph { filter: saturate(1.6); }
+tr.chk.progress .glyph { opacity: 0.8; }
+tr.chk.todo .glyph, tr.chk.unknown .glyph { opacity: 0.55; }
+.chk-reason { color: var(--fg-dim); font-size: 11px; line-height: 1.45; margin-top: 2px; max-width: 52rem; }
+tr.chk .state {
+  color: var(--fg-faint);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: right;
+  white-space: nowrap;
+}
+tr.chk.done .state { color: var(--ok); }
+tr.chk.blocked .state { color: var(--bad); }
+tr.chk.progress .state { color: var(--warn); }

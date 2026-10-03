@@ -467,5 +467,425 @@ export function pageInfo(payload) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// 6. calibration (U4) — the T6 story in pictures
+// ---------------------------------------------------------------------------
+
+/** The soak's working deep-OTM threshold, in percentage points from spot.
+ *
+ * # INTERPRETATION: this is a MIRROR of `executor.soak.DEFAULT_DEEP_OTM_PCT`, and
+ * deliberately not a second source of truth: it exists only to draw the threshold rule
+ * on the distance histogram when `flow_baseline` holds no rows yet (nothing to read it
+ * from). As soon as the journal has a session, the drawn value comes from that row's
+ * own `deep_otm_threshold_pct` — the number the soak actually applied. This constant is
+ * the working input to calibration, never a frozen threshold; the ratification freezes
+ * it at the first monthly review with the distribution beside it. */
+export const WORKING_DEEP_OTM_PCT = 3;
+
+/** T6's frozen N when the store has not recorded what the rulebook asked for. Mirrors
+ * the soak's `baseline_lookback_days` default of 20. */
+export const BASELINE_SESSIONS = 20;
+
+/** `executor.iv_rank.MIN_OBSERVATIONS` — below this T5 is PENDING and blocks. Mirrored
+ * for the same reason as the threshold above: the page says "warmup not reached", not
+ * "the number looks fine". */
+export const MIN_IV_OBSERVATIONS = 60;
+
+/**
+ * Linear-interpolation percentile, mirroring `ui.api._percentile`.
+ *
+ * The same convention as the server on purpose: a panel whose P90 line disagreed with
+ * the P90 in the API response by a visible amount would be a second definition of the
+ * number T6's threshold is frozen from. (The OTHER percentile convention in this repo —
+ * `executor.indicators.bandwidth_percentile`'s strict-rank rule — is the right one for
+ * scoring a value against a band, which is not what this is.)
+ *
+ * Missing values are EXCLUDED, not zero-filled: a session with no recorded volume is
+ * not a session with zero volume, and substituting 0 would drag the forming P90 down.
+ */
+export function percentile(values, q) {
+  const list = (values || []).filter(isNum);
+  if (list.length === 0) return null;
+  const ordered = [...list].sort((a, b) => a - b);
+  if (ordered.length === 1) return ordered[0];
+  const position = (ordered.length - 1) * q;
+  const low = Math.floor(position);
+  const high = Math.min(low + 1, ordered.length - 1);
+  return ordered[low] * (1 - (position - low)) + ordered[high] * (position - low);
+}
+
+/**
+ * The forming percentile line: index `i` is the percentile of everything measured up
+ * to and including `i`. This is what "the P90 is forming" means — a number that moves
+ * every session until the baseline is complete — so it has to be drawn as a series, not
+ * as today's value extended backwards over history it did not see.
+ */
+export function percentileSeries(values, q = 0.9) {
+  const out = [];
+  const seen = [];
+  for (const value of values || []) {
+    if (isNum(value)) seen.push(value);
+    out.push(seen.length ? percentile(seen, q) : null);
+  }
+  return out;
+}
+
+/**
+ * Trailing window mean, index `i` over the last `window` values up to `i`.
+ *
+ * The "20-session baseline mean" line. It is drawn over every session including the
+ * early ones, where the window is not full yet — so the model also returns `fullFrom`,
+ * the index at which the window first holds `window` samples, and the page says which
+ * part of the line is a short-window mean rather than a 20-session one.
+ */
+export function trailingMean(values, window = BASELINE_SESSIONS) {
+  const out = [];
+  for (let i = 0; i < (values || []).length; i += 1) {
+    const slice = (values || [])
+      .slice(Math.max(0, i - window + 1), i + 1)
+      .filter(isNum);
+    out.push(slice.length ? slice.reduce((a, b) => a + b, 0) / slice.length : null);
+  }
+  return out;
+}
+
+/**
+ * `/api/calibration`'s `flow` rows -> the per-session volume chart model.
+ *
+ * Calls and puts are separate series so the operator can see which side the deep-OTM
+ * print was on; the baseline mean and the forming P90 ride on top as lines. `p90Status`
+ * is the server's own verdict (`no_data` / `forming` / `defined`) rather than something
+ * re-derived here, and `needs` is the honest "needs N more sessions" count — with one
+ * or two rows on screen the page must say the P90 is not a threshold yet.
+ */
+export function flowVolume(flow, p90Meta, { window = BASELINE_SESSIONS } = {}) {
+  const rows = [...(flow || [])].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const meta = p90Meta || {};
+  const sessionsNeeded = isNum(meta.sessions_needed) ? meta.sessions_needed : window;
+  const totals = rows.map((row) => row.deep_otm_total_volume);
+  const mean = trailingMean(totals, sessionsNeeded);
+  const forming = percentileSeries(totals, 0.9);
+  const points = rows.map((row, i) => ({
+    date: row.date,
+    call: isNum(row.deep_otm_call_volume) ? row.deep_otm_call_volume : null,
+    put: isNum(row.deep_otm_put_volume) ? row.deep_otm_put_volume : null,
+    total: isNum(row.deep_otm_total_volume) ? row.deep_otm_total_volume : null,
+    baselineMean: mean[i],
+    formingP90: forming[i],
+    thresholdPct: isNum(row.deep_otm_threshold_pct) ? row.deep_otm_threshold_pct : null,
+    sessionSpot: isNum(row.session_spot) ? row.session_spot : null,
+    baselineDays: isNum(row.baseline_days) ? row.baseline_days : null,
+    isDelayed: row.is_delayed === true || row.is_delayed === 1,
+    feed: row.feed || null,
+  }));
+  const measured = totals.filter(isNum).length;
+  return {
+    points,
+    sessions: rows.length,
+    sessionsNeeded,
+    needs: Math.max(0, sessionsNeeded - rows.length),
+    complete: rows.length >= sessionsNeeded,
+    measured,
+    // A session with no recorded volume is a hole, and the model counts it rather than
+    // quietly shortening the series the P90 was computed from.
+    holes: rows.length - measured,
+    fullFrom: Math.max(0, window - 1),
+    p90Status: meta.status || (rows.length ? "forming" : "no_data"),
+    p90Value: isNum(meta.value) ? meta.value : forming[forming.length - 1] ?? null,
+    p90Method: meta.method || "linear-interpolation percentile of per-session deep-OTM total volume",
+    baselineMeanLatest: mean[mean.length - 1] ?? null,
+    // The threshold the soak actually applied, from the store. Null before the first row.
+    appliedThresholdPct: (() => {
+      const seen = points.map((p) => p.thresholdPct).filter(isNum);
+      return seen.length ? seen[seen.length - 1] : null;
+    })(),
+    empty: rows.length === 0,
+  };
+}
+
+/**
+ * The 1pp distance buckets the soak stores -> paired call/put bars with the working
+ * threshold marked.
+ *
+ * `deepVolume` is the soak's own definition of "deep": the sum of every bucket at or
+ * beyond the threshold (`executor.soak.threshold_from_buckets`), restated here so the
+ * page can show the split rather than one total. `buckets` is EMPTY when the journal
+ * has no flow rows, and the renderer then says so — it does not draw 0-height bars that
+ * look like a flat measurement.
+ */
+export function distanceHistogram(byDistance, thresholdPct = WORKING_DEEP_OTM_PCT) {
+  const merged = new Map();
+  for (const side of ["call", "put"]) {
+    for (const [key, value] of Object.entries((byDistance && byDistance[side]) || {})) {
+      const pct = Number(key);
+      if (!Number.isFinite(pct)) continue;
+      if (!merged.has(pct)) merged.set(pct, { pct, call: 0, put: 0 });
+      merged.get(pct)[side] = merged.get(pct)[side] + (Number(value) || 0);
+    }
+  }
+  const buckets = [...merged.values()].sort((a, b) => a.pct - b.pct);
+  const threshold = isNum(thresholdPct) ? thresholdPct : WORKING_DEEP_OTM_PCT;
+  const sum = (rows, pick) => rows.reduce((acc, row) => acc + row[pick], 0);
+  const deep = buckets.filter((row) => row.pct >= threshold);
+  const near = buckets.filter((row) => row.pct < threshold);
+  return {
+    buckets,
+    threshold,
+    max: buckets.reduce((peak, row) => Math.max(peak, row.call, row.put), 0),
+    callTotal: sum(buckets, "call"),
+    putTotal: sum(buckets, "put"),
+    deepVolume: sum(deep, "call") + sum(deep, "put"),
+    nearVolume: sum(near, "call") + sum(near, "put"),
+    empty: buckets.length === 0,
+    note:
+      "summed across every stored session, not a per-session average — a session with a " +
+      "large print counts once per session it printed in",
+  };
+}
+
+/**
+ * IV observations -> per-tenor series, split into proxy and real SEGMENTS.
+ *
+ * Provenance honesty is the whole point of this panel, so the split is structural: a
+ * `VIX` proxy seed row and a real SPY chain row are never one continuous line. Two
+ * independent guards exist upstream (`is_proxy` and the `VIX` underlying key, per the
+ * ratification's VIX-proxy reconciliation item), and `guardConflicts` reports any row
+ * where those two guards DISAGREE — that is a real finding, so it is surfaced rather
+ * than silently resolved in favour of either flag.
+ *
+ * Tenors are keyed `underlying|tenor_key` because the proxy seed has no expiry, right
+ * or strike and therefore no meaningful tenor identity of its own; collapsing it into a
+ * SPY tenor would be exactly the papering-over the ratification forbids.
+ */
+export function ivHistory(rows, { minObservations = MIN_IV_OBSERVATIONS } = {}) {
+  const list = rows || [];
+  const byKey = new Map();
+  const guardConflicts = [];
+  for (const row of list) {
+    if (!row || !row.as_of || !isNum(row.iv)) continue;
+    const proxyFlag = Number(row.is_proxy) === 1;
+    const proxyKey = String(row.underlying || "").toUpperCase() === "VIX";
+    if (proxyFlag !== proxyKey) {
+      guardConflicts.push({
+        underlying: row.underlying,
+        as_of: row.as_of,
+        is_proxy: proxyFlag,
+        note: proxyFlag
+          ? "is_proxy=1 on a non-VIX underlying"
+          : "VIX underlying without is_proxy=1 — could reach a real SPY rank",
+      });
+    }
+    const key = `${row.underlying}|${row.tenor_key}`;
+    if (!byKey.has(key)) {
+      byKey.set(key, { key, underlying: row.underlying, tenorKey: row.tenor_key, points: [] });
+    }
+    byKey.get(key).points.push({
+      date: row.as_of,
+      iv: row.iv,
+      provenance: proxyFlag ? "proxy" : "real",
+      source: row.source || null,
+    });
+  }
+  const series = [...byKey.values()]
+    .map((entry) => {
+      const points = entry.points.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+      const segments = [];
+      for (const point of points) {
+        const tail = segments[segments.length - 1];
+        if (tail && tail.provenance === point.provenance) tail.points.push(point);
+        else segments.push({ provenance: point.provenance, points: [point] });
+      }
+      return {
+        ...entry,
+        points,
+        segments,
+        realPoints: points.filter((p) => p.provenance === "real").length,
+        proxyPoints: points.filter((p) => p.provenance === "proxy").length,
+        latest: points.length ? points[points.length - 1] : null,
+        first: points.length ? points[0].date : null,
+        last: points.length ? points[points.length - 1].date : null,
+        isProxy: points.every((p) => p.provenance === "proxy"),
+      };
+    })
+    .sort((a, b) => a.key.localeCompare(b.key));
+  const real = series.flatMap((entry) => entry.points).filter((p) => p.provenance === "real");
+  const proxy = series.flatMap((entry) => entry.points).filter((p) => p.provenance === "proxy");
+  const proxyLast = proxy.length ? proxy[proxy.length - 1].date : null;
+  const realFirst = real.length ? real[0].date : null;
+  return {
+    series,
+    guardConflicts,
+    realCount: real.length,
+    proxyCount: proxy.length,
+    warm: real.length >= minObservations,
+    minObservations,
+    seam: {
+      proxyLast,
+      realFirst,
+      // "The seam is visible in the store" needs both halves AND a real series that
+      // actually begins after the proxy seed ends. Overlapping or reversed is a finding.
+      state:
+        !proxy.length ? "no_proxy_seed"
+          : !real.length
+            ? "no_real_observations"
+            : realFirst > proxyLast
+              ? "ordered"
+              : "overlapped_or_reversed",
+    },
+    empty: series.length === 0,
+  };
+}
+
+/**
+ * The window-start checklist, rendered from what `/api/calibration` can actually see.
+ *
+ * `state` is one of: `done` | `blocked` | `progress` | `todo` | `unknown`.
+ *  - `done`    — the store proves it.
+ *  - `blocked` — the store proves it is NOT true yet.
+ *  - `progress`— partway, with the count that remains stated.
+ *  - `todo`    — a fact this server cannot see (a human or a code fact); never ticked.
+ *  - `unknown` — not enough data to say anything at all.
+ *
+ * # INTERPRETATION: no item is derived from a place the checklist does not exist. The
+ * T6 threshold freeze is `progress` even when every stored row agrees on one value,
+ * because the working threshold is the INPUT to the calibration and a store of
+ * identical numbers is not evidence of a freeze; the reconciliation items that need a
+ * human read are `todo`, and a panel that could not be derived is `unknown` rather than
+ * a guess. A checklist that renders eight green ticks from six numbers is worse than no
+ * checklist, because it would be read as clearance.
+ */
+export function windowChecklist(payload) {
+  const data = payload || {};
+  const flow = flowVolume(data.flow, data.p90);
+  const iv = ivHistory((data.ivrank || {}).series || []);
+  const pending = data.pending_calibrations || [];
+  const strategyVersion = data.strategy_version || null;
+  const items = [];
+
+  items.push({
+    id: "pending_calibrations",
+    label: "`pending_calibrations` is empty",
+    state: pending.length ? "blocked" : "done",
+    reason: pending.length
+      ? `${pending.length} still pending: ${pending.join(" · ")}`
+      : "the rulebook reports no calibration-pending values",
+  });
+
+  items.push({
+    id: "t6_threshold_frozen",
+    label: "T6 deep-OTM thresholds frozen",
+    state: flow.appliedThresholdPct == null ? "unknown" : "progress",
+    reason:
+      flow.appliedThresholdPct == null
+        ? "no flow_baseline session recorded yet, so the threshold the soak applied is " +
+          "not in the store at all"
+        : `the soak is running at ${flow.appliedThresholdPct}pp — the WORKING value that is ` +
+          "the input to the calibration, not a frozen one. A store of identical numbers " +
+          "is not evidence that the monthly-review freeze happened.",
+  });
+
+  items.push({
+    id: "t6_n_frozen",
+    label: "T6 N frozen from the ≥20-session baseline",
+    state: flow.empty ? "unknown" : "progress",
+    reason: flow.empty
+      ? "no flow_baseline rows — the soak writes one per session and none has run"
+      : flow.complete
+        ? `${flow.sessions} session(s) collected against N=${flow.sessionsNeeded}; the ` +
+          "baseline is long enough to calibrate from, and the frozen value is still a " +
+          "review decision"
+        : `${flow.sessions}/${flow.sessionsNeeded} sessions — needs ${flow.needs} more`,
+  });
+
+  items.push({
+    id: "baseline_accumulating",
+    label: "Baseline actually accumulating",
+    state: flow.empty ? "blocked" : "progress",
+    reason: flow.empty
+      ? "no session rows: either the timer has not fired or the soak is failing"
+      : `${flow.sessions} session(s) from ${flow.points[0].date} to ` +
+        `${flow.points[flow.points.length - 1].date}` +
+        (flow.holes ? ` · ${flow.holes} session(s) missing a volume` : "") +
+        (flow.fullFrom > 0 && flow.sessions <= flow.fullFrom
+          ? ` · the baseline mean is still a short-window mean until session ${flow.fullFrom + 1}`
+          : ""),
+  });
+
+  items.push({
+    id: "proxy_seam",
+    label: "VIX-proxy reconciliation — seam visible in the store",
+    state:
+      iv.seam.state === "ordered"
+        ? "progress"
+        : iv.seam.state === "no_proxy_seed"
+          ? "todo"
+          : "blocked",
+    reason:
+      iv.seam.state === "ordered"
+        ? `proxy seed ends ${iv.seam.proxyLast}, real series begins ${iv.seam.realFirst} — ` +
+          "the seam is visible. Still needs a human to confirm no proxy row can reach a " +
+          "real SPY rank."
+        : iv.seam.state === "no_proxy_seed"
+          ? "no is_proxy rows in the store: nothing to reconcile, and the VIX warmup " +
+            "history has not been seeded either"
+          : iv.seam.state === "no_real_observations"
+            ? `proxy seed ends ${iv.seam.proxyLast} but no real chain observation exists yet, ` +
+              "so there is no seam to see"
+            : `real series begins ${iv.seam.realFirst}, on or before the proxy seed ends ` +
+              `(${iv.seam.proxyLast}) — overlapping or reversed provenance`,
+  });
+
+  items.push({
+    id: "iv_warmup",
+    label: `IV warmup reached (${iv.minObservations} observations)`,
+    state: iv.realCount === 0 ? "unknown" : iv.warm ? "progress" : "blocked",
+    reason: iv.realCount === 0
+      ? "no real chain observations in the store — warmup cannot be assessed"
+      : iv.warm
+        ? `${iv.realCount} real observation(s), at or past MIN_OBSERVATIONS=${iv.minObservations}`
+        : `${iv.realCount}/${iv.minObservations} real observation(s) — T5 reports PENDING and ` +
+          `blocks until this is reached` +
+          (iv.proxyCount ? ` (${iv.proxyCount} proxy seed row(s) do not count)` : ""),
+  });
+
+  items.push({
+    id: "iv_tenor_choice",
+    label: "Which tenor T5 reads is settled",
+    state: "todo",
+    reason:
+      "both tenor-key families are stored and neither is marked as the one T5 reads; that " +
+      "is a code fact (executor/iv_rank.py), not something this store can answer",
+  });
+
+  items.push({
+    id: "strategy_version_frozen",
+    label: "Strategy version bumped and frozen",
+    state: !strategyVersion ? "unknown" : /draft/i.test(strategyVersion) ? "blocked" : "progress",
+    reason: !strategyVersion
+      ? "the rulebook did not load, so there is no version to check"
+      : /draft/i.test(strategyVersion)
+        ? `strategy_version is "${strategyVersion}" — a draft rulebook running a ` +
+          "pre-registered experiment is a contradiction"
+        : `strategy_version is "${strategyVersion}" — frozen at this content hash unless the ` +
+          "rulebook changes, which re-stamps every row after it",
+  });
+
+  const counts = items.reduce((acc, item) => {
+    acc[item.state] = (acc[item.state] || 0) + 1;
+    return acc;
+  }, {});
+  return {
+    items,
+    counts,
+    ready: counts.done === items.length,
+    // Deliberately NOT derived from counts.done: several items are `todo`/`unknown` by
+    // construction, so this is a statement about the panel, not a verdict on the window.
+    summary:
+      `${counts.done || 0}/${items.length} provable from the store · ` +
+      `${counts.blocked || 0} contradicted · ${counts.progress || 0} in progress · ` +
+      `${(counts.todo || 0) + (counts.unknown || 0)} not assessable here`,
+  };
+}
+
 /** Escape helper re-export so page modules have one import for text handling. */
 export { esc, usd, pct, truncate, DASH };

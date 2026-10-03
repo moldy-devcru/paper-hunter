@@ -177,15 +177,33 @@
         </footer>
       </section>
 
-      <!-- ================= U4 placeholder ================= -->
-      <section id="page-placeholder" class="page" hidden>
-        <div class="placeholder">
-          <h2 id="ph-title">page</h2>
-          <span class="phase" id="ph-phase">pending</span>
-          <p id="ph-body">not built yet.</p>
+      <!-- ================= calibration ================= -->
+      <section id="page-calibration" class="page" hidden>
+        <header class="chrome">
+          <span class="symbol">CALIBRATION</span>
+          <div class="group">
+            <span class="stamp">T6 — flow baseline, threshold distance, IV provenance, window-start checklist</span>
+          </div>
+          <span class="spacer"></span>
+          <span class="stamp" id="calib-stamp">calibration · not loaded</span>
+        </header>
+        <div class="scroll">
+          <h3 class="panel">per-session deep-OTM volume · baseline mean · forming P90</h3>
+          <div id="calib-flow"><div class="empty">loading flow baselines…</div></div>
+          <h3 class="panel">threshold-distance histogram (1pp buckets)</h3>
+          <div id="calib-distance"><div class="empty">loading distance buckets…</div></div>
+          <h3 class="panel">IV history — proxy seed vs real chain</h3>
+          <div id="calib-iv"><div class="empty">loading IV history…</div></div>
+          <h3 class="panel">window-start checklist (read-only)</h3>
+          <div id="calib-checklist"><div class="empty">loading checklist…</div></div>
         </div>
+        <footer class="ro">
+          forming P90 is not a threshold until N sessions exist — the page says how many are
+          missing, and nothing here can be ticked off by looking at it.
+        </footer>
       </section>
-    </div>
+
+      </div>
 
     <script type="module" src="app.js"></script>
   </body>

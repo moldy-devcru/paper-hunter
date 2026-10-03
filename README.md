@@ -44,9 +44,12 @@ Brief drafted, awaiting operator ratification of thresholds and open decisions. 
 
 ```
 docs/brief.md      — the pre-registered experiment spec
+docs/ui-design.md  — the read-only terminal's design spec (5 pages, GET-only)
+docs/ui-runbook.md — how to reach/restart the terminal, and how it stays read-only
 executor/          — deterministic checklist evaluator + Alpaca paper orders
 journal/           — append-only decision ledger + NO-SHOT log
 analysis/          — weekly rollups, counterfactual scoring
+ui/                — FastAPI server + static SPA (LAN only, no auth)
 ```
 
 ---

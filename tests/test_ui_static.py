@@ -241,19 +241,27 @@ def test_every_page_has_a_tab_and_a_route(page: str) -> None:
     html = read(INDEX_HTML)
     assert f'href="#/{page}"' in html
     assert f'data-page="{page}"' in html
-    assert f"  {page}:" in read(APP_JS)
+    assert f'"page-{page}"' in html or page == "terminal", f"{page} has no section"
 
 
-def test_only_the_u4_page_is_still_a_placeholder() -> None:
-    """Arms, Ledger and Hunt became real pages in U3; Calibration is the last one. A page
-    that regresses to a placeholder must fail here rather than showing a phase badge."""
+def test_every_spec_page_is_built_and_the_placeholder_markup_is_gone() -> None:
+    """U2 built the terminal, U3 arms/ledger/hunt, U4 calibration. All five are real pages
+    now, so PAGES is a plain list and the phase/placeholder markup has been deleted with
+    it: a "not built yet" badge that can never render is a place for a stale claim to
+    live, and the calibration page must fail HERE if it ever regresses to one."""
     body = read(APP_JS)
-    for page in ("arms", "ledger", "hunt"):
-        assert re.search(rf"^  {page}: null,$", body, re.MULTILINE), f"{page} is not built"
-    block = re.search(r"  calibration: \{(.*?)\n  \};", body, re.DOTALL)
-    assert block, "no PAGES entry for calibration"
-    assert 'phase: "U4"' in block.group(1)
-    assert re.search(r'body: "[^"]+"', block.group(1)), "calibration has no explanation"
+    match = re.search(r"const PAGES = \[(.*?)\];", body, re.DOTALL)
+    assert match, "PAGES is no longer the page list"
+    assert tuple(re.findall(r'"([^"]+)"', match.group(1))) == PAGES
+    for page in PAGES:
+        assert f"page === \"{page}\"" in body, f"{page} has no branch in route()"
+        assert f'id="page-{page}"' in read(INDEX_HTML), f"{page} has no section"
+    html = read(INDEX_HTML)
+    assert "page-placeholder" not in html and "ph-body" not in html
+    assert 'phase: "U4"' not in body, "the last placeholder claim must not survive U4"
+    assert "page-placeholder" not in body and "ph-title" not in body, (
+        "route() must not carry a dead placeholder branch"
+    )
 
 
 @pytest.mark.parametrize("name", TOGGLES)
@@ -466,3 +474,126 @@ def test_the_veto_histogram_is_plain_divs_and_says_why() -> None:
     assert "Rendered as plain stacked DIVs" in model
     assert "flex:${segment.value}" in read(STATIC / "hunt.js"), "segments are flex-proportioned"
     assert 'class="hbar"' in read(STATIC / "hunt.js")
+
+
+# ---------------------------------------------------------------------------
+# 6. U4: the calibration page wiring
+# ---------------------------------------------------------------------------
+
+
+def test_the_calibration_page_has_all_four_panels() -> None:
+    """Four spec'd panels, four ids. A panel that lost its container renders nothing and
+    reports nothing, which is the failure mode a page most needs to avoid."""
+    html = read(INDEX_HTML)
+    for node in ("calib-flow", "calib-distance", "calib-iv", "calib-checklist", "calib-stamp"):
+        assert f'id="{node}"' in html, f"the calibration page is missing #{node}"
+
+
+def test_the_calibration_page_reads_one_endpoint_and_starts_stops_cleanly() -> None:
+    """One endpoint, one poll, start/stop pair — the same contract arms.js and hunt.js
+    follow, so a hidden page is not polling the journal behind the operator's back."""
+    calib = read(STATIC / "calibration.js")
+    app = read(APP_JS)
+    assert 'getJSON("/api/calibration")' in calib
+    assert "/api/" in calib and "fetch(" not in calib, "all fetching goes through net.js"
+    for symbol in ("startCalibration", "stopCalibration"):
+        assert f"export function {symbol}" in calib
+    assert "from \"./calibration.js\"" in app
+    route = app.split("function route")[1].split("\nfunction ")[0]
+    assert "stopCalibration()" in route, "leaving the page must stop its poll"
+    assert "startCalibration()" in route, "entering the page must start it"
+    # Charts are canvas objects with a lifecycle; leaking them on every poll is the bug
+    # arms.js already handles, so the same teardown has to exist here.
+    assert "teardownCharts()" in calib and "chart.remove()" in calib
+
+
+def test_the_calibration_page_uses_the_pure_view_models() -> None:
+    """The arithmetic lives in model.js so Node can score it (tests/test_static_logic.py).
+    A renderer that recomputed a percentile or a mean inline would be a second definition
+    of a number T6's threshold is frozen from, and it would be untested."""
+    calib = read(STATIC / "calibration.js")
+    for fn in ("flowVolume", "distanceHistogram", "ivHistory", "windowChecklist"):
+        assert f"{fn}(" in calib, f"the page must render through model.{fn}"
+    model = read(STATIC / "model.js")
+    for fn in ("percentile", "percentileSeries", "trailingMean"):
+        assert f"export function {fn}" in model
+    # The page must not compute a competing P90 of its own.
+    assert "Math.pow" not in calib and ".sort((a, b) => a - b)" not in calib
+
+
+def test_the_calibration_page_states_the_forming_p90_gap_in_words() -> None:
+    """The spec's requirement in its own words: with 1-2 rows, show what exists AND the
+    honest 'needs N more sessions' state. A green chart over two sessions is the failure."""
+    calib = read(STATIC / "calibration.js")
+    assert "needs ${model.needs} more" in calib
+    assert "forming" in calib
+    assert "model.complete" in calib, "the complete case has to be reachable"
+    assert "no flow_baseline sessions yet" in calib, "and the empty case has to say so"
+
+
+def test_the_calibration_page_separates_proxy_from_real_in_colour_and_style() -> None:
+    """Provenance honesty is the whole point of the IV panel, and it has to survive a
+    monochrome print: dashed AND a different colour, not one of the two."""
+    charts = read(STATIC / "charts.js")
+    assert "PROVENANCE_COLOR = { real:" in charts
+    assert "lineStyle: segment.provenance === \"proxy\" ? 2 : 0" in charts, (
+        "the proxy segment must be a different line style, not only a different colour"
+    )
+    assert "segment.provenance" in charts and "segments" in charts, (
+        "one line per segment: a single series would interpolate across the seam"
+    )
+    calib = read(STATIC / "calibration.js")
+    assert "ivHistory(" in calib
+    assert "guardConflicts" in calib, "guard disagreements are a finding and are rendered"
+    assert "dashed" in calib, "the legend marks proxy segments as dashed too"
+
+
+def test_the_calibration_page_marks_the_threshold_it_actually_applied() -> None:
+    """From the store when there is a session (deep_otm_threshold_pct), the working 3%
+    otherwise — and it says which, because the working value is the INPUT to calibration
+    and never a frozen threshold."""
+    calib = read(STATIC / "calibration.js")
+    assert "deep_otm_threshold_pct" in calib
+    assert "WORKING_DEEP_OTM_PCT" in calib
+    assert "no session recorded yet" in calib
+    assert "threshold" in calib and "▲ threshold" in calib
+
+
+def test_the_window_checklist_is_read_only_and_claims_nothing() -> None:
+    """Every item carries a state and a reason, the items that need a human are rendered
+    as not-assessable rather than ticked, and there is no affordance that could tick
+    anything: this page reports the operator's document, it does not edit it."""
+    calib = read(STATIC / "calibration.js")
+    assert "windowChecklist(payload)" in calib
+    assert "CHECK_GLYPH" in calib and "todo" in calib and "unknown" in calib
+    assert "read-only status view" in calib
+    assert "can be checked off from this screen" in calib
+    for banned in ("contenteditable", "onclick", ".submit("):
+        assert banned not in calib, f"the checklist is read-only, found {banned!r}"
+    assert "pending_calibrations" in calib, (
+        "the checklist is rendered from the rulebook's own pending list, not a hardcoded one"
+    )
+
+
+def test_the_mirrored_constants_are_declared_as_mirrors() -> None:
+    """WORKING_DEEP_OTM_PCT and MIN_IV_OBSERVATIONS exist so the page can label something
+    before the store has a row to read it from. They must name their source, or a future
+    edit treats them as a second source of truth for a frozen threshold."""
+    model = read(STATIC / "model.js")
+    assert "executor.soak.DEFAULT_DEEP_OTM_PCT" in model
+    assert "executor.iv_rank.MIN_OBSERVATIONS" in model
+    assert "export const WORKING_DEEP_OTM_PCT = 3;" in model
+    assert "export const MIN_IV_OBSERVATIONS = 60;" in model
+    assert "ui.api._percentile" in model, "the percentile must name the server function it mirrors"
+
+
+def test_the_calibration_module_is_routed_and_has_no_cdn_reference() -> None:
+    """The generic guarantees, restated for the new file because a new file is exactly
+    where they would stop holding: routed (a module with no route is a 404), served, and
+    free of any external reference."""
+    routes = {route for route, _ in STATIC_MODULES}
+    assert "/calibration.js" in routes
+    text = read(STATIC / "calibration.js")
+    assert EXTERNAL.findall(text) == []
+    for pattern in (r"method\s*:", r"XMLHttpRequest", r"navigator\.sendBeacon", r"\.submit\("):
+        assert re.search(pattern, text) is None, f"calibration.js can write: {pattern!r}"
