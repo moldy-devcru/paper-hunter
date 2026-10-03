@@ -2,8 +2,14 @@
 
 **Scope:** the whole daily cycle, offline, end to end, before the trading window opens in
 November. **Verdict: NO-GO for arming the daily cron trio.** Every stage ran and every
-mechanical path works; the blockers are data readiness and two unresolved mechanics
-questions, not broken code.
+mechanical path works; the blockers are data readiness, not broken code.
+
+> **Updated 2026-10-03 (addendum three).** The two design-level findings that made this a
+> NO-GO on *mechanics* — arm C's missing roll executor and the un-enterable green plan —
+> were operator questions, and are now **ruled (R1, R2) and fixed**. The remaining NO-GO is
+> **data readiness only**: T5's IV-rank warm-up and T6's `N` both need sessions of soak
+> history that have not accumulated yet, and R4's keying change restarts the IV warm-up
+> from zero (see the addendum). Addendum two closed findings 8 and 9.
 
 Reproduce:
 
@@ -139,6 +145,10 @@ to the lead rather than resolved here.
 
 ### Documented, not fixed (design-level — operator/lead questions)
 
+> Findings **6 and 7 are now closed** by rulings R1 and R2 — see addendum three below.
+> They are left here as originally written, because the record of *why they were open* is
+> part of the evidence that they are now closed.
+
 6. **Arm C has no roll executor.** `PositionManager.evaluate_exits(..., replacement=None)`
    refuses to roll, and the watch loop never supplies a replacement leg, so a position
    past its roll trigger produces a VETO-shaped note instead of a roll. The rehearsal
@@ -211,6 +221,86 @@ The net effect on a rehearsal run: the shot session (which traded B/call) now wr
 **0** rows and says `traded ['B/call']`; the no-shot session writes 2 rows, both linked
 (`decision_ref=2` and `decision_ref=4` — its own plan rows).
 
+### Addendum — findings 6 and 7 closed by rulings R1 and R2 (2026-10-03)
+
+Findings 6 and 7 above were **operator questions** and have now been ruled. Both are
+fixed, and the rehearsal exercises the fixed path rather than describing it.
+
+**Finding 6 → R1 (arm C roll replacement).** The rehearsal no longer supplies a
+replacement by hand. `position_manager.arm_c_roll_replacement` selects it from the tick's
+own chain (which `AlpacaWatchData` already fetches for the contract quote, so this costs
+no extra network call) by the ruling: **earliest expiry in the 90–180 DTE band, strike
+nearest delta 0.80, inside arm C's existing premium cap.**
+
+The fixture chain is built so the correct answer is knowable and the three refusals are
+tests of the rule rather than of the fixture: an expiry below the band at a perfect 0.80
+delta, an expiry above the band at 0.80, two in-band strikes flanking 0.80, and a **put at
+exactly the target delta** that must still be rejected because arm C is calls-only. The
+stage now reports:
+
+```
+arm C roll selection (R1): 20270127 100 DTE, strike 475, delta 0.81, premium $700.00 of $5,000.00
+arm C roll refusals (R1): no_qualifying_expiry=True, no_readable_greeks=True, over_the_premium_cap=True
+```
+
+and **fails** if the selection is absent, lands outside the band, is far from the 0.80
+target, or if any refusal case stops refusing.
+
+Two things this fixed that were not in the finding:
+
+* **The buy leg is marked on the ASK**, not the bid. `watch_loop.contract_price` marks a
+  long being *sold* (bid → mid → ask); reusing it for a buy would understate what the roll
+  spends and let a cap-breaching roll through the cap check. The two directions now have
+  separate functions on purpose.
+* **The post-roll position now adopts the new contract's Greeks.** Previously the rolled
+  position inherited the *old* contract's delta, DTE, expiry and strike — so the tick
+  after a roll re-read the pre-roll Greeks, the trigger fired again immediately, and the
+  position would have rolled on every pass until the chain ran dry. A roll that re-triggers
+  its own trigger is not a roll. The Greeks are what the trigger reads, so they are part of
+  the state a roll must update. Provenance for both sides lands in `position.meta["roll"]`.
+
+**Finding 7 → R2 (green-plan arming).** Ruled: a green plan arms the loop on the **entry
+window alone**. `_cell_plan_green` reads the plan's own pre-market `checklist.fire` rather
+than re-evaluating it, and a green cell arms exactly **one** intraday re-verification per
+cell per session, inside the entry window.
+
+> **The journal-volume constraint behind the "one"**, recorded because it was a real
+> design pressure and not an arbitrary cap: `checklist_failure_histogram()` counts
+> `NO_TRADE` decisions, and the re-verification fires the entry governors again, which
+> return `NO_TRADE` VETOs. Re-verifying on *every* watch tick would write a failing row per
+> tick and swamp the histogram with rows that are not failures but "already checked". The
+> per-session budget bounds it; if the histogram ever shows re-verification noise, the fix
+> is to tag those rows distinctly, not to raise the budget.
+
+**R3** (`carry_forward`, operator-ratified 2026-10-03 00:43 EDT), **R4**
+(`tenor_key_mode: rolling_dte`, 7-day buckets) and **R5** (November opens arms **A + C**,
+arm B inert until T5 warms) are encoded and covered in `docs/ratification.md` §(b). Two of
+them changed what the rehearsal *measures*:
+
+* **R4 is now asserted, not narrated.** The `iv-warmup` stage recomputes the tenor key for
+  the next 14 days and **fails if it churns daily** — reporting `over 15 days the same
+  contract yields 1 distinct key(s)`. This is the load-bearing property: under the old
+  raw-integer-DTE key every session minted a new tenor, so each series was length 1 and
+  could never reach `MIN_OBSERVATIONS` regardless of soak length. The fixture now calls
+  `hunt_plan._tenor_key_for` directly rather than reimplementing it, because the first cut
+  of that helper omitted the executor's `max(dte, 0)` clamp and blew up on the fixture
+  chain's 0DTE contract — a rehearsal that keys differently from the executor would warm a
+  store the executor cannot read.
+* **R4's cost to live data is now reported.** The deployed store holds **28 rows across 28
+  tenor keys** — one observation per key, the exact signature of the old keying. Under
+  `rolling_dte` those rows sit under keys the executor will never query again, so T5's
+  warm-up restarts from zero. The stage flags this as an **operator decision, not decided
+  here**: accept the restart (~60 sessions), re-key the old rows (which recovers nothing
+  real, since one observation per key was never a distribution), or backfill from the
+  provider. My recommendation is to accept it — re-keying would manufacture a warm-looking
+  series out of singletons, which is precisely the kind of green that is not earned.
+
+**R1's remaining honest gap:** the roll requires the *live* chain, so if the chain read
+fails the position holds and the tick's note says so. That is the intended behaviour (the
+ruling says never close instead of rolling), but it means an arm C position past its roll
+trigger can sit unsatisfied for as long as the chain is unreadable. The note is the
+mitigation; the operator should expect to see it.
+
 ---
 
 ## 4. Deployment readiness (read-only audit of the deployed data)
@@ -237,17 +327,23 @@ The net effect on a rehearsal run: the shot session (which traded B/call) now wr
 | 4 | stale-snapshot veto exercised, exits unaffected | **GO** |
 | 5 | EOD streak/close, soak writes, shadow-roll analysis, weekly rollup exercised | **GO** |
 | 6 | no live orders, no network, no `/opt` writes, rulebook unmodified | **GO** (measured) |
-| 7 | full pytest + ruff clean | **GO** (883 passed) |
+| 7 | full pytest + ruff clean | **GO** (932 passed) |
 | 8 | T6 `N` frozen by the lead | **NO-GO** — proposed 2.681, exclusions/asymmetry/outliers unreviewed |
-| 9 | T5 IV rank resolvable in production | **NO-GO** — 1 of 60 observations on every deployed tenor |
-| 10 | T6 intraday policy (prior-session carry-forward) ratified | **NO-GO** — contradiction unresolved |
-| 11 | T5 tenor choice (expiry vs rolling DTE) ratified | **NO-GO** — open operator decision |
-| 12 | arm C roll executor path exists | **NO-GO** — no replacement-leg selection in the loop |
-| 13 | entry path reachable for a green plan | **NO-GO** — trigger-path finding above needs a mechanics decision |
-| 14 | `cmd_eod` records `taken` and `decision_ids` | **NO-GO** — journal contents wrong for traded sessions |
+| 9 | T5 IV rank resolvable in production | **NO-GO** — 1 of 60 observations on every deployed tenor, and R4's keying change restarts the warm-up from zero |
+| 10 | T6 intraday policy ratified | **GO** — R3, operator-ratified 2026-10-03 00:43 EDT, `carry_forward` |
+| 11 | T5 tenor choice ratified | **GO** — R4, `rolling_dte` at 7-day buckets |
+| 12 | arm C roll executor path exists | **GO** — R1; selection from the live chain, refusals and stuck-roll reporting rehearsed |
+| 13 | entry path reachable for a green plan | **GO** — R2; one intraday re-verification per cell per session inside the entry window |
+| 14 | `cmd_eod` records `taken` and `decision_ids` | **GO** — addendum two |
 
-**Recommendation:** keep all three crons disarmed. Items 8–11 are operator/lead
-decisions; 12–14 are mechanics questions that must be answered before an entry can be
-routed at all. Items 9's warm-up is calendar-bound: if the window is meant to open in
-November, the IV store needs to be accumulating now, and the earlier that starts the
-closer item 9 lands.
+**Recommendation:** keep all three crons disarmed, but for one reason now rather than
+five. Every **mechanics** gate (12, 13, 14) and every **open decision** (10, 11) is
+closed. What is left is purely **data readiness**: item 8's `N` needs enough baseline
+sessions to be worth freezing, and item 9's warm-up is calendar-bound — and under R4 it
+starts from zero rather than from the 28 singleton rows the old keying left behind.
+
+The clock is therefore the only thing that matters for item 9. If the window is meant to
+open in November, the soak has to be accumulating under the new keying **now**, because
+60 sessions at one observation per session per tenor is the whole cost of it. The
+pre-R4 rows are not a partial head start; they are unreachable history, and re-keying
+them would only make the store look warmer than it is (see addendum three).

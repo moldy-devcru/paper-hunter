@@ -75,9 +75,9 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/alpaca_client.py:737`** — the reference date is a UTC date. Alpaca expiry timestamps are exchange-local (America/New_York); for an after-hours decision the two agree in every case this executor cares about, and a documented UTC choice is better than an implicit local-time one. ([source](../executor/alpaca_client.py#L737))
 - [ ] **`executor/alpaca_client.py:753`** — ties break toward calls. Arm C is calls-only and arm B picks its own strike, so the only consumer of the ATM contract is the IV-rank tenor selection, and a deterministic tie-break keeps that key stable day to day. ([source](../executor/alpaca_client.py#L753))
 - [ ] **`executor/alpaca_client.py:1367`** — `end=None` returns False. Alpaca substitutes "now" for a missing end, and "now" sits inside the 15-minute subscription window. ([source](../executor/alpaca_client.py#L1367))
-- [ ] **`executor/iv_rank.py:180`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L180))
-- [ ] **`executor/iv_rank.py:216`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L216))
-- [ ] **`config/loader.py:525`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L525))
+- [ ] **`executor/iv_rank.py:190`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L190))
+- [ ] **`executor/iv_rank.py:248`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L248))
+- [ ] **`config/loader.py:571`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L571))
 
 ### trading (18)
 
@@ -89,15 +89,15 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/position_manager.py:38`** — weekly entry counter — the "max 3 entries per week" counter resets on the **ISO week** (Monday 00:00 ET) and counts every entry order this manager emits for arm B, not just profitable ones. ([source](../executor/position_manager.py#L38))
 - [ ] **`executor/position_manager.py:44`** — journal vocabulary — enforcement maps onto `journal.store`'s `DecisionKind` as STOP (every liquidation, including arm C's exit-all), ROLL (arm C roll), TRADE (every entry, including arm A's single buy-and-hold) and VETO (a governor refusing an entry). ([source](../executor/position_manager.py#L44))
 - [ ] **`executor/position_manager.py:50`** — arm C exit-all journal kind — liquidating to cash on a T1 break is recorded as STOP, not ROLL, because it is a liquidation with no replacement leg. The brief: "liquidate to cash, wait for full checklist re-satisfaction". ([source](../executor/position_manager.py#L50))
-- [ ] **`executor/position_manager.py:409`** — the endpoints are inclusive. "09:45–14:00 ET only" reads as a closed interval, and the cost of the reading is one minute of entry eligibility at each edge while the cost of the other reading (excluding 14:00) is an arbitrary decision made by a parser. ([source](../executor/position_manager.py#L409))
-- [ ] **`executor/position_manager.py:815`** — this is the one arm where "no decisions" means the executor places exactly one order and then never touches it; there is no governor in this function beyond "already bought". ([source](../executor/position_manager.py#L815))
-- [ ] **`executor/position_manager.py:987`** — arm C's entry criteria (90-180 DTE, delta >= 0.80, premium <= 50% of bankroll) are *contract-selection* facts that the selection step reports, not numbers this manager can re-derive from a chain snapshot without duplicating that module. ([source](../executor/position_manager.py#L987))
-- [ ] **`executor/position_manager.py:1050`** — enforcement actions are not checklist evaluations, but the schema requires a snapshot dict. Rather than invent indicator values, this records the *facts the action was computed from* under an `enforcement` key and leaves the indicator block empty. ([source](../executor/position_manager.py#L1050))
+- [ ] **`executor/position_manager.py:411`** — the endpoints are inclusive. "09:45–14:00 ET only" reads as a closed interval, and the cost of the reading is one minute of entry eligibility at each edge while the cost of the other reading (excluding 14:00) is an arbitrary decision made by a parser. ([source](../executor/position_manager.py#L411))
+- [ ] **`executor/position_manager.py:989`** — this is the one arm where "no decisions" means the executor places exactly one order and then never touches it; there is no governor in this function beyond "already bought". ([source](../executor/position_manager.py#L989))
+- [ ] **`executor/position_manager.py:1185`** — arm C's entry criteria (90-180 DTE, delta >= 0.80, premium <= 50% of bankroll) are *contract-selection* facts that the selection step reports, not numbers this manager can re-derive from a chain snapshot without duplicating that module. ([source](../executor/position_manager.py#L1185))
+- [ ] **`executor/position_manager.py:1248`** — enforcement actions are not checklist evaluations, but the schema requires a snapshot dict. Rather than invent indicator values, this records the *facts the action was computed from* under an `enforcement` key and leaves the indicator block empty. ([source](../executor/position_manager.py#L1248))
 - [ ] **`executor/watch_loop.py:22`** — staleness budget — the rulebook has no field for "how old may the snapshot be", and inventing a config key is a rule change. ([source](../executor/watch_loop.py#L22))
 - [ ] **`executor/watch_loop.py:33`** — trigger direction — a plan cell's triggers carry a `sense` ("above"/"below"). A trigger counts as fired when spot has reached the level *in the trade direction of the cell*: for a call cell, a "below" trigger (e.g. ([source](../executor/watch_loop.py#L33))
 - [ ] **`executor/watch_loop.py:40`** — re-entry — a cell that has already produced an entry action this session is not re-entered on a later tick, even if spot re-crosses the trigger. ([source](../executor/watch_loop.py#L40))
-- [ ] **`executor/watch_loop.py:202`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L202))
-- [ ] **`executor/watch_loop.py:513`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L513))
+- [ ] **`executor/watch_loop.py:203`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L203))
+- [ ] **`executor/watch_loop.py:518`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L518))
 - [ ] **`journal/store.py:242`** — `ALTER TABLE ... ADD COLUMN` is the *only* statement used here, and that is the append-only guarantee talking, not caution. ([source](../journal/store.py#L242))
 
 ### analysis (9)
@@ -105,7 +105,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/hunt_plan.py:31`** — a non-blocking condition can still get a trigger, for T3 only. The rulebook's `t3_bollinger.satisfied_if_any_of` makes T3 an OR group, so when one T3 arm PASSes the sibling is reported FAIL (or whatever it is) but `blocking=False`: it cannot veto. ([source](../executor/hunt_plan.py#L31))
 - [ ] **`executor/hunt_plan.py:61`** — plan-time conviction is a deterministic function of how far the checklist is from firing — 10 when it fires, otherwise `10 - 3*failed - 1*pending` clipped to 1..10. ([source](../executor/hunt_plan.py#L61))
 - [ ] **`executor/hunt_plan.py:68`** — "spot" for chain tenor selection defaults to the newest daily close, because the plan is built pre-market and there is no pre-market option price to use. ([source](../executor/hunt_plan.py#L68))
-- [ ] **`executor/hunt_plan.py:216`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L216))
+- [ ] **`executor/hunt_plan.py:222`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L222))
 - [ ] **`executor/noshot.py:354`** — DTE is computed against the **session date**, never against `datetime.now()`. ([source](../executor/noshot.py#L354))
 - [ ] **`analysis/rollup.py:40`** — the window. `since`/`until` are inclusive calendar dates. `positions` are filtered on the **UTC date component of `exit_ts`** because that is the journal's only clock (`ts` columns are UTC ISO-8601; there is no ET column on positions). ([source](../analysis/rollup.py#L40))
 - [ ] **`analysis/rollup.py:49`** — what counts as a "trade" in the counts. A trade is a `decisions` row with kind `TRADE` — the decision ledger is the record of truth, and `positions` is the convenience view (per its own schema comment). ([source](../analysis/rollup.py#L49))
@@ -114,23 +114,23 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### soak (7)
 
-- [ ] **`executor/soak.py:213`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L213))
-- [ ] **`executor/soak.py:283`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L283))
-- [ ] **`executor/soak.py:302`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L302))
-- [ ] **`executor/soak.py:327`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L327))
-- [ ] **`executor/soak.py:403`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L403))
-- [ ] **`executor/soak.py:417`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L417))
-- [ ] **`executor/soak.py:735`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L735))
+- [ ] **`executor/soak.py:221`** — "did a session happen?" is answered by **the presence of a daily bar stamped with that date**, not by a weekday check and not by `/v2/clock`. ([source](../executor/soak.py#L221))
+- [ ] **`executor/soak.py:291`** — moneyness is measured against **spot** (the session's SPY close), not against a forward or an option-adjusted reference. ([source](../executor/soak.py#L291))
+- [ ] **`executor/soak.py:310`** — buckets are keyed by `floor(distance)` and are 1 percentage point wide, so `sum(v for k, v in buckets.items() if int(k) >= t)` is exactly the volume at >= t percent from spot **for any integer t**. ([source](../executor/soak.py#L310))
+- [ ] **`executor/soak.py:335`** — the aggregate uses the **unrounded** strike for the OTM test and the histogram, but the aggregate *threshold* is floored to an integer (see :func:`bucket_key`), so a threshold of 3.5% is honoured as 3%. ([source](../executor/soak.py#L335))
+- [ ] **`executor/soak.py:412`** — for each expiry we record the **single ATM contract** (nearest strike to spot, calls-first tie-break — `OptionChain.atm_contract`), not every strike in the chain. ([source](../executor/soak.py#L412))
+- [ ] **`executor/soak.py:426`** — an expiry whose ATM contract carries no usable IV is **skipped entirely** rather than filled in from the nearest contract that does. ([source](../executor/soak.py#L426))
+- [ ] **`executor/soak.py:752`** — the skip count is reported *whenever it is non-zero*, not only when it is alarming. ([source](../executor/soak.py#L752))
 
 ### CLI / plumbing (7)
 
 - [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
 - [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
-- [ ] **`executor/main.py:674`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L674))
-- [ ] **`executor/main.py:732`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L732))
-- [ ] **`executor/main.py:811`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L811))
-- [ ] **`executor/main.py:839`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L839))
-- [ ] **`executor/main.py:872`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L872))
+- [ ] **`executor/main.py:750`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L750))
+- [ ] **`executor/main.py:808`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L808))
+- [ ] **`executor/main.py:887`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L887))
+- [ ] **`executor/main.py:915`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L915))
+- [ ] **`executor/main.py:948`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L948))
 
 ### other (5)
 
@@ -159,6 +159,94 @@ each one actually stands now.
 | 6 | *(not in the brief's list — added 2026-10-02)* Arm C IV rank ceiling | **RULED 2026-10-02: `< 50`, same as arm B** (delegated to the lead's recommendation). No longer pending; `pending_calibrations` no longer lists it. |
 | 7 | *(not in the brief's list — added 2026-10-02)* Earnings veto | **RULED 2026-10-02: DROPPED for SPY.** "Ignore any particular ticker's earnings for SPY" — a component's print does not move index IV regime. FOMC and CPI remain hard vetoes; OPEX remains non-veto. See below. |
 | 8 | *(not in the brief's list — added 2026-10-02)* T6 threshold + N | **RULED 2026-10-02: calibrated BY THE ALGO** from the soak's 20-session distribution, frozen at the first monthly review with the numbers shown. Both stay `calibration_pending` until then — that is the ruling, not a gap. See (c). |
+| 9 | *(added 2026-10-03)* **R1** — what a rolled arm-C position rolls INTO | **RULED 2026-10-03 (operator).** The next expiry in the 90–180 DTE band, strike nearest delta 0.80, within arm C's existing premium cap. A roll with no qualifying contract returns *nothing* and is **reported** — never a naked close. See below. |
+| 10 | *(added 2026-10-03)* **R2** — when the watch loop may act on a green plan | **RULED 2026-10-03 (operator).** A green plan arms the loop on the **entry window alone**; the pre-market checklist is the only gate and it is not re-evaluated intraday. See below. |
+| 11 | *(added 2026-10-03)* **R3** — T6's intraday flow policy | **RULED 2026-10-03 00:43 EDT (operator-ratified, NOT delegated).** `carry_forward`. See below. |
+| 12 | *(added 2026-10-03)* **R4** — T5 tenor keying | **RULED 2026-10-03 (operator).** Rolling-DTE keyed, bucketed at 7 days. See below. |
+| 13 | *(added 2026-10-03)* **R5** — which arms open in November | **RULED 2026-10-03 (operator).** Arms **A + C** at window open; **B is inert** until T5 has enough observations to warm. See below. |
+
+### R3 — T6's intraday policy (operator-ratified 2026-10-03 00:43 EDT)
+
+The one ruling here the operator ratified **personally** rather than through the lead's
+recommendation: mads, on seeing the recommendation, said *"your recs are good with me"*.
+That is recorded as operator-ratified and not delegated, because it was.
+
+T6's gate data is EOD-confirmed while the thing it gates — an arm B entry — is
+intraday. **Default: `carry_forward`.** The newest confirmed row from a session *before*
+this one is this session's gate input.
+
+`next_day_only` remains a live switch: the gate resolves only from the immediately
+preceding session, and a gap (holiday, failed soak) leaves T6 PENDING rather than
+carrying an older regime forward. Flipping the default is a one-line YAML change plus a
+strategy-version bump.
+
+**The day-stale caveat stays on the record**, because it is the cost of the ruling and
+not a detail: the carried ratio is one session stale, so T6 is a *prior-session regime*
+filter, not a same-session flow read. Nothing about the carried row describes today's
+flow. `executor/flow_gate.py` records `sessions_stale` on every read, so the staleness is
+**measured in the journal** rather than asserted here.
+
+**Revisit at the first monthly review**, once the baseline has enough sessions to say
+whether carry-forward is behaving — i.e. whether the call side's P90 (1.157) and the put
+side's (4.024) describe a distribution stable enough for one multiplier applied to
+whichever side is traded.
+
+### R1, R2, R4, R5 — encoded 2026-10-03, brief summary
+
+**R1 (roll replacement).** `executor/position_manager.arm_c_roll_replacement` picks the
+*earliest* qualifying expiry in the 90–180 DTE band, then the strike whose delta is
+nearest 0.80 (ties broken by the lower strike), rejecting any candidate below the entry's
+own `delta_min`, priced on the **ask** (a buy costs the ask; the bid-side exit mark would
+understate the spend and let a cap-breaching roll through). No qualifying contract →
+`None`, and `PositionManager.evaluate_exits` emits a **note** naming the fired trigger and
+saying the position is `HELD, not rolled`. Before this, that case and a healthy position
+both returned an empty action tuple — a stuck roll was invisible. The roll action carries
+the full selection (`expiry`, `dte`, `strike`, `delta`, `target_delta`, `premium_usd`,
+`cap_usd`) in `gov_checks["selection"]`, and the post-roll position adopts the *new*
+contract's Greeks — otherwise the next tick re-reads the old delta and re-triggers the
+roll that just fired.
+
+**R2 (green-plan arming).** `_cell_plan_green` reads the plan's own pre-market checklist
+(`checklist.fire`) rather than re-evaluating it: the point is "the plan was green at
+08:30", a fact about then, not a second opinion about now. A green cell arms exactly **one**
+intraday re-verification per cell per session, inside the entry window.
+
+> **Journal-volume constraint, documented rather than solved by fiat.** The re-verification
+> fires the entry governors again, which return `NO_TRADE` `VETO`s on the tick — and
+> `checklist_failure_histogram()` counts `NO_TRADE` decisions. Re-verifying on *every*
+> watch tick would therefore write a failing row per tick and swamp the histogram with
+> rows that are not failures but "already checked". The one-per-session budget bounds it;
+> if the histogram starts showing re-verification noise, the fix is to tag those rows
+> distinctly rather than to raise the budget. **This throttle is an interpretation, not a
+> ruling** — R2 said "arm on the entry window alone" and said nothing about frequency. It
+> is a one-line change in `watch_loop._green_cell_armed` if the operator wants it lifted.
+
+> **OPEN — arm C's entry window does not exist in the rulebook.** Arm B declares
+> `entry.window_et`; **arm C declares none**, so R2's "the entry window alone" has no
+> boundary to be "alone" *to* for arm C. The code currently treats a missing window as
+> **the whole session** (`09:30`–`16:00`). That is a placeholder, not a ruling: inventing
+> a window for arm C would be authoring a policy the operator has not decided, and it is
+> not merely cosmetic — arm C is the arm R1's roll can leave past its roll trigger, so an
+> unbounded arm-C window decides how long a stale-roll position may sit unsatisfied.
+> **Operator question:** does arm C get a declared entry window like arm B's, or is
+> "the whole session" the intent? Left open deliberately, and flagged here rather than
+> settled in code.
+
+**R4 (rolling-DTE tenor).** `iv_rank.dte_tenor_key()` floors DTE to a 7-day bucket
+(`DTE_BUCKET_DAYS`, configurable at `checklist.t5_options_chain.dte_bucket_days`) and
+emits keys like `dte98-call-450.00`. This is load-bearing, not cosmetic: the old key used
+raw integer DTE, so **every session minted a brand-new key** and the rolling IV series
+could never accumulate `MIN_OBSERVATIONS`. `tenor_key_mode` in the rulebook selects
+between the expiry-keyed (`tenor_key`) and rolling-DTE (`dte_tenor_key`) modes; the hunt
+plan and the watch loop's `_watch_iv_rank` both read it and pass the same bucket width, so
+plan-time and intraday cannot disagree about which cell a contract lives in.
+
+**R5 (November arms).** `window.arms: [A, C]` — arms active at window open on
+`2026-11-02`. `Rulebook.inert_arms()` reports **B** as deferred: it is *not* silently
+dropped, and the watch loop skips deferred arms by name instead of trading them blind.
+Arm B opens automatically once T5 reaches `MIN_OBSERVATIONS` — **no new ruling needed**,
+because arm C's IV rank now uses the same rolling-DTE key as arm B, so T5 warms from the
+same series that arm B needs.
 
 ### The earnings veto — CLOSED 2026-10-02, by ruling
 
@@ -197,6 +285,10 @@ are the T6 pair, which the operator deliberately left to the algo, and both are 
 values: null, with a reason, and the loader raises if you try to write a number without
 clearing `calibration_pending`. That is intentional — a threshold that looks frozen when
 it is not is worse than one that visibly is not.
+
+**Not a calibration, but open:** arm C has no `entry.window_et`, so R2's "arm on the entry
+window alone" has no boundary for arm C (currently treated as the whole session). See the
+R2 note above. Operator question.
 
 ---
 

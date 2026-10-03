@@ -141,7 +141,40 @@ def test_window_is_three_months_sixty_sessions_renewable_only_at_review():
     assert w.months == FROZEN["window_months"] == 3
     assert w.target_sessions == FROZEN["window_target_sessions"] == 60
     assert w.extension == "monthly_review_only"
-    assert w.start is None  # stamped when the window opens, not claimed in advance
+
+
+def test_window_starts_on_the_ratified_november_date_with_arms_a_and_c():
+    """RULED 2026-10-03 (R5): the window's start is pinned, not deferred.
+
+    This used to assert ``start is None`` ("stamped when the window opens, not claimed
+    in advance"). R5 moved the November window's start to a specific date and named which
+    arms open with it, so the start is now a number in the rulebook that can be read and
+    checked — a stronger claim than the absence it replaced.
+    """
+    w = load_rules().window
+    assert w.start == dt.date(2026, 11, 2)
+    assert w.arms == ["A", "C"], "November opens arms A+C; B waits for T5 to warm"
+
+
+def test_arm_b_is_reported_inert_until_t5_is_defined():
+    """Deferred is not the same as dropped — the watch loop skips B *by name*.
+
+    The default (``t5_iv_rank_defined=None``) is the conservative one: until something
+    positively reports an IV rank, arm B stays inert.
+    """
+    rb = load_rules()
+    assert rb.inert_arms() == ["B"]
+    assert rb.active_arms() == ["A", "C"]
+    # No `enabled` flag on the arm: arm B is *deferred by the window*, not disabled by
+    # its own rules. Asserting via inert_arms() is what makes that distinction real.
+    assert rb.window.arm_b_gate is not None
+
+
+def test_arm_b_leaves_the_inert_set_once_t5_can_be_warmed():
+    """The gate is the condition, so a defined T5 opens B without a second ruling."""
+    rb = load_rules()
+    assert rb.inert_arms(t5_iv_rank_defined=True) == []
+    assert sorted(rb.active_arms(t5_iv_rank_defined=True)) == ["A", "B", "C"]
 
 
 def test_window_length_must_be_plausible():
