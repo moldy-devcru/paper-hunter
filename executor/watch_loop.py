@@ -529,10 +529,90 @@ def _entry_leg(cell: ArmPlan, *, symbol: str, price: float | None) -> OrderLeg:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _ArmBPick:
+    """Arm B's chosen contract: the leg, what it costs, and WHICH expiry it expires."""
+
+    leg: OrderLeg
+    premium_usd: float
+    expiry: str
+    dte: int
+
+
+@dataclass(frozen=True, slots=True)
+class _ArmBRefusal:
+    """Why there is nothing to buy, with the evidence a reader needs to check it.
+
+    A refusal is a VETO with a reason, never a silent skip — same convention as
+    :func:`_arm_c_contract`'s ``None`` path.
+    """
+
+    governor: str
+    reason: str
+    checks: dict[str, Any]
+
+
+def _arm_b_expiry(snapshot: WatchSnapshot) -> tuple[str | None, _ArmBRefusal | None]:
+    """The expiry arm B may buy from: the nearest one, and it MUST be today (0DTE).
+
+    FIX 2026-10-03 (outsider review 4.1): the selector used to read
+    ``snapshot.chain.contracts[0].expiry`` — whatever expiry the API happened to
+    return first. ``OptionChain.expiries()`` sorts a *copy*, so the chain itself is
+    never sorted, and the first contract is not guaranteed to be the nearest expiry.
+    Nothing downstream asserted DTE, so on any chain whose first-listed contract was
+    not same-day, arm B bought an n-DTE contract while every downstream claim — "exits
+    same day, always", "never holds to expiry", and prediction 2's claim about 0DTE
+    *as an asset class* — described something the journal could disprove.
+
+    :meth:`OptionChain.nearest_expiry` already exists (and was unused here). It is
+    given the snapshot's own ET date so the answer is the session the loop is trading,
+    not "today" by wall clock — the two agree intraday, and the snapshot's date is what
+    :func:`_dte_from_expiry` measures against, so both halves of the check now read the
+    same clock.
+
+    Returns ``(expiry, None)`` or ``(None, refusal)``.
+    """
+    chain = snapshot.chain
+    if chain is None:
+        return None, _ArmBRefusal(
+            "no_candidate",
+            "no options chain in the snapshot — nothing to buy, nothing journaled as a trade",
+            {"spot": snapshot.spot},
+        )
+    session = to_et(snapshot.fetched_at)
+    expiry = chain.nearest_expiry(on_or_after=session)
+    listed = chain.expiries()
+    if expiry is None:
+        return None, _ArmBRefusal(
+            "not_zero_dte",
+            f"chain lists no expiry on or after the session date {session.date().isoformat()} "
+            f"— arm B buys same-day expiry only (0DTE); listed expiries: {listed}",
+            {"session_date": session.date().isoformat(), "listed_expiries": listed},
+        )
+    dte = _dte_from_expiry(expiry, snapshot)
+    if dte != 0:
+        # Nearest expiry is in the future: 0DTE is not listed today. Refusing is the
+        # honest outcome — buying the nearest contract anyway would quietly re-label an
+        # n-DTE trade as arm B and corrupt the asset-class claim.
+        return None, _ArmBRefusal(
+            "not_zero_dte",
+            f"nearest listed expiry {expiry} is {dte} DTE from the session date "
+            f"{session.date().isoformat()}, not 0DTE — arm B buys same-day expiry only; "
+            "no trade, no 0DTE claim",
+            {
+                "nearest_expiry": expiry,
+                "dte": dte,
+                "session_date": session.date().isoformat(),
+                "listed_expiries": listed,
+            },
+        )
+    return expiry, None
+
+
 def _arm_b_contract(
     cell: ArmPlan, snapshot: WatchSnapshot
-) -> tuple[OrderLeg, float] | None:
-    """Pick arm B's contract and its total premium, or ``None`` if the chain can't say.
+) -> _ArmBPick | _ArmBRefusal:
+    """Pick arm B's contract and its total premium, or a named refusal.
 
     Strike selection re-uses the plan's own projection: the cell's watch levels carry
     ``strike_projection`` (the "first OTM strike beyond the setup-day range
@@ -542,22 +622,53 @@ def _arm_b_contract(
     """
     projection = cell.watch.strike_projection or {}
     level = projection.get("level")
-    if level is None or snapshot.chain is None:
-        return None
+    expiry, refusal = _arm_b_expiry(snapshot)
+    if refusal is not None:
+        return refusal
+    assert expiry is not None  # for the type checker; refusal and expiry are exclusive
+    if level is None:
+        return _ArmBRefusal(
+            "no_candidate",
+            "plan carries no strike_projection level — no OTM strike to aim at",
+            {"spot": snapshot.spot, "expiry": expiry},
+        )
     want_call = cell.direction == "call"
     candidates = [
         c
-        for c in snapshot.chain
-        if c.expiry == snapshot.chain.contracts[0].expiry  # nearest expiry only (0DTE)
+        for c in snapshot.chain  # type: ignore[union-attr]  # non-None: refusal covers it
+        if c.expiry == expiry  # nearest expiry, asserted 0DTE by _arm_b_expiry
         and ((c.strike > level) if want_call else (c.strike < level))
         and c.right == cell.direction
     ]
     if not candidates:
-        return None
+        return _ArmBRefusal(
+            "no_candidate",
+            f"no {'call' if want_call else 'put'} beyond the projection {level:.2f} in the "
+            f"0DTE expiry {expiry} — nothing to buy, nothing journaled as a trade",
+            {"projection_level": level, "expiry": expiry, "direction": cell.direction},
+        )
     contract = min(candidates, key=lambda c: abs(c.strike - level))
+    # FIX 2026-10-03 (outsider review 4.1): assert the SELECTED contract's expiry, not
+    # just the chain's nearest one. The filter above and this check are the same fact
+    # read twice on purpose: the assertion is what a future edit to the filter cannot
+    # quietly remove.
+    dte = _dte_from_expiry(contract.expiry, snapshot)
+    if dte != 0:
+        return _ArmBRefusal(
+            "not_zero_dte",
+            f"selected contract {contract.symbol} expires {contract.expiry} "
+            f"({dte} DTE), not 0DTE — refusing rather than labelling an n-DTE trade "
+            "as arm B",
+            {"symbol": contract.symbol, "expiry": contract.expiry, "dte": dte},
+        )
     price = contract_price(contract) or None
     premium = (price or 0.0) * 100.0
-    return _entry_leg(cell, symbol=contract.symbol, price=price), premium
+    return _ArmBPick(
+        leg=_entry_leg(cell, symbol=contract.symbol, price=price),
+        premium_usd=premium,
+        expiry=contract.expiry,
+        dte=dte,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -943,17 +1054,20 @@ def _entry_evaluation(
     """Ask the manager for an entry opinion, per arm's own governor shape."""
     if cell.arm == "B":
         picked = _arm_b_contract(cell, snapshot)
-        if picked is None:
+        if isinstance(picked, _ArmBRefusal):
+            # FIX 2026-10-03 (outsider review 4.1): the refusal carries its own
+            # governor and evidence, so "there was no 0DTE to buy" (not_zero_dte) is
+            # distinguishable in the veto stream and the checklist-failure histogram
+            # from "the chain had nothing at the projection" (no_candidate).
             veto = Veto(
                 "B",
-                "no_candidate",
-                "no OTM contract beyond the setup-day range projection in the live "
-                "chain (nearest expiry) — nothing to buy, nothing journaled as a trade",
-                {"spot": snapshot.spot, "projection": cell.watch.strike_projection},
+                picked.governor,
+                picked.reason,
+                picked.checks,
                 arm_state.to_dict(),
             )
             return Evaluation(actions=(), vetoes=(veto,), next_state=arm_state)
-        leg, premium = picked
+        leg, premium = picked.leg, picked.premium_usd
         return manager.evaluate_entry(
             "B",
             now=now,

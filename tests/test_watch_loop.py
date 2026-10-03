@@ -1013,3 +1013,107 @@ def test_arm_c_selection_follows_the_rulebook_dte_band(rules, series):
     )
     assert watch_loop._arm_c_contract(tight, snapshot) is None
     assert watch_loop._arm_c_contract(loose, snapshot) is not None
+
+
+# ---------------------------------------------------------------------------
+# arm B: the 0DTE assertion (outsider review 4.1)
+# ---------------------------------------------------------------------------
+
+
+def _unsorted_chain(day: dt.date, *, expiries: list[str], spot: float = 625.0):
+    """A chain whose contract order is NOT expiry order — the bug's whole premise.
+
+    ``OptionChain.expiries()`` sorts a copy; the chain's own ``contracts`` list keeps
+    whatever order the API returned. So a chain can perfectly legally lead with a
+    deferred expiry, and the old selector (``contracts[0].expiry``) would follow it.
+    """
+    calls: list[object] = []
+    for expiry in expiries:
+        for i in (1, 2):
+            strike = spot + i
+            calls.append(
+                make_contract(
+                    symbol=f"SPY{expiry}C{int(strike * 1000):08d}",
+                    underlying="SPY",
+                    expiry=expiry,
+                    strike=strike,
+                    right="call",
+                    ask=1.40,
+                )
+            )
+    return _chain("SPY", calls)
+
+
+def test_arm_b_buys_the_nearest_expiry_when_the_chain_is_not_sorted_by_it(rules, series):
+    """The regression this pins: expiries listed FAR-FIRST, nearest expiry last.
+
+    ``contracts[0].expiry`` would have selected the far expiry and bought a 30-DTE
+    contract while calling it 0DTE. The selector must find the nearest expiry wherever
+    it sits in the list, and the contract it returns must expire today.
+    """
+    today = DAY.strftime("%Y%m%d")
+    far = (DAY + dt.timedelta(days=30)).strftime("%Y%m%d")
+    chain = _unsorted_chain(DAY, expiries=[far, today])
+    assert chain.contracts[0].expiry == far, "fixture must lead with the DEFERRED expiry"
+    picked = watch_loop._arm_b_contract(firing_cell(rules), _snapshot(series, chain))
+    assert not isinstance(picked, watch_loop._ArmBRefusal), picked
+    assert picked.expiry == today
+    assert picked.dte == 0
+
+
+def test_arm_b_refuses_a_chain_whose_nearest_expiry_is_not_today(rules, series):
+    """No 0DTE listed → a named veto, not an n-DTE trade.
+
+    The alternative reading — "buy the nearest expiry anyway" — is what made arm B's
+    downstream claims (same-day exit, never holds to expiry, prediction 2's asset-class
+    claim) silently false. The refusal carries the DTE so a reader can check it.
+    """
+    far = (DAY + dt.timedelta(days=30)).strftime("%Y%m%d")
+    chain = _unsorted_chain(DAY, expiries=[far])
+    refusal = watch_loop._arm_b_contract(firing_cell(rules), _snapshot(series, chain))
+    assert isinstance(refusal, watch_loop._ArmBRefusal)
+    assert refusal.governor == "not_zero_dte"
+    assert refusal.checks["dte"] == 30
+    assert refusal.checks["nearest_expiry"] == far
+    assert "0DTE" in refusal.reason
+
+
+def test_arm_b_ignores_expired_expiries_in_the_chain(rules, series):
+    """A chain can carry last week's contracts. The nearest LIVE expiry is the answer,
+    and a yesterday-expiry contract must never be selected."""
+    today = DAY.strftime("%Y%m%d")
+    yesterday = (DAY - dt.timedelta(days=1)).strftime("%Y%m%d")
+    chain = _unsorted_chain(DAY, expiries=[yesterday, today])
+    picked = watch_loop._arm_b_contract(firing_cell(rules), _snapshot(series, chain))
+    assert not isinstance(picked, watch_loop._ArmBRefusal), picked
+    assert picked.expiry == today and picked.dte == 0
+
+
+def test_arm_b_with_no_chain_refuses_rather_than_raising(rules, series):
+    refusal = watch_loop._arm_b_contract(firing_cell(rules), _snapshot(series, None))
+    assert isinstance(refusal, watch_loop._ArmBRefusal)
+    assert refusal.governor == "no_candidate"
+
+
+def test_a_nearest_expiry_that_is_not_zero_dte_is_a_veto_in_the_tick(rules, series, monkeypatch):
+    """End-to-end: the refusal reaches the veto stream with its own governor, so the
+    NO-SHOT/veto ledger distinguishes 'no 0DTE listed' from 'nothing at the level'."""
+    patch_reverification(monkeypatch, rules, fire=True)
+    far = (DAY + dt.timedelta(days=30)).strftime("%Y%m%d")
+    result = run_once(
+        provider=provider(
+            rules, series, spot=626.5, chain=_unsorted_chain(DAY, expiries=[far])
+        ),
+        rules=rules,
+        state=state_for(rules, plan_for(rules)),
+        now=at(10, 30),
+    )
+    assert result.entry_actions == ()
+    assert [v.governor for v in result.vetoes] == ["not_zero_dte"]
+    assert result.vetoes[0].checks["dte"] == 30
+
+
+def _snapshot(series, chain, *, spot: float = 626.5):
+    return watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=spot, daily=series, chain=chain
+    )
