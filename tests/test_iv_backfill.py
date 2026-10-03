@@ -19,10 +19,13 @@ import datetime as dt
 
 import pytest
 
-from executor.alpaca_client import Bar, BarSeries, OptionBarSeries
+from executor.alpaca_client import AlpacaAPIError, Bar, BarSeries, OptionBarSeries
 from executor.black_scholes import black_scholes_price
 from executor.iv_backfill import (
+    DEFAULT_RETRY_BASE_SECONDS,
     FEED_FLOOR,
+    FORBIDDEN_COOLDOWN_SECONDS,
+    AlpacaIvSource,
     BackfillReport,
     IvBackfillError,
     SessionPlan,
@@ -390,3 +393,116 @@ def test_summary_prints_the_tenor_key_table():
 def test_feed_floor_is_the_confirmed_2024_02_01():
     assert FEED_FLOOR == dt.date(2024, 2, 1)
     assert MONEYNESS_BUCKET_PCT == 2.0
+
+# ---------------------------------------------------------------------------
+# source retry / pacing
+# ---------------------------------------------------------------------------
+
+
+class _FlakyClient:
+    """Raises ``status`` on the first ``fail_times`` options calls, then succeeds."""
+
+    def __init__(self, status: int, fail_times: int) -> None:
+        self.status = status
+        self.fail_times = fail_times
+        self.attempts = 0
+
+    def get_option_daily_bars(self, symbols, *, start, end, **kwargs):
+        self.attempts += 1
+        if self.attempts <= self.fail_times:
+            raise AlpacaAPIError(self.status, "OPRA agreement is not signed", path="/x")
+        return OptionBarSeries(bars_by_symbol={s: [] for s in symbols})
+
+
+def _clock_with_steps(steps):
+    """A monotonic clock that advances by one second per reading."""
+    state = {"t": 0.0}
+
+    def clock() -> float:
+        state["t"] += 1.0
+        return state["t"]
+
+    return clock, state
+
+
+def test_transient_403_is_retried_and_succeeds():
+    slept: list[float] = []
+    clock, _ = _clock_with_steps([])
+    source = AlpacaIvSource(
+        _FlakyClient(403, fail_times=2),
+        sleep=slept.append,
+        clock=clock,
+        min_interval_seconds=0.0,
+    )
+    series = source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
+    assert series is not None
+    assert source.calls == 3 and source.retries == 2 and source.cooldowns == 2
+    # The first retry waits FORBIDDEN_COOLDOWN_SECONDS, not the 5s a 429 would get:
+    # recovery from this 403 was measured at ~2 minutes, so a short ramp would just burn
+    # attempts. This assertion is the reason those two numbers are different constants.
+    assert slept[0] == FORBIDDEN_COOLDOWN_SECONDS
+
+
+def test_429_uses_the_short_ramp_not_the_403_cooldown():
+    slept: list[float] = []
+    clock, _ = _clock_with_steps([])
+    source = AlpacaIvSource(
+        _FlakyClient(429, fail_times=1),
+        sleep=slept.append,
+        clock=clock,
+        min_interval_seconds=0.0,
+    )
+    source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
+    assert slept[0] == DEFAULT_RETRY_BASE_SECONDS
+    assert source.cooldowns == 0          # a 429 is not the misleading entitlement error
+
+
+def test_unretryable_status_is_not_retried():
+    clock, _ = _clock_with_steps([])
+    source = AlpacaIvSource(
+        _FlakyClient(422, fail_times=99),
+        sleep=lambda _: None,
+        clock=clock,
+        min_interval_seconds=0.0,
+    )
+    with pytest.raises(AlpacaAPIError):
+        source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
+    assert source.calls == 1 and source.retries == 0
+
+
+def test_retries_are_bounded_then_the_error_surfaces():
+    """The ceiling is the retry. Exhausting it re-raises rather than looping forever."""
+    slept: list[float] = []
+    clock, _ = _clock_with_steps([])
+    source = AlpacaIvSource(
+        _FlakyClient(403, fail_times=99),
+        max_retries=2,
+        sleep=slept.append,
+        clock=clock,
+        min_interval_seconds=0.0,
+    )
+    with pytest.raises(AlpacaAPIError):
+        source.option_daily_bars(["SPY260918C00700000"], start="s", end="e")
+    assert source.calls == 3             # 1 attempt + 2 retries, then it gives up
+    assert len(slept) == 2               # 30s, then 60s — and then it stops
+
+
+def test_requests_are_paced_to_the_minimum_interval():
+    """The throttle is per unit time, not per count, so the client spaces itself."""
+    now = [100.0]
+    slept: list[float] = []
+
+    source = AlpacaIvSource(
+        _FlakyClient(403, fail_times=0),
+        min_interval_seconds=1.2,
+        sleep=slept.append,
+        clock=lambda: now[0],
+    )
+    source.option_daily_bars(["A"], start="s", end="e")
+    assert slept == []                   # first call is never paced
+    now[0] = 100.3                       # only 0.3s elapsed
+    source.option_daily_bars(["A"], start="s", end="e")
+    assert slept and slept[-1] == pytest.approx(0.9, abs=1e-9)
+    now[0] = 120.0                       # plenty of time elapsed
+    source.option_daily_bars(["A"], start="s", end="e")
+    assert len(slept) == 1               # nothing to wait for

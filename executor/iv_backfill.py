@@ -77,12 +77,14 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
 from executor.alpaca_client import (
     MAX_OPTION_SYMBOLS_PER_REQUEST,
+    AlpacaAPIError,
     Bar,
     BarSeries,
     OptionBarSeries,
@@ -129,6 +131,13 @@ DEFAULT_LADDER_RANGE_PCT = 3.0
 #: unadjusted close and an adjusted option price are not the same trade.
 EQUITY_ADJUSTMENT = "all"
 
+#: SIP bars on the free tier refuse a query whose ``end`` is less than 15 minutes old —
+#: "subscription does not permit querying recent SIP data". 20 minutes is the same backoff
+#: the live soak uses, and the same reasoning: the module does not silently rewrite the
+#: caller's timestamp to make a request succeed, it asks for a window that is actually
+#: answerable. Costs the last 20 minutes of today, which no completed daily bar needs.
+EQUITY_END_BACKOFF_MINUTES = 20
+
 Right = str
 
 
@@ -151,12 +160,66 @@ class IvSource(Protocol):
     ) -> OptionBarSeries: ...
 
 
+#: Bounded retry policy for the options-bars route.
+#:
+#: MEASURED behaviour of this plan, 2026-10-03: the route answers ``403 OPRA agreement is
+#: not signed`` in WAVES. A burst of ~10-15 requests succeeds, then every request 403s for
+#: roughly two minutes, then the burst allowance returns. The documented Basic budget is
+#: 200 calls/min; the observed behaviour of THIS route on THIS plan is nothing like it.
+#: The identical request 403s twice, succeeds minutes later with no change on our side, and
+#: 403s again — so the error text is misleading and refusing on the first one would have
+#: abandoned a backfill that was in fact buildable.
+#:
+#: Two consequences, both implemented below rather than argued about:
+#:
+#: 1. **Pace.** Requests are spaced by :data:`DEFAULT_MIN_INTERVAL_SECONDS`. The throttle
+#:    is per unit time, not per request count, and voluntarily spacing is strictly cheaper
+#:    than discovering the limit by being throttled.
+#: 2. **Cool down properly.** A 403 gets :data:`FORBIDDEN_COOLDOWN_SECONDS` before the next
+#:    attempt, not the 2s a rate limit would want — because recovery was measured at ~2
+#:    minutes and retrying faster just burns attempts.
+#:
+#: The bounds are the point. An unbounded loop is a storm, and a storm against a throttle
+#: is how a transient 403 becomes a self-inflicted ban. Retries are counted and reported, so
+#: a run that leaned on twenty of them is visibly a worse run than one that needed none.
+RETRYABLE_STATUS = frozenset({403, 429, 500, 502, 503, 504})
+DEFAULT_MAX_RETRIES = 4
+DEFAULT_RETRY_BASE_SECONDS = 5.0
+FORBIDDEN_COOLDOWN_SECONDS = 30.0
+DEFAULT_MIN_INTERVAL_SECONDS = 1.2
+
+
 class AlpacaIvSource:
     """Live reads through the read-only client, with a call counter for the report."""
 
-    def __init__(self, client) -> None:
+    def __init__(
+        self,
+        client,
+        *,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_base_seconds: float = DEFAULT_RETRY_BASE_SECONDS,
+        min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
+        sleep=time.sleep,
+        clock=time.monotonic,
+    ) -> None:
         self.client = client
         self.calls = 0
+        self.retries = 0
+        self.cooldowns = 0
+        self.max_retries = max_retries
+        self.retry_base_seconds = retry_base_seconds
+        self.min_interval_seconds = min_interval_seconds
+        self._sleep = sleep
+        self._clock = clock
+        self._last_call = 0.0
+
+    def _pace(self) -> None:
+        """Wait out the remainder of the minimum interval since the last options call."""
+        if self.min_interval_seconds <= 0:
+            return
+        elapsed = self._clock() - self._last_call
+        if self._last_call and elapsed < self.min_interval_seconds:
+            self._sleep(self.min_interval_seconds - elapsed)
 
     def equity_daily_bars(self, symbol: str, *, start: str, end: str) -> BarSeries:
         self.calls += 1
@@ -172,11 +235,30 @@ class AlpacaIvSource:
     def option_daily_bars(
         self, symbols: Sequence[str], *, start: str, end: str, page_token: str | None = None
     ) -> OptionBarSeries:
-        self.calls += 1
         kwargs: dict[str, object] = {}
         if page_token is not None:
             kwargs["page_token"] = page_token
-        return self.client.get_option_daily_bars(symbols, start=start, end=end, **kwargs)
+        for attempt in range(self.max_retries + 1):
+            self._pace()
+            self.calls += 1
+            self._last_call = self._clock()
+            try:
+                return self.client.get_option_daily_bars(symbols, start=start, end=end, **kwargs)
+            except AlpacaAPIError as exc:
+                if exc.status not in RETRYABLE_STATUS or attempt == self.max_retries:
+                    raise
+                # Exponential backoff, but a 403 starts from a much higher floor because
+                # recovery was measured at ~2 minutes. A 429 or a 5xx gets the short ramp:
+                # those genuinely are transient.
+                base = (
+                    FORBIDDEN_COOLDOWN_SECONDS if exc.status == 403 else self.retry_base_seconds
+                )
+                delay = base * (2**attempt)
+                if exc.status == 403:
+                    self.cooldowns += 1
+                self.retries += 1
+                self._sleep(delay)
+        raise AssertionError("retry loop exited without returning or raising")
 
 
 # ---------------------------------------------------------------------------
@@ -340,6 +422,13 @@ class BackfillReport:
     tenor_key_counts: dict[str, int] = field(default_factory=dict)
     origin_counts: dict[str, int] = field(default_factory=dict)
     sessions: list[SessionReport] = field(default_factory=list)
+    #: Retries the source needed. Reported because a run that leaned on twenty is a worse
+    #: run than one that needed none, even when both produce the same rows.
+    retries: int = 0
+    #: How many of those retries were 403 cooldowns — the number that says how hard the
+    #: upstream throttle pushed back, which is an operational fact about the plan and not
+    #: about this code.
+    cooldowns: int = 0
     #: ``(arm, dte_min, dte_max, sessions_planned)`` per band, so an empty band is visible
     #: in the report instead of silently contributing nothing.
     bands_seen: list[tuple[str, int, int, int]] = field(default_factory=list)
@@ -352,6 +441,8 @@ class BackfillReport:
             f"  sessions with >=1 obs   : {self.sessions_written}",
             f"  observations written    : {self.observations_written}",
             f"  api calls               : {self.api_calls}",
+            f"  retries (transient 403/429/5xx): {self.retries}",
+            f"  403 cooldowns           : {self.cooldowns}",
             f"  bands (arm, dte, sessions): {self.bands_seen}",
             f"  origins                 : {self.origin_counts}",
             "  tenor key -> observations:",
@@ -576,9 +667,9 @@ def run_backfill(
         )
 
     report = BackfillReport(start=start, end=end)
-    equity_end = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace(
-        "+00:00", "Z"
-    )
+    equity_end = (
+        dt.datetime.now(dt.UTC) - dt.timedelta(minutes=EQUITY_END_BACKOFF_MINUTES)
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
     equities = source.equity_daily_bars(
         underlying, start=start.isoformat(), end=equity_end
     )
@@ -633,6 +724,8 @@ def run_backfill(
                     OptionBarSeries(bars_by_symbol=merged), plans, start=start, end=end
                 )
             )
+        report.retries = getattr(source, "retries", 0)
+        report.cooldowns = getattr(source, "cooldowns", 0)
 
         for plan in plans:
             observations, session_report = observations_for_session(
