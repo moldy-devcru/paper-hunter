@@ -84,7 +84,13 @@ from config.loader import Rulebook
 from data.event_calendar import EventCalendar
 from executor.alpaca_client import Bar, BarSeries, OptionChain, OptionContract
 from executor.checklist import ChecklistResult, evaluate
-from executor.iv_rank import IvRankStore, tenor_key
+from executor.iv_rank import (
+    STRIKE_BUCKET_SIZE,
+    IvRankStore,
+    dte_tenor_key,
+    strike_bucket,
+    tenor_key,
+)
 from executor.snapshot_builder import SnapshotResult, build_snapshot
 
 Arm = Literal["B", "C"]
@@ -648,12 +654,58 @@ def _atm_for_right(chain: OptionChain, spot: float, right: str) -> OptionContrac
     return min(pool, key=lambda c: abs(c.strike - spot))
 
 
+#: Strike-bucket width is the single constant in ``executor.iv_rank`` (FIX
+#: 2026-10-03, R4), so the plan cannot drift from the soak that writes the series.
+TENOR_STRIKE_BUCKET = STRIKE_BUCKET_SIZE
+
+
+def _tenor_key_for(
+    contract: OptionContract,
+    day: dt.date,
+    *,
+    mode: str,
+    dte_bucket_days: int,
+) -> str:
+    """The IV-rank series key T5 reads, per the rulebook's ``tenor_key_mode``.
+
+    RULED 2026-10-03 (operator, R4): ``rolling_dte``. The rolling key needs a DTE,
+    which means a calendar the caller has to supply — this derives it from the
+    contract's own expiry rather than from the chain's far expiry, because a chain
+    with a March LEAPS leg and a Friday weekly would otherwise put arm B's 0DTE
+    reading under a 150-day key and never warm up.
+    """
+    if mode == "expiry":
+        return tenor_key(
+            expiry=contract.expiry, right=contract.right, strike=contract.strike
+        )
+    try:
+        expiry_day = dt.datetime.strptime(contract.expiry, "%Y%m%d").date()
+    except ValueError:
+        # A contract with an unparseable expiry cannot be placed on the DTE axis.
+        # Falling back to the expiry key is the conservative move: it yields a series
+        # that will not warm up (T5 stays PENDING, no trade) rather than one that
+        # quietly borrows another expiry's history (T5 fires on the wrong tenor).
+        return tenor_key(
+            expiry=contract.expiry, right=contract.right, strike=contract.strike
+        )
+    dte = max((expiry_day - day).days, 0)
+    return dte_tenor_key(
+        dte=dte,
+        right=contract.right,
+        strike_bucket=strike_bucket(contract.strike, TENOR_STRIKE_BUCKET),
+        dte_bucket_days=dte_bucket_days,
+    )
+
+
 def _iv_rank_for_direction(
     chain: OptionChain | None,
     store: IvRankStore | None,
     spot: float | None,
     direction: Direction,
     day: dt.date,
+    *,
+    tenor_key_mode: str = "rolling_dte",
+    dte_bucket_days: int = 7,
 ) -> tuple[float | None, dict[str, Any]]:
     """IV rank for the direction's ATM tenor, via the injected store.
 
@@ -680,7 +732,9 @@ def _iv_rank_for_direction(
             "reason": f"{contract.symbol} carries no impliedVolatility to score",
             "contract": contract.symbol,
         }
-    key = tenor_key(expiry=contract.expiry, right=contract.right, strike=contract.strike)
+    key = _tenor_key_for(
+        contract, day, mode=tenor_key_mode, dte_bucket_days=dte_bucket_days
+    )
     result = store.iv_rank(
         contract.implied_volatility,
         contract.underlying,
@@ -690,6 +744,11 @@ def _iv_rank_for_direction(
     payload = result.to_dict()
     payload["contract"] = contract.symbol
     payload["current_iv"] = contract.implied_volatility
+    # Recorded so the journal says WHICH series answered, not just what it returned.
+    # Under R4 the two modes are a live switch, so a rank of 31 is only interpretable
+    # next to the key that produced it.
+    payload["tenor_key"] = key
+    payload["tenor_key_mode"] = tenor_key_mode
     return result.rank, payload
 
 
@@ -775,6 +834,10 @@ def make_arm_plan(
     snapshot_dict = snapshot_result.to_dict(direction=direction, arm=arm)
     if extra_snapshot:
         snapshot_dict.update(extra_snapshot)
+    # R2: recorded here, where the evaluation actually happened, so the watch loop can
+    # tell "green at 08:30" from "green right now" without re-deriving it — and it is
+    # set AFTER the caller's extras so it cannot be overwritten by a stale value.
+    snapshot_dict["plan_green"] = bool(result.fire)
     return ArmPlan(
         arm=arm,
         direction=direction,
@@ -850,7 +913,13 @@ def build_hunt_plan(
             # that did not exist; the 2026-10-02 ruling gave it a real ceiling (< 50, same
             # as arm B), so not scoring it would leave the gate unevaluable.
             iv_rank, iv_provenance = _iv_rank_for_direction(
-                chain, iv_store, spot, direction, day
+                chain,
+                iv_store,
+                spot,
+                direction,
+                day,
+                tenor_key_mode=rules.checklist.t5_options_chain.tenor_key_mode,
+                dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
             )
             extra_notes.append(f"IV-rank source: {iv_provenance}")
 
@@ -886,6 +955,12 @@ def build_hunt_plan(
                 projection_factor=projection_factor,
                 extra_snapshot={
                     "iv_rank_provenance": iv_provenance,
+                    # R4: the tenor key is lifted to a top-level field because the
+                    # watch loop must be able to confirm it is re-verifying the SAME
+                    # series the plan read. A rank without its key is not auditable
+                    # under a ruling that keeps both keying modes reachable.
+                    "iv_rank_tenor_key": iv_provenance.get("tenor_key"),
+                    "iv_rank_tenor_mode": iv_provenance.get("tenor_key_mode"),
                     "watch_notes": list(extra_notes),
                 },
                 extra_notes=extra_notes,

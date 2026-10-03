@@ -592,7 +592,10 @@ def test_iv_snapshot_writes_both_tenor_flavours(rules, journal, iv_store):
 
     keys = {r["tenor_key"] for r in iv_store.conn.execute("SELECT tenor_key FROM iv_observations")}
     assert f"{SESSION:%Y%m%d}-call-625.00" in keys  # expiry-keyed
-    assert "dte30-call-625.00" in keys  # rolling DTE-keyed
+    # Rolling DTE-keyed, BUCKETED to 7 days (R4): 30 DTE floors to 28. Before the
+    # bucket the key carried the raw DTE, so a contract wrote a fresh key every day of
+    # its life and no rolling tenor could ever collect a second observation.
+    assert "dte28-call-625.00" in keys  # rolling DTE-keyed, 30 DTE -> 28 bucket
     assert "dte0-call-625.00" in keys
 
 

@@ -37,6 +37,7 @@ from fixtures_synthetic import (
 )
 
 from config.loader import DEFAULT_RULES_PATH, load_rules, load_rules_text
+from executor import hunt_plan
 from executor.alpaca_client import Bar
 from executor.checklist import BollingerState, FlowGate, IndicatorSnapshot
 from executor.hunt_plan import (
@@ -449,11 +450,21 @@ def test_non_veto_event_kind_does_not_veto(series, rules, session_day):
 def test_iv_rank_from_the_store_satisfies_t5_for_arm_b(tmp_path, series, rules, session_day,
                                                         spot):
     store = IvRankStore.open(tmp_path / "ivrank.db", min_observations=5)
-    from executor.iv_rank import tenor_key
 
     chain = deep_itm_chain(day=session_day, spot=spot)
     contract = min(chain.contracts, key=lambda c: abs(c.strike - spot))
-    tenor = tenor_key(expiry=contract.expiry, right="call", strike=contract.strike)
+    # RULED 2026-10-03 (R4): T5 reads the ROLLING DTE-keyed series, so the fixture
+    # must seed the series the plan will actually look up. Seeding via the production
+    # helper rather than re-deriving the key is deliberate: this test previously seeded
+    # an expiry-keyed series and asserted T5 passed, which only held while the plan read
+    # the same key it did — the failure mode R4 exists to close.
+    tenor = hunt_plan._tenor_key_for(
+        contract,
+        session_day,
+        mode=rules.checklist.t5_options_chain.tenor_key_mode,
+        dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
+    )
+    assert tenor.startswith("dte"), f"R4: expected a rolling DTE key, got {tenor!r}"
     # The current reading must not be the highest in the window: rank is the share of
     # observations STRICTLY BELOW it, so seeding everything below would give rank 100
     # and fail T5 for the wrong reason. Three below, seven above -> rank 30.

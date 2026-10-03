@@ -66,6 +66,16 @@ DEFAULT_DB_PATH = REPO_ROOT / "data" / "ivrank.db"
 #: rank as PENDING so waiting costs nothing but trades.
 MIN_OBSERVATIONS = 60
 
+#: Width of the rolling DTE tenor bucket, in days. See :func:`dte_tenor_key` — one
+#: week is what makes the rolling series accumulate at all (FIX 2026-10-03, R4).
+DTE_BUCKET_DAYS = 7
+
+#: Strike-bucket width, in dollars, shared by the EOD soak that WRITES the series and
+#: the hunt plan that READS it. Both used to name their own ``5.0`` default and agree
+#: by hand; a drift there reads one key and writes another, and T5 then sits in warmup
+#: forever with no error anywhere (FIX 2026-10-03, R4).
+STRIKE_BUCKET_SIZE = 5.0
+
 #: Default lookback. Matches the rulebook's ``iv_rank_lookback: "1y"``.
 DEFAULT_LOOKBACK_DAYS = 365
 
@@ -210,8 +220,30 @@ def dte_tenor_key(
     dte: int,
     right: str,
     strike_bucket: float,
+    dte_bucket_days: int = DTE_BUCKET_DAYS,
 ) -> str:
     """Rolling tenor key: ``dte<bucket>-<right>-<strike_bucket>``.
+
+    # FIX 2026-10-03 (operator ruling R4, T5 tenor = rolling DTE): ``dte`` was used
+    # RAW, so the key embedded the exact integer DTE. That made the key describe a
+    # single day of a single contract's life: on session S an ATM contract at 45 DTE
+    # wrote ``dte45-call-450.00`` and on session S+1 the *same* contract wrote
+    # ``dte44-call-450.00``. Every session therefore wrote a fresh set of keys that
+    # the next session abandoned, no key ever collected a second observation, and the
+    # rolling series could not warm up — which is the entire reason this key exists
+    # (see the INTERPRETATION below). ``dte`` is now floored to a multiple of
+    # ``dte_bucket_days`` (default 7, one week), so a contract sweeping from 92 DTE to
+    # 86 DTE writes ``dte91-...`` for the whole run of days.
+
+    The weekly default is load-bearing rather than cosmetic. Every option expiry moves
+    down the DTE axis by exactly 7 days between two Fridays, so with a 7-day bucket the
+    *set* of buckets written each session is stable: as one weekly expiry leaves the
+    91-97 DTE band the next one enters it. Each bucket therefore keeps collecting one
+    observation per session from a different expiry each time, and reaches
+    ``MIN_OBSERVATIONS`` on the calendar rather than never. A 1-day bucket would
+    reproduce the bug above; a 30-day bucket would mix expiries 30 DTE apart into one
+    "rank", which is too coarse to be a statement about anything. One week is the
+    coarsening the "roughly a week out" reading in this docstring already commits to.
 
     # INTERPRETATION: the EOD soak records BOTH this key and :func:`tenor_key` for
     # every ATM contract it polls, and T5 may read either — the operator picks at
@@ -242,7 +274,10 @@ def dte_tenor_key(
         raise IvRankError(f"right must be 'call' or 'put', got {right!r}")
     if dte < 0:
         raise IvRankError(f"dte must be >= 0, got {dte}")
-    return f"dte{int(dte)}-{side}-{strike_bucket:.2f}"
+    if dte_bucket_days <= 0:
+        raise IvRankError(f"dte_bucket_days must be > 0, got {dte_bucket_days}")
+    bucket = (int(dte) // int(dte_bucket_days)) * int(dte_bucket_days)
+    return f"dte{bucket}-{side}-{strike_bucket:.2f}"
 
 
 def strike_bucket(strike: float, bucket_size: float = 5.0) -> float:
@@ -728,6 +763,8 @@ __all__ = [
     "DateLike",
     "DEFAULT_LOOKBACK_DAYS",
     "IvObservation",
+    "DEFAULT_DB_PATH",
+    "DTE_BUCKET_DAYS",
     "IvRankError",
     "IvRankResult",
     "IVRankStatus",
@@ -738,6 +775,7 @@ __all__ = [
     "VIX_PROXY_SOURCE",
     "VIX_PROXY_TENOR",
     "VIX_PROXY_UNDERLYING",
+    "STRIKE_BUCKET_SIZE",
     "atm_tenor_key",
     "dte_tenor_key",
     "strike_bucket",

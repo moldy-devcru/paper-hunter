@@ -68,7 +68,15 @@ from executor.alpaca_client import (
     _chain_from_payload,
 )
 from executor.iv_rank import DEFAULT_DB_PATH as DEFAULT_IV_DB_PATH
-from executor.iv_rank import IvObservation, IvRankStore, dte_tenor_key, strike_bucket, tenor_key
+from executor.iv_rank import (
+    DTE_BUCKET_DAYS,
+    STRIKE_BUCKET_SIZE,
+    IvObservation,
+    IvRankStore,
+    dte_tenor_key,
+    strike_bucket,
+    tenor_key,
+)
 from executor.position_manager import to_et
 from journal.store import (
     DuplicateFlowBaseline,
@@ -393,7 +401,8 @@ def iv_observations(
     session: dt.date,
     underlying: str,
     max_dte: int = IV_MAX_DTE,
-    bucket_size: float = 5.0,
+    bucket_size: float = STRIKE_BUCKET_SIZE,
+    dte_bucket_days: int = DTE_BUCKET_DAYS,
 ) -> tuple[list[IvObservation], int]:
     """``(observations, skipped_expiries)`` — one ATM reading per live expiry, twice-keyed.
 
@@ -470,6 +479,7 @@ def iv_observations(
                     dte=dte,
                     right=contract.right,
                     strike_bucket=bucket,
+                    dte_bucket_days=dte_bucket_days,
                 ),
                 **common,
             )
@@ -680,7 +690,14 @@ def run_soak(
     iv_skipped = 0
     if iv_store is not None:
         observations, iv_skipped = iv_observations(
-            chain, spot, session=session_day, underlying=symbol
+            chain,
+            spot,
+            session=session_day,
+            underlying=symbol,
+            # Written under the SAME widths the plan reads, or T5 scores a series
+            # nothing ever wrote (FIX 2026-10-03, R4).
+            bucket_size=STRIKE_BUCKET_SIZE,
+            dte_bucket_days=rules.checklist.t5_options_chain.dte_bucket_days,
         )
         iv_rows = iv_store.record_many(observations)
 
