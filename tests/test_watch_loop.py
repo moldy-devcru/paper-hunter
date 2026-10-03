@@ -1117,3 +1117,88 @@ def _snapshot(series, chain, *, spot: float = 626.5):
     return watch_loop.WatchSnapshot(
         fetched_at=at(10, 30), symbol="SPY", spot=spot, daily=series, chain=chain
     )
+
+
+# ---------------------------------------------------------------------------
+# T4's run-rate branch reaches the live loop (outsider review 4.3)
+# ---------------------------------------------------------------------------
+
+
+def _run_rate_intraday(day: dt.date, *, sessions: int = 21, today_volume: float = 780_000.0):
+    """21 sessions of 15-minute bars; today prints 2x a normal session."""
+    from executor.alpaca_client import Bar, BarSeries
+
+    bars = []
+    for i in range(sessions):
+        session_day = day - dt.timedelta(days=sessions - 1 - i)
+        is_today = i == sessions - 1
+        volume = today_volume if is_today else 390_000.0
+        for j in range(26):
+            stamp = dt.datetime.combine(
+                session_day, dt.time(9, 30), tzinfo=ET
+            ) + dt.timedelta(minutes=15 * j)
+            bars.append(
+                Bar(
+                    t=stamp.astimezone(dt.UTC),
+                    o=625.0, h=626.0, l=624.0, c=625.0,
+                    v=volume / 26,
+                )
+            )
+    return BarSeries(symbol="SPY", timeframe="15Min", feed="iex", bars=bars)
+
+
+def test_the_live_loop_scores_t4_against_the_run_rate(rules, series):
+    """End to end: the snapshot the loop re-verifies against carries a run rate, and T4
+    reads it. Without ``intraday=`` on the snapshot there was nothing for the branch to
+    read and the live path could never use it."""
+    cell = firing_cell(rules)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=626.5, daily=series,
+        chain=zero_dte_chain(day=DAY), intraday=_run_rate_intraday(DAY),
+    )
+    with_run_rate = watch_loop.reverify_cell(cell, snapshot=snapshot, rules=rules)
+    # Same live data, no intraday series: T4 falls back to relvol only, as it always did.
+    without = dataclasses.replace(snapshot, intraday=None)
+    without_run_rate = watch_loop.reverify_cell(cell, snapshot=without, rules=rules)
+    assert "run-rate" in with_run_rate.conditions["T4"].detail
+    assert "run-rate unavailable" in without_run_rate.conditions["T4"].detail
+
+
+def test_a_run_rate_can_carry_t4_on_its_own(rules, series):
+    """T4 now names BOTH branches in its verdict, whichever way it went."""
+    cell = firing_cell(rules)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=626.5, daily=series,
+        chain=zero_dte_chain(day=DAY), intraday=_run_rate_intraday(DAY),
+    )
+    result = watch_loop.reverify_cell(cell, snapshot=snapshot, rules=rules)
+    detail = result.conditions["T4"].detail
+    assert "intraday run-rate" in detail
+
+
+def test_a_run_rate_carries_t4_when_relvol_is_pressed(rules, series, monkeypatch):
+    """The case the frozen rule was written for, pinned with a forced-low relvol.
+
+    ``build_relvol`` divides the newest daily bar by the mean of 20 COMPLETED sessions.
+    Intraday that bar is partial, so at 10:30 the relvol reading is structurally low and
+    T4 could not pass on that branch alone — the whole reason the brief wrote the
+    parenthetical.
+    """
+    import executor.snapshot_builder as sb
+
+    real = sb.build_relvol
+
+    def partial_day_relvol(*a, **k):
+        value, reason, feed = real(*a, **k)
+        return (0.6, reason, feed) if value is not None else (value, reason, feed)
+
+    monkeypatch.setattr(sb, "build_relvol", partial_day_relvol)
+    cell = firing_cell(rules)
+    snapshot = watch_loop.WatchSnapshot(
+        fetched_at=at(10, 30), symbol="SPY", spot=626.5, daily=series,
+        chain=zero_dte_chain(day=DAY), intraday=_run_rate_intraday(DAY),
+    )
+    result = watch_loop.reverify_cell(cell, snapshot=snapshot, rules=rules)
+    t4 = result.conditions["T4"]
+    assert t4.status == "PASS"
+    assert "PASS via intraday run-rate" in t4.detail

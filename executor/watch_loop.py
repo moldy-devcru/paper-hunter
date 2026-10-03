@@ -124,6 +124,11 @@ class WatchSnapshot:
     daily: BarSeries
     chain: OptionChain | None = None
     price_source: str = "last intraday bar close"
+    #: Multi-session intraday history for T4's run-rate branch (FIX 2026-10-03, review
+    #: 4.3). Optional and additive: ``None`` means T4 falls back to its relative-volume
+    #: branch, which is exactly what it did before the run rate existed — so a provider
+    #: that cannot supply it (or a pre-market plan) keeps working.
+    intraday: BarSeries | None = None
     notes: tuple[str, ...] = ()
 
     def age_seconds(self, now: dt.datetime) -> float:
@@ -137,6 +142,7 @@ class WatchSnapshot:
             "daily_bars": len(self.daily),
             "chain_contracts": len(self.chain) if self.chain is not None else None,
             "price_source": self.price_source,
+            "intraday_bars": len(self.intraday) if self.intraday is not None else 0,
             "notes": list(self.notes),
         }
 
@@ -162,6 +168,7 @@ class StaticWatchData:
         fetched_at: dt.datetime | None = None,
         option_prices: dict[str, float] | None = None,
         price_source: str = "fixture",
+        intraday: BarSeries | None = None,
     ) -> None:
         self.spot = spot
         self.daily = daily
@@ -169,6 +176,7 @@ class StaticWatchData:
         self.fetched_at = fetched_at
         self.option_prices = dict(option_prices or {})
         self.price_source = price_source
+        self.intraday = intraday
         self.snapshots: list[WatchSnapshot] = []
 
     def watch_snapshot(self, symbol: str) -> WatchSnapshot:
@@ -183,6 +191,7 @@ class StaticWatchData:
             daily=self.daily,
             chain=self.chain,
             price_source=self.price_source,
+            intraday=self.intraday,
         )
         self.snapshots.append(snapshot)
         return snapshot
@@ -215,12 +224,63 @@ class AlpacaWatchData:
         feed: str = "iex",
         daily_feed: str = "sip",
         daily_limit: int = 400,
+        run_rate_timeframe: str = "15Min",
+        run_rate_limit: int = 700,
+        run_rate_refresh_seconds: int = 300,
     ) -> None:
         self.client = client
         self.timeframe = timeframe
         self.feed = feed
         self.daily_feed = daily_feed
         self.daily_limit = daily_limit
+        self.run_rate_timeframe = run_rate_timeframe
+        self.run_rate_limit = run_rate_limit
+        self.run_rate_refresh_seconds = run_rate_refresh_seconds
+        self._run_rate_cache: BarSeries | None = None
+        self._run_rate_fetched_at: dt.datetime | None = None
+        self._run_rate_error: str | None = None
+
+    def _run_rate_series(self, symbol: str) -> BarSeries | None:
+        """Multi-session intraday history for T4's run-rate branch, cached.
+
+        FIX 2026-10-03 (review 4.3). The run rate needs ``lookback_days`` prior sessions
+        of *intraday* bars, and the loop re-reads the world every tick — pulling ~20
+        sessions of bars on every one would be the loop's dominant cost and the API's.
+        So the history is fetched on a TTL and the newest bars come from the same read
+        that prices spot.
+
+        ``15Min`` rather than ``1Min``: 26 bars a session instead of 390, which is a
+        quarter-hour resolution on "how fast is volume arriving" — which is all the
+        run rate measures. A failure here is swallowed and reported as a note: T4 falls
+        back to its relative-volume branch, so a missing run-rate series must not take
+        the watch loop down with it.
+        """
+        now = dt.datetime.now(dt.UTC)
+        fresh = (
+            self._run_rate_cache is not None
+            and self._run_rate_fetched_at is not None
+            and (now - self._run_rate_fetched_at).total_seconds()
+            < self.run_rate_refresh_seconds
+        )
+        if fresh:
+            return self._run_rate_cache
+        try:
+            series = self.client.get_intraday_bars(
+                symbol,
+                timeframe=self.run_rate_timeframe,
+                feed=self.feed,
+                limit=self.run_rate_limit,
+            )
+        except Exception as exc:  # noqa: BLE001 - a data read must not kill the loop
+            # Keep whatever was cached: a stale baseline is still a same-feed baseline,
+            # and T4's relative-volume branch remains as the fallback.
+            if self._run_rate_cache is not None:
+                return self._run_rate_cache
+            self._run_rate_error = f"{type(exc).__name__}: {exc}"
+            return None
+        self._run_rate_cache = series
+        self._run_rate_fetched_at = now
+        return series
 
     def watch_snapshot(self, symbol: str) -> WatchSnapshot:
         started = dt.datetime.now(dt.UTC)
@@ -233,6 +293,16 @@ class AlpacaWatchData:
             )
         daily = self.client.get_daily_bars(symbol, feed=self.daily_feed, limit=self.daily_limit)
         chain = self.client.get_option_chain(symbol)
+        self._run_rate_error = None
+        run_rate_series = self._run_rate_series(symbol)
+        notes = [f"read started {started.isoformat(timespec='seconds')}"]
+        if run_rate_series is not None:
+            notes.append(
+                f"intraday run-rate series: {len(run_rate_series)} {self.run_rate_timeframe} "
+                f"bars on feed={self.feed}"
+            )
+        elif self._run_rate_error:
+            notes.append(f"intraday run-rate series unavailable: {self._run_rate_error}")
         return WatchSnapshot(
             fetched_at=dt.datetime.now(dt.UTC),
             symbol=symbol,
@@ -240,7 +310,8 @@ class AlpacaWatchData:
             daily=daily,
             chain=chain,
             price_source=f"{self.timeframe}/{self.feed} last bar close",
-            notes=(f"read started {started.isoformat(timespec='seconds')}",),
+            intraday=run_rate_series,
+            notes=tuple(notes),
         )
 
     def option_price(self, symbol: str, *, snapshot: WatchSnapshot) -> float | None:
@@ -507,6 +578,11 @@ def reverify_cell(
         bb_lookback_days=rules.checklist.t3_bollinger.satisfied_if_any_of.squeeze_release.lookback_days,
         bb_squeeze_percentile=rules.checklist.t3_bollinger.satisfied_if_any_of.squeeze_release.bandwidth_below_percentile,
         relvol_lookback_days=rules.checklist.t4_volume.lookback_days,
+        # FIX 2026-10-03 (review 4.3): the live loop is the only caller that can supply
+        # intraday history, so this is where T4's run-rate branch comes alive. The plan
+        # builds pre-market from daily bars and leaves it None -> relvol-only, as before.
+        intraday=snapshot.intraday,
+        intraday_lookback_days=rules.checklist.t4_volume.lookback_days,
         cross_guard_hours=rules.checklist.t2b_macd.fresh_cross_guard.max_age_hours,
     )
     return evaluate(result.snapshot, rules, cell.direction, cell.arm)  # type: ignore[arg-type]

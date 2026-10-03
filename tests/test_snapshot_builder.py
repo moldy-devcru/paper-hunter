@@ -31,11 +31,13 @@ from data.event_calendar import EventCalendar
 from executor.alpaca_client import BarSeries
 from executor.checklist import evaluate
 from executor.indicators import InsufficientData, ema, macd
+from executor.position_manager import to_et
 from executor.snapshot_builder import (
     NEEDS_MACD,
     SnapshotInputError,
     build_bollinger_state,
     build_from_bars,
+    build_intraday_run_rate,
     build_relvol,
     build_snapshot,
     find_macd_cross,
@@ -588,3 +590,179 @@ def test_indicators_module_raises_rather_than_padding_for_short_input():
     refuses to fabricate a short aligned series."""
     with pytest.raises(InsufficientData):
         ema([1.0] * 10, 50)
+
+# ---------------------------------------------------------------------------
+# T4's intraday run rate (outsider review 4.3)
+# ---------------------------------------------------------------------------
+
+
+def _intraday_series(
+    *,
+    sessions: int = 21,
+    bars_per_session: int = 26,
+    first: dt.date = dt.date(2026, 9, 1),
+    session_volume: float = 390_000.0,
+    today_volume: float | None = None,
+    timeframe: str = "15Min",
+    feed: str = "iex",
+    today_partial_bars: int | None = None,
+) -> BarSeries:
+    """``sessions`` regular sessions of intraday bars, evenly spread by volume.
+
+    Bars start at 09:30 ET and step ``390 / bars_per_session`` minutes, so the last bar
+    of every session sits at or before 16:00 ET.
+    """
+    from executor.alpaca_client import Bar
+
+    step = 390 // bars_per_session
+    bars = []
+    days = [first + dt.timedelta(days=i) for i in range(sessions)]
+    for index, day in enumerate(days):
+        is_today = index == len(days) - 1
+        count = bars_per_session
+        if is_today and today_partial_bars is not None:
+            count = today_partial_bars
+        volume = (
+            (today_volume if today_volume is not None else session_volume)
+            if is_today
+            else session_volume
+        )
+        per_bar = volume / count
+        for j in range(count):
+            stamp = dt.datetime.combine(
+                day,
+                dt.time(9, 30),
+                tzinfo=dt.timezone(dt.timedelta(hours=-4)),
+            ) + dt.timedelta(minutes=step * j)
+            bars.append(
+                Bar(t=stamp.astimezone(dt.UTC), o=600.0, h=601.0, l=599.0, c=600.0, v=per_bar)
+            )
+    return BarSeries(symbol="SPY", timeframe=timeframe, feed=feed, bars=bars)
+
+
+def test_the_run_rate_compares_volume_against_the_same_clock_yesterday():
+    """The whole definition: today's cumulative volume at time t over the mean of the
+    prior sessions' cumulative volume at THAT time t.
+
+    Divided by full-day averages instead, the ratio would just measure how much of the
+    session has elapsed, and no run-rate threshold could mean anything.
+    """
+    intraday = _intraday_series(today_volume=585_000.0)  # 1.5x a 390k session
+    value, reason = build_intraday_run_rate(intraday, lookback_days=20)
+    assert reason is None
+    assert value == pytest.approx(1.5, rel=1e-6)
+
+
+def test_a_fast_start_reads_faster_than_the_same_volume_spread_over_the_day():
+    """Same total volume, different arrival. That difference is what a run rate is for.
+
+    Today prints its whole session's volume in the first 8 of 26 bars. Measured at that
+    clock it is far ahead of normal; measured at the close it would be merely average.
+    """
+    fast = _intraday_series(today_volume=390_000.0, today_partial_bars=8)
+    slow = _intraday_series(today_volume=390_000.0)
+    fast_value, _ = build_intraday_run_rate(fast, lookback_days=20)
+    slow_value, _ = build_intraday_run_rate(slow, lookback_days=20)
+    # 8 fifteen-minute bars end at 11:15; a normal session has done 8 of its 26 by then.
+    assert fast_value == pytest.approx(26 / 8, rel=1e-6)
+    assert slow_value == pytest.approx(1.0, rel=1e-6)
+    assert fast_value > slow_value
+
+
+def test_the_run_rate_needs_the_full_lookback_window():
+    """A partial baseline is a baseline measured over a different window than the
+    frozen rule names, so it is reported unavailable rather than quietly shrunk."""
+    intraday = _intraday_series(sessions=12)
+    value, reason = build_intraday_run_rate(intraday, lookback_days=20)
+    assert value is None
+    assert "20 prior sessions" in (reason or "")
+
+
+def test_a_prior_session_with_no_bar_by_the_current_clock_blocks_the_value():
+    """The early-close case: at 13:05 a 13:00-close session has nothing to contribute,
+    and averaging over the sessions that happen to have data would shrink the window
+    without saying so."""
+    from executor.alpaca_client import Bar
+
+    intraday = _intraday_series()
+    # Replace the first prior session with bars that only exist after the cutoff — the
+    # early-close shape, where a session contributes nothing to "volume by 13:05".
+    first_prior = to_et(intraday.bars[0].t).date()
+    kept = [b for b in intraday.bars if to_et(b.t).date() != first_prior]
+    late_open = [
+        Bar(
+            t=dt.datetime.combine(
+                first_prior, dt.time(15, 55), tzinfo=dt.timezone(dt.timedelta(hours=-4))
+            ).astimezone(dt.UTC),
+            o=600.0, h=601.0, l=599.0, c=600.0, v=1000.0,
+        )
+    ]
+    value, reason = build_intraday_run_rate(
+        BarSeries(symbol="SPY", timeframe="15Min", feed="iex", bars=kept + late_open),
+        lookback_days=20,
+    )
+    assert value is None
+    assert "no intraday bar at or before" in (reason or "")
+
+
+def test_a_zero_baseline_is_unavailable_rather_than_infinite():
+    """An infinite ratio would score as the strongest possible volume confirmation off a
+    window that measured nothing."""
+    intraday = _intraday_series(session_volume=0.0, today_volume=500_000.0)
+    value, reason = build_intraday_run_rate(intraday, lookback_days=20)
+    assert value is None
+    assert "zero baseline" in (reason or "")
+
+
+def test_pre_and_post_market_bars_never_enter_the_run_rate():
+    """The daily bar the relvol branch compares against is a regular-session bar, so
+    extended hours on one side only would compare two different universes."""
+    from executor.alpaca_client import Bar
+
+    intraday = _intraday_series()
+    premarket = [
+        Bar(
+            t=dt.datetime.combine(
+                to_et(intraday.bars[-1].t).date(),
+                dt.time(8, 0),
+                tzinfo=dt.timezone(dt.timedelta(hours=-4)),
+            ).astimezone(dt.UTC),
+            o=600.0, h=601.0, l=599.0, c=600.0, v=50_000_000.0,
+        )
+    ]
+    with_noise = BarSeries(
+        symbol="SPY", timeframe="15Min", feed="iex",
+        bars=sorted(intraday.bars + premarket, key=lambda b: b.t),
+    )
+    assert build_intraday_run_rate(with_noise, lookback_days=20) == pytest.approx(
+        build_intraday_run_rate(intraday, lookback_days=20)
+    )
+
+
+def test_a_daily_series_cannot_express_volume_so_far_today():
+    intraday = _intraday_series()
+    daily_view = BarSeries(
+        symbol="SPY", timeframe="1Day", feed="iex", bars=intraday.bars
+    )
+    value, reason = build_intraday_run_rate(daily_view, lookback_days=20)
+    assert value is None
+    assert "1Day" in (reason or "")
+
+
+def test_no_intraday_series_is_a_note_not_a_pending_reason(long_payload):
+    """T4 is an OR in the brief, so a missing run-rate series must not block anything
+    the relvol branch already allows. It lands in notes so the journal can still say
+    which branch ran."""
+    result = build_from_bars(long_payload)
+    assert result.snapshot.intraday_run_rate is None
+    assert any("run-rate unavailable" in note for note in result.notes)
+    assert not any("run-rate" in reason for reason in result.pending_reasons)
+
+
+def test_the_snapshot_carries_the_run_rate_and_the_note(long_payload):
+    intraday = _intraday_series(today_volume=780_000.0)
+    result = build_from_bars(long_payload, intraday=intraday, intraday_lookback_days=20)
+    assert result.snapshot.intraday_run_rate == pytest.approx(2.0, rel=1e-6)
+    assert any("run-rate computed" in note for note in result.notes)
+    indicators = result.to_dict()["indicators"]
+    assert indicators["intraday_run_rate"] == pytest.approx(2.0, rel=1e-6)

@@ -48,6 +48,7 @@ Python 3.12+, stdlib + ``executor.indicators``/``executor.checklist``.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -71,6 +72,7 @@ from executor.indicators import (
     relative_volume,
     rsi,
 )
+from executor.position_manager import to_et
 
 Direction = Literal["call", "put"]
 
@@ -335,6 +337,145 @@ def build_relvol(
 
 
 # ---------------------------------------------------------------------------
+# intraday run rate (T4's second, frozen branch)
+# ---------------------------------------------------------------------------
+
+#: US equity regular session, ET wall-clock. Bars outside it never enter the run rate:
+#: the daily bar it is compared against is a regular-session bar, so a pre-market
+#: block glued onto either side would compare two different universes. Same rule and
+#: same reasoning as ``ui.aggregate``'s pre/post exclusion.
+SESSION_OPEN_ET = dt.time(9, 30)
+SESSION_CLOSE_ET = dt.time(16, 0)
+
+#: Timeframes that cannot express "volume so far today". A daily bar carries one
+#: volume number for the whole session stamped at the open, so every session would
+#: report the same time-of-day and the ratio would collapse back into ``build_relvol``.
+CALENDAR_TIMEFRAMES: frozenset[str] = frozenset(
+    {"1Day", "1Week", "1Month"}
+)
+
+
+def build_intraday_run_rate(
+    intraday: BarSeries | None,
+    *,
+    lookback_days: int = 20,
+    session: dt.date | None = None,
+) -> tuple[float | None, str | None]:
+    """T4's intraday run-rate branch: today's volume so far vs the same clock yesterday.
+
+    FIX 2026-10-03 (outsider review 4.3). ``checklist.t4_volume.intraday_run_rate_min``
+    is a frozen rulebook value that no code read: the field existed in the loader, in a
+    test, and inside a *log string* in ``checklist._t4``, while T4 evaluated
+    ``relvol >= relative_volume_min`` and nothing else.
+
+    Definition (the rulebook's own comment: *"or intraday run-rate >= 1.5x for intraday
+    triggers"*): with ``t`` the clock time of the newest intraday bar,
+
+        run_rate = today's cumulative volume through t
+                   / mean over the prior ``lookback_days`` sessions of that session's
+                     cumulative volume through the SAME time of day
+
+    Same-time-of-day, not full-day: the baseline must be the volume a normal session
+    had accumulated by the time we are being asked, or the number measures elapsed time
+    rather than urgency (at 10:00 a normal day is ``~15%`` done, and dividing by a
+    completed-day average makes the ratio ~15x optimistic in one direction and
+    structurally unsatisfiable in the other).
+
+    INTERPRETATION: the clock is the newest bar's, not ``now()``. A run rate computed
+    against the wall clock keeps growing between bars while no new volume arrives, so the
+    same snapshot read twice would produce two different numbers — and the number would
+    partly measure how long the loop has been waiting rather than how fast volume came in.
+
+    INTERPRETATION: every insufficient input yields ``None`` rather than a number computed
+    on what happens to be available. A shrunk baseline, a dropped session, and a zero
+    window all still produce a ratio; none of them produce the one the frozen rule names.
+
+    Returns ``(run_rate, pending_reason)``. ``None`` run rate means T4 falls back to
+    its relative-volume branch — see ``checklist._t4``, which scores the two branches
+    as the OR the brief wrote ("...or intraday run-rate >= 1.5x for intraday triggers").
+
+    Strictness choices, all toward "report nothing rather than report a wrong number":
+
+    - The full ``lookback_days`` prior sessions must be present. A partial baseline is
+      a baseline measured over a different window than the frozen rule names.
+    - A prior session with no bar at or before ``t`` is not silently dropped; it makes
+      the value unavailable. Its cumulative-through-``t`` is not measurable, and
+      averaging over the sessions that happen to have data would quietly shrink the
+      window.
+    - A zero baseline mean returns ``None``, not ``inf``: an infinite ratio would score
+      as the strongest possible volume confirmation off a window that measured nothing.
+    - ``session`` overrides which date counts as "today". It exists so a caller can
+      score a fixed session in tests; production leaves it ``None`` and the newest
+      session in the series is today by construction.
+    """
+    if intraday is None or not intraday.bars:
+        return None, "no intraday series supplied — T4 scored on the relative-volume branch only"
+    if intraday.timeframe in CALENDAR_TIMEFRAMES:
+        return (
+            None,
+            f"intraday series is timeframe={intraday.timeframe!r}, which cannot express "
+            "volume-so-far-today; T4 scored on the relative-volume branch only",
+        )
+
+    # (ET date -> [(ET time, volume)], oldest session last)
+    by_session: dict[dt.date, list[tuple[dt.time, float]]] = {}
+    for bar in intraday.bars:
+        moment = to_et(bar.t)
+        clock = moment.time()
+        if clock < SESSION_OPEN_ET or clock > SESSION_CLOSE_ET:
+            continue
+        by_session.setdefault(moment.date(), []).append((clock, bar.v))
+    if not by_session:
+        return (
+            None,
+            "intraday series contains no regular-session bars (09:30-16:00 ET); "
+            "T4 scored on the relative-volume branch only",
+        )
+
+    dates = sorted(by_session)
+    current_date = session if session is not None else dates[-1]
+    if current_date not in by_session:
+        return (
+            None,
+            f"intraday series has no bars for session {current_date.isoformat()}; "
+            "T4 scored on the relative-volume branch only",
+        )
+    # The clock is the newest bar of TODAY — not now(). A run rate computed against the
+    # wall clock would keep growing between bars while no new volume arrives.
+    cutoff = max(clock for clock, _ in by_session[current_date])
+    current_volume = math.fsum(v for _, v in by_session[current_date])
+
+    prior = [d for d in dates if d < current_date][-lookback_days:]
+    if len(prior) < lookback_days:
+        return (
+            None,
+            f"intraday run-rate needs {lookback_days} prior sessions with intraday bars, "
+            f"got {len(prior)} (latest session {current_date.isoformat()})",
+        )
+    baselines: list[float] = []
+    for date in prior:
+        session_volume = math.fsum(v for clock, v in by_session[date] if clock <= cutoff)
+        if not any(clock <= cutoff for clock, _ in by_session[date]):
+            return (
+                None,
+                f"session {date.isoformat()} has no intraday bar at or before the "
+                f"current clock {cutoff.strftime('%H:%M')} ET, so its cumulative volume at "
+                f"that time is not measurable; T4 scored on the relative-volume branch only",
+            )
+        baselines.append(session_volume)
+    mean_baseline = math.fsum(baselines) / len(baselines)
+    if mean_baseline <= 0:
+        return (
+            None,
+            f"intraday run-rate baseline is {mean_baseline:.3f} shares over "
+            f"{len(baselines)} sessions through {cutoff.strftime('%H:%M')} ET — a "
+            "zero baseline measures nothing, so T4 scored on the relative-volume "
+            "branch only",
+        )
+    return current_volume / mean_baseline, None
+
+
+# ---------------------------------------------------------------------------
 # main entry point
 # ---------------------------------------------------------------------------
 
@@ -359,6 +500,8 @@ def build_snapshot(
     bb_lookback_days: int = 60,
     bb_squeeze_percentile: float = 20.0,
     relvol_lookback_days: int = 20,
+    intraday: BarSeries | None = None,
+    intraday_lookback_days: int = 20,
     cross_guard_hours: int = 24,
 ) -> SnapshotResult:
     """Build the ``IndicatorSnapshot`` the checklist evaluates.
@@ -375,10 +518,11 @@ def build_snapshot(
     ``spot``/``chain``, which exist so the provenance of a T5 tenor selection can be
     recorded by the caller.
 
-    The newest daily bar is the signal bar. There is no intraday merge here: the
-    intraday run-rate variant of T4 is Phase 3b work (it needs an intraday series and
-    a session-clock-aware baseline), and silently averaging daily and intraday bars
-    into one snapshot would be worse than not doing it yet.
+    The newest daily bar is the signal bar. There is no daily/intraday merge here: the
+    two live in separate ``BarSeries`` inputs and never mix in one indicator. The
+    intraday run-rate (``build_intraday_run_rate``) is its own field, scored against
+    its own same-time-of-day baseline — see its docstring for why it cannot be derived
+    from the daily series.
     """
     if not daily.bars:
         raise SnapshotInputError("daily series has no bars — cannot build a snapshot")
@@ -457,8 +601,27 @@ def build_snapshot(
     if relvol_reason:
         pending.append(relvol_reason)
 
+    # -- intraday run rate (T4's second branch) ------------------------------
+    # FIX 2026-10-03 (review 4.3): the rulebook's `intraday_run_rate_min` had no reader.
+    # Its unavailability is a NOTE, not a pending reason: the brief scores T4 as an OR
+    # ("relative volume ... or intraday run-rate"), so a missing run rate leaves T4
+    # decidable on the relative-volume branch and must not block an entry the frozen
+    # rules allow. The note is kept because a journal reader still needs to know which
+    # branch actually ran.
+    run_rate_value, run_rate_reason = build_intraday_run_rate(
+        intraday, lookback_days=intraday_lookback_days, session=as_of
+    )
+
     # -- IV rank / chain provenance -----------------------------------------
     notes: list[str] = []
+    if run_rate_reason is not None:
+        notes.append(f"intraday run-rate unavailable: {run_rate_reason}")
+    elif run_rate_value is not None:
+        notes.append(
+            f"intraday run-rate computed on {intraday.timeframe}/{intraday.feed} "
+            f"(feed note only — the run-rate baseline comes from the same series, so "
+            f"there is no cross-feed ratio to make)"
+        )
     if chain is not None:
         notes.append(
             f"options chain: {len(chain)} contracts over {len(chain.expiries())} expiry/expiries, "
@@ -495,6 +658,7 @@ def build_snapshot(
         macd_cross_age_hours=cross_age,
         bollinger=bb_state,
         relvol=relvol_value,
+        intraday_run_rate=run_rate_value,
         iv_rank=iv_rank,
         is_event_day=is_event_day,
         event_kinds=event_kinds,

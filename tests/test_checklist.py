@@ -32,6 +32,7 @@ from config.loader import (
 from executor.checklist import (
     BollingerState,
     ChecklistInputError,
+    ChecklistResult,
     FlowGate,
     IndicatorSnapshot,
     evaluate,
@@ -735,3 +736,71 @@ def test_each_condition_individually_blocks(calibrated, condition_id, mutate, ex
     # and nothing else fails beyond the expected coupled conditions.
     assert result.veto_reasons[0].startswith(f"{first_veto_id}:")
     assert len(result.veto_reasons) == expected_vetoes, result.veto_reasons
+
+def _t4_detail(result: ChecklistResult) -> str:
+    return result.conditions["T4"].detail
+
+
+def test_t4_passes_on_the_run_rate_alone_when_relvol_does_not(calibrated):
+    """The brief's OR: "relative volume >= 1.5x 20-day average on the signal candle
+    (or intraday run-rate >= 1.5x for intraday triggers)".
+
+    relvol below threshold is the NORMAL intraday case — a partial day's volume against
+    a mean of completed sessions — which is exactly the situation the parenthetical was
+    written for. Before this branch existed, T4 could not be satisfied that way at all.
+    """
+    result = evaluate_arm_b(_snapshot(relvol=0.8, intraday_run_rate=1.9), calibrated)
+    assert result.status("T4") == "PASS"
+    detail = _t4_detail(result)
+    assert "PASS via intraday run-rate" in detail
+    assert "relative volume 0.800x" in detail  # reported, just not what carried it
+
+
+def test_t4_passes_on_relvol_alone_when_the_run_rate_is_below(calibrated):
+    """The OR is symmetric: a healthy relvol still passes with a quiet run rate."""
+    result = evaluate_arm_b(_snapshot(relvol=1.6, intraday_run_rate=0.4), calibrated)
+    assert result.status("T4") == "PASS"
+
+
+def test_t4_fails_when_neither_branch_confirms(calibrated):
+    result = evaluate_arm_b(_snapshot(relvol=0.8, intraday_run_rate=1.2), calibrated)
+    assert result.status("T4") == "FAIL"
+    assert "volume did not confirm" in _t4_detail(result)
+
+
+def test_t4_still_passes_on_relvol_when_the_run_rate_is_unavailable(calibrated):
+    """A missing run rate is a fallback, not a new blocking condition. The pre-market
+    plan builds from daily bars only; if this went PENDING, no plan could ever be built.
+    """
+    result = evaluate_arm_b(_snapshot(relvol=1.6), calibrated)
+    assert result.status("T4") == "PASS"
+    assert "intraday run-rate unavailable" in _t4_detail(result)
+
+
+def test_t4_pending_only_when_neither_branch_can_be_measured(calibrated):
+    result = evaluate_arm_b(_snapshot(relvol=None, intraday_run_rate=None), calibrated)
+    assert result.status("T4") == "PENDING"
+
+
+def test_t4_run_rate_threshold_is_the_frozen_one_not_the_relvol_one(calibrated):
+    """Both thresholds are 1.5 in the rulebook today. This pins that T4 reads
+    ``intraday_run_rate_min`` for the run rate rather than reusing
+    ``relative_volume_min`` — a copy-paste of the wrong field would be invisible while
+    the two values happen to agree."""
+    rules = calibrated
+    result = evaluate_arm_b(_snapshot(relvol=0.8, intraday_run_rate=1.5), rules)
+    assert result.status("T4") == "PASS"
+    result = evaluate_arm_b(_snapshot(relvol=0.8, intraday_run_rate=1.49), rules)
+    assert result.status("T4") == "FAIL"
+
+
+def test_t4_non_finite_run_rate_is_a_fail_not_a_pass(calibrated):
+    result = evaluate_arm_b(_snapshot(relvol=0.8, intraday_run_rate=math.inf), calibrated)
+    assert result.status("T4") == "FAIL"
+
+
+def test_t4_rejects_a_run_rate_when_relvol_is_unavailable(calibrated):
+    """relvol is PENDING-shaped, the run rate is measurable and short — so volume did
+    not confirm, which is a FAIL. PENDING would claim the system did not know."""
+    result = evaluate_arm_b(_snapshot(relvol=None, intraday_run_rate=0.9), calibrated)
+    assert result.status("T4") == "FAIL"

@@ -41,7 +41,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**67 interpretations across 8 domains.** Every one was a decision
+**71 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -50,22 +50,26 @@ line, and that code is the source of truth if the two ever disagree.
 > (mechanical; the text between these markers is replaced, the rest of the document
 > — including any operator notes — is not).
 
-### indicators (6)
+### indicators (8)
 
 - [ ] **`executor/indicators.py:106`** — seeding = SMA of the first `period` values. The brief is silent; SMA seeding is the textbook / charting-platform standard. ([source](../executor/indicators.py#L106))
 - [ ] **`executor/indicators.py:144`** — a flat series -> 50.0 (neutral), not NaN and not an exception. ([source](../executor/indicators.py#L144))
 - [ ] **`executor/indicators.py:257`** — population stdev (divisor N), not sample stdev (divisor N-1). ([source](../executor/indicators.py#L257))
 - [ ] **`executor/indicators.py:344`** — a zero 20-day baseline is not an error — it yields inf (or 0.0 for zero volume), and the checklist turns a non-finite ratio into a T4 FAIL rather than a crash or a pass. ([source](../executor/indicators.py#L344))
 - [ ] **`executor/snapshot_builder.py:39`** — age is measured from the crossover bar's timestamp to the newest bar's timestamp, both from the data (never `now`). ([source](../executor/snapshot_builder.py#L39))
-- [ ] **`executor/snapshot_builder.py:233`** — the bandwidth percentile is computed over the `lookback_days` *preceding* bandwidths, excluding the current bar (matching `indicators.bandwidth_percentile`'s own exclusion of the newest value). ([source](../executor/snapshot_builder.py#L233))
+- [ ] **`executor/snapshot_builder.py:235`** — the bandwidth percentile is computed over the `lookback_days` *preceding* bandwidths, excluding the current bar (matching `indicators.bandwidth_percentile`'s own exclusion of the newest value). ([source](../executor/snapshot_builder.py#L235))
+- [ ] **`executor/snapshot_builder.py:384`** — the clock is the newest bar's, not `now()`. ([source](../executor/snapshot_builder.py#L384))
+- [ ] **`executor/snapshot_builder.py:389`** — every insufficient input yields `None` rather than a number computed on what happens to be available. A shrunk baseline, a dropped session, and a zero window all still produce a ratio; none of them produce the one the frozen rule names. ([source](../executor/snapshot_builder.py#L389))
 
-### checklist (5)
+### checklist (7)
 
-- [ ] **`executor/checklist.py:251`** — a flat histogram (bitwise unchanged vs the prior bar) is neither expanding nor contracting, so it is not vetoed — the rulebook names only "contracting" as the failing momentum state, "expanding" as preferred. contracting = ( snap.macd_hist <… ([source](../executor/checklist.py#L251))
-- [ ] **`executor/checklist.py:271`** — the guard fires when the MOST RECENT cross (cross_direction + cross age, supplied by the data layer) was AGAINST the trade direction and is younger than max_age_hours. ([source](../executor/checklist.py#L271))
-- [ ] **`executor/checklist.py:303`** — "expanding in trade direction" is read as *directional* expansion, not just a widening band: bandwidth must be rising AND the middle band must be moving with the trade (rising for calls, falling for puts). ([source](../executor/checklist.py#L303))
-- [ ] **`executor/checklist.py:325`** — "close tags lower band and closes back inside" = the signal bar's LOW touched or undercut the lower band AND the close finished back above it (inverted for puts: high tags the upper band, close back below). ([source](../executor/checklist.py#L325))
-- [ ] **`executor/checklist.py:374`** — an event day is checked FIRST and short-circuits T5. The brief calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it outranks a healthy IV rank rather than being one AND-condition among several. ([source](../executor/checklist.py#L374))
+- [ ] **`executor/checklist.py:257`** — a flat histogram (bitwise unchanged vs the prior bar) is neither expanding nor contracting, so it is not vetoed — the rulebook names only "contracting" as the failing momentum state, "expanding" as preferred. contracting = ( snap.macd_hist <… ([source](../executor/checklist.py#L257))
+- [ ] **`executor/checklist.py:277`** — the guard fires when the MOST RECENT cross (cross_direction + cross age, supplied by the data layer) was AGAINST the trade direction and is younger than max_age_hours. ([source](../executor/checklist.py#L277))
+- [ ] **`executor/checklist.py:309`** — "expanding in trade direction" is read as *directional* expansion, not just a widening band: bandwidth must be rising AND the middle band must be moving with the trade (rising for calls, falling for puts). ([source](../executor/checklist.py#L309))
+- [ ] **`executor/checklist.py:331`** — "close tags lower band and closes back inside" = the signal bar's LOW touched or undercut the lower band AND the close finished back above it (inverted for puts: high tags the upper band, close back below). ([source](../executor/checklist.py#L331))
+- [ ] **`executor/checklist.py:369`** — how the two branches combine. The brief joins them with "or", so either branch alone satisfies T4; they are not both required. ([source](../executor/checklist.py#L369))
+- [ ] **`executor/checklist.py:377`** — a non-finite value on either branch is a FAIL, not an exception and not a pass: the ratio is what it is, the window behind it was unusable, and volume did not confirm. ([source](../executor/checklist.py#L377))
+- [ ] **`executor/checklist.py:426`** — an event day is checked FIRST and short-circuits T5. The brief calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it outranks a healthy IV rank rather than being one AND-condition among several. ([source](../executor/checklist.py#L426))
 
 ### data (9)
 
@@ -97,8 +101,8 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/watch_loop.py:22`** — staleness budget — the rulebook has no field for "how old may the snapshot be", and inventing a config key is a rule change. ([source](../executor/watch_loop.py#L22))
 - [ ] **`executor/watch_loop.py:33`** — trigger direction — a plan cell's triggers carry a `sense` ("above"/"below"). A trigger counts as fired when spot has reached the level *in the trade direction of the cell*: for a call cell, a "below" trigger (e.g. ([source](../executor/watch_loop.py#L33))
 - [ ] **`executor/watch_loop.py:40`** — re-entry — a cell that has already produced an entry action this session is not re-entered on a later tick, even if spot re-crosses the trigger. ([source](../executor/watch_loop.py#L40))
-- [ ] **`executor/watch_loop.py:203`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L203))
-- [ ] **`executor/watch_loop.py:518`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L518))
+- [ ] **`executor/watch_loop.py:212`** — `spot` is the close of the most recent 1-minute IEX bar. On the free tier that is the only realtime equity price available (the research note is explicit), and a stale-by-15s last trade is better than nothing for trigger watching. ([source](../executor/watch_loop.py#L212))
+- [ ] **`executor/watch_loop.py:594`** — one contract per position. The brief caps arm B's premium in dollars and arm C's in percent of bankroll, but never states a contract count; 1 is the smallest thing that is a trade, and the premium cap is what actually limits size. ([source](../executor/watch_loop.py#L594))
 - [ ] **`journal/store.py:242`** — `ALTER TABLE ... ADD COLUMN` is the *only* statement used here, and that is the append-only guarantee talking, not caution. ([source](../journal/store.py#L242))
 
 ### analysis (9)

@@ -108,6 +108,12 @@ class IndicatorSnapshot:
     macd_cross_age_hours: float | None = None      # age of that cross
     bollinger: BollingerState | None = None
     relvol: float | None = None
+    #: T4's second, frozen branch (rulebook ``intraday_run_rate_min``). Today's
+    #: cumulative intraday volume against the same time-of-day cumulative volume over
+    #: the prior ``lookback_days`` sessions. ``None`` means the branch could not be
+    #: measured, and T4 falls back to ``relvol`` — it is NOT a soft FAIL, because the
+    #: brief scores the two as an OR.
+    intraday_run_rate: float | None = None
     iv_rank: float | None = None
     is_event_day: bool = False
     event_kinds: tuple[str, ...] = ()
@@ -347,25 +353,71 @@ def _t3b(snap: IndicatorSnapshot, rules: Rulebook, direction: Direction) -> Cond
 
 
 def _t4(snap: IndicatorSnapshot, rules: Rulebook) -> ConditionResult:
+    """T4 volume confirmation — the brief's OR of two frozen rules.
+
+    ``docs/brief.md``: "relative volume >= 1.5x 20-day average **on the signal candle**
+    (or intraday run-rate >= 1.5x for intraday triggers)", and the rulebook carries
+    both halves: ``relative_volume_min: 1.5`` and ``intraday_run_rate_min: 1.5``.
+
+    FIX 2026-10-03 (outsider review 4.3): only the first half ran. The second existed in
+    the loader, in a test, and in this function's own log *string* — a frozen rule the
+    system never evaluated. It matters because the relvol branch divides a
+    possibly-partial session's volume by a mean of *completed* sessions, so intraday it
+    is a forecast of the rest of the day rather than a measurement of the day so far,
+    and it structurally fails for most of every session.
+
+    INTERPRETATION: how the two branches combine. The brief joins them with "or", so
+    either branch alone satisfies T4; they are not both required. That makes an
+    unmeasurable run-rate a *fallback*, not a new blocking condition: with no intraday
+    series (the pre-market plan, which builds from daily bars only) the result is
+    exactly what it was before this change — T4 scored on relative volume, PENDING if
+    relvol is unavailable too. Had the run rate been treated as mandatory, every
+    pre-market plan would have gone PENDING on T4 and the plan could never be built.
+
+    INTERPRETATION: a non-finite value on either branch is a FAIL, not an exception and
+    not a pass: the ratio is what it is, the window behind it was unusable, and volume
+    did not confirm.
+    """
     cfg = rules.checklist.t4_volume
-    if snap.relvol is None:
-        return ConditionResult("T4", "PENDING",
-                              f"relative volume unavailable "
-                              f"(needs {cfg.lookback_days}d baseline)")
     relvol = snap.relvol
-    # A non-finite ratio means the 20-day baseline was zero/unusable: volume did not
-    # confirm, so this is a FAIL, not an exception and not a pass.
-    if not _finite(relvol):
-        return ConditionResult("T4", "FAIL",
-                              f"relative volume is not finite ({relvol}) — baseline window "
-                              f"unusable, volume cannot confirm")
-    ok = relvol >= cfg.relative_volume_min
+    run_rate = snap.intraday_run_rate
+
+    relvol_text = f"relative volume {relvol:.3f}x" if relvol is not None else (
+        f"relative volume unavailable (needs {cfg.lookback_days}d baseline)"
+    )
+    if relvol is not None and not _finite(relvol):
+        relvol_text = f"relative volume is not finite ({relvol}) — baseline window unusable"
+    run_rate_text = (
+        f"intraday run-rate {run_rate:.3f}x" if run_rate is not None
+        else "intraday run-rate unavailable"
+    )
+    if run_rate is not None and not _finite(run_rate):
+        run_rate_text = f"intraday run-rate is not finite ({run_rate}) — baseline unusable"
+    tail = f"({cfg.lookback_days}d baseline; thresholds {cfg.relative_volume_min}x / " \
+           f"{cfg.intraday_run_rate_min}x)"
+
+    relvol_ok = _finite(relvol) and relvol >= cfg.relative_volume_min  # type: ignore[operator]
+    run_rate_ok = (
+        _finite(run_rate) and run_rate >= cfg.intraday_run_rate_min  # type: ignore[operator]
+    )
+    if relvol_ok or run_rate_ok:
+        branches = [
+            name
+            for name, ok in (("relative volume", relvol_ok), ("intraday run-rate", run_rate_ok))
+            if ok
+        ]
+        detail = f"{relvol_text} {cfg.relative_volume_min}x; {run_rate_text} " \
+                 f"{cfg.intraday_run_rate_min}x"
+        return ConditionResult("T4", "PASS", f"PASS via {' + '.join(branches)}: {detail} {tail}")
+    if relvol is None and run_rate is None:
+        # Neither branch could be measured: T4 is undecidable, which is what it has
+        # always been when the relvol baseline was short. Blocks, as PENDING does.
+        return ConditionResult("T4", "PENDING", f"{relvol_text}; {run_rate_text} {tail}")
     return ConditionResult(
         "T4",
-        "PASS" if ok else "FAIL",
-        f"relative volume {relvol:.3f}x "
-        f"{'>=' if ok else '<'} {cfg.relative_volume_min}x "
-        f"({cfg.lookback_days}d baseline; intraday run-rate {cfg.intraday_run_rate_min}x)",
+        "FAIL",
+        f"volume did not confirm: {relvol_text} < {cfg.relative_volume_min}x and "
+        f"{run_rate_text} < {cfg.intraday_run_rate_min}x {tail}",
     )
 
 
@@ -482,6 +534,11 @@ def snapshot_indicators(snap: IndicatorSnapshot, direction: Direction, arm: Arm)
         "macd_cross_direction": snap.macd_cross_direction,
         "macd_cross_age_hours": snap.macd_cross_age_hours,
         "relvol": None if snap.relvol is None or not _finite(snap.relvol) else snap.relvol,
+        "intraday_run_rate": (
+            None
+            if snap.intraday_run_rate is None or not _finite(snap.intraday_run_rate)
+            else snap.intraday_run_rate
+        ),
         "iv_rank": snap.iv_rank,
         "is_event_day": snap.is_event_day,
         "event_kinds": list(snap.event_kinds),
