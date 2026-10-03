@@ -38,7 +38,7 @@ attempts were made.
 | 9 | `watch/stale` | trigger reached on a stale snapshot → entry refused |
 | 10 | `watch/entry` | reclaim: full checklist re-verified live, entry routed (dry) |
 | 11 | `exits+roll` | arm B profit take + hard close precedence; arm C roll ladder |
-| 12 | `eod` | EMA streak, NO-SHOT ledger, EOD close decision — for both sessions |
+| 12 | `eod` | the **real** `executor.main.main(["eod", "--offline", ...])` for both sessions: EMA streak, NO-SHOT ledger (traded cell excluded, every counterfactual linked), EOD close decision |
 | 13 | `soak` | `flow_baseline` + IV observation writes |
 | 14 | `analysis` | shadow-roll open/mark, TA-vs-arm-C comparison, scorecard, histogram, weekly rollup |
 | 15 | `integrity` | row counts, router state, rulebook sha, `/opt` tree, network attempts |
@@ -163,6 +163,53 @@ to the lead rather than resolved here.
 9. **`cmd_eod` is not runnable offline** — it constructs a live `AlpacaClient`
    unconditionally, with no `--offline` mode. The EOD stage therefore replays its steps
    against fixtures instead of invoking the CLI. Worth an `--offline` flag at some point.
+
+### Addendum — items 8 and 9 are now fixed (`839e73d`, 2026-10-03)
+
+Both gaps above were closed after the rehearsal was reviewed. The findings are left
+above as written; this is what changed.
+
+**Item 8 — `taken` and `decision_ids` are recorded.** `cmd_eod` now passes both to
+`build_noshots`, and reads both out of the journal rather than guessing:
+
+* `taken` comes from the session's own `TRADE` decisions (ET session date, arm, and the
+  direction parsed from the contract's OCC right, so arm B's call cell and put cell are
+  told apart by what was actually bought). The EOD close decision now carries the derived
+  `taken` in its `checklist_state` and names it in its reasoning, so the ledger's claim is
+  visible on the decision row too.
+* `decision_ids` comes from the **pre-market** plan row for each cell — an intraday
+  watch-loop `NO_TRADE` row for the same `(arm, direction)` must not attribute a
+  counterfactual to a re-verification. When a plan was rewritten before the open, the
+  newest pre-open row wins, because that is the decision the day's execution ran against.
+* A `TRADE` row whose symbol is not a parsable OCC contract is reported on stderr (the
+  cell is then treated as *not* taken, which is the conservative direction for the
+  counterfactual but is a data fault and says so). A sighting whose plan row is missing is
+  written — dropping a real sighting over a bookkeeping gap is the worse failure for a
+  ledger — with a loud warning that its `counterfactual_entry_ref` is NULL.
+
+Journal semantics are unchanged: the ledger stays append-only, and no schema moved. The
+rehearsal now asserts both properties directly (a traded cell gets no row; every row
+carries its link).
+
+**Item 9 — `cmd_eod` is runnable offline.** `eod --offline --offline-fixture <file.json>`
+swaps the client's transport for `MockTransport` over documented route payloads
+(`/v2/stocks/SPY/bars` and `/v1beta1/options/snapshots/SPY`). It is a transport swap, not a
+second code path: the same parsing, the same doc-verified query-parameter contract, and a
+404 for an unrouted request rather than a silent empty series. No credential is read, no
+order is routed, and `--offline` with `--live` is refused.
+
+The EOD stage no longer replays the command's steps. It writes the day's bars and chain to
+a fixture file, journals the shot session's `TRADE` row where production's
+`SqliteJournalSink` writes it, and then calls
+`executor.main.main([..., "eod", "--offline", "--offline-fixture", ...])` for **both**
+sessions — so the pass under test is the shipped one, and a fixture that drifts from the
+API's shape fails the rehearsal instead of passing it. The old "cmd_eod, unmodified"
+demonstration is gone because the bug it demonstrated is gone; the stage's findings now
+report the two properties as confirmed.
+
+The net effect on a rehearsal run: the shot session (which traded B/call) now writes
+**0** rows and says `traded ['B/call']`; the no-shot session writes 2 rows, both linked
+(`decision_ref=2` and `decision_ref=4` — its own plan rows).
 
 ---
 
