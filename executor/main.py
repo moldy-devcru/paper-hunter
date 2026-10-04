@@ -85,6 +85,15 @@ from executor.watch_loop import (
 
 PLAN_DIR = Path("data/plans")
 
+#: Daily bars the EOD pass needs. 400 is comfortably more than the 50 the EMA needs and
+#: more than a season of sessions, so the streak walk and any future indicator have room.
+#: Named, not inlined, because it is half of the ``bar_window`` call below — a limit whose
+#: window was never named is the exact bug class this pair exists to prevent.
+EOD_BARS_LIMIT = 400
+
+#: The EOD pass reads consolidated SIP daily bars (it judges closes, not prints).
+EOD_BAR_FEED = "sip"
+
 #: `FLOW_GATE_POLICIES` (imported above from `executor.flow_gate`) is the single source
 #: of the accepted T6 policy names.
 #:
@@ -735,7 +744,23 @@ def cmd_eod(args: argparse.Namespace, now: dt.datetime) -> int:
     client = _eod_client(args)
     if args.offline:
         print("OFFLINE: market data comes from the fixture transport; nothing was fetched")
-    daily = client.get_daily_bars(rules.strategy.symbol, feed="sip", limit=400)
+    # FIX 2026-10-03 (live seam sweep): this read was `limit=400` with NO window, which
+    # the live route answers with zero bars and HTTP 200 — the same shape that made
+    # `hunt-plan` die with "daily series has no bars" and made the intraday spot read
+    # raise. It surfaced here as `InsufficientData: EMA(50) needs at least 50 values,
+    # got 0`, i.e. downstream of the actual fault: the EOD pass read nothing and the
+    # indicator stack blamed itself. MEASURED today, paper creds, `1Day`/sip:
+    # limit-only -> 0 bars; end-only -> 0 bars; bar_window(400) -> 400 bars.
+    #
+    # One policy, imported: `bar_window` lives in `executor.bar_windows` because
+    # `executor.watch_loop`, this function, and `executor.soak._AlpacaSource` all needed
+    # the same answer and each had found (or not found) it for itself.
+    daily = client.get_daily_bars(
+        rules.strategy.symbol,
+        feed=EOD_BAR_FEED,
+        limit=EOD_BARS_LIMIT,
+        **bar_window(timeframe="1Day", feed=EOD_BAR_FEED, limit=EOD_BARS_LIMIT),
+    )
     chain = client.get_option_chain(rules.strategy.symbol)
     session_bar = _session_bar(daily, day)
 
