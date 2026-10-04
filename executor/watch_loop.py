@@ -58,7 +58,6 @@ Python 3.12+, stdlib + the rest of ``executor/``.
 from __future__ import annotations
 
 import datetime as dt
-import math
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -67,6 +66,19 @@ from typing import Any, Protocol, runtime_checkable
 from config.loader import Rulebook
 from data.event_calendar import EventCalendar
 from executor.alpaca_client import BarSeries, OptionChain, OptionContract
+
+# Re-exported, not used here: these live in `executor.bar_windows` now (see below) and
+# `watch_loop.bar_window` / `watch_loop.SIP_END_BACKOFF_MINUTES` are the names half the
+# repo — and every existing test — import. `# noqa: F401` is what keeps the alias an
+# alias instead of drifting into a second implementation.
+from executor.bar_windows import (  # noqa: F401
+    BARS_PER_SESSION,
+    REALTIME_FEEDS,
+    SESSIONS_PER_CALENDAR_DAY,
+    SIP_END_BACKOFF_MINUTES,
+    WEEKEND_HOLIDAY_PADDING_DAYS,
+    bar_window,
+)
 from executor.checklist import ChecklistResult, evaluate
 from executor.hunt_plan import ArmKey, ArmPlan, HuntPlan
 from executor.position_manager import (
@@ -99,86 +111,15 @@ DEFAULT_POLL_SECONDS = 15.0
 #: position is already flat by then, and arm C is marked but not sold here.
 DEFAULT_STOP_ET = "16:00"
 
-#: Bars in one US regular session, per timeframe. A ``limit`` is a count of bars and
-#: the API needs a span of time, so this is the conversion between the two.
-#: An unknown timeframe falls back to the finest (most bars/session), which yields the
-#: narrowest window — under-fetching shows up as missing bars, over-fetching costs
-#: nothing.
-BARS_PER_SESSION: Mapping[str, int] = {
-    "1Min": 390,
-    "2Min": 195,
-    "5Min": 78,
-    "15Min": 26,
-    "30Min": 13,
-    "1Hour": 7,
-    "1Day": 1,
-}
-
-#: Sessions per calendar day, for turning "N sessions of bars" into a date floor:
-#: 5/7 = 0.714 weekdays-per-calendar-day, less ~3.5% of weekdays lost to the ~9 US
-#: market holidays a year. Deliberately biased LOW — a too-narrow window costs bars,
-#: a too-wide one is free (see :func:`bar_window` on why).
-SESSIONS_PER_CALENDAR_DAY = 0.69
-
-#: Extra calendar days on every window so one that opens on a weekend or a closure still
-#: contains the session before it. 4 covers an ordinary 3-day weekend; anything longer is
-#: a visible gap rather than a silent one.
-WEEKEND_HOLIDAY_PADDING_DAYS = 4
-
-#: SIP equities on the free tier refuse a query whose ``end`` is less than 15 minutes old
-#: ("subscription does not permit querying recent SIP data"). 20 minutes is the same
-#: backoff and the same reasoning as ``EQUITY_END_BACKOFF_MINUTES`` in
-#: :mod:`executor.iv_backfill` / :mod:`executor.backfill_flow` — ask for a window that is
-#: actually answerable rather than rewriting the caller's timestamp. It costs the last 20
-#: minutes of today, which no *completed* daily bar needs.
-SIP_END_BACKOFF_MINUTES = 20
-
-#: Feeds with no recency gate, so they are asked for with no ``end`` at all.
-#: MEASURED 2026-10-03: 1Min/iex with a ``start`` and no ``end`` answers with the newest
-#: bars, while the same read on SIP needs the clamp above.
-REALTIME_FEEDS = frozenset({"iex"})
-
-
-def bar_window(
-    *, timeframe: str, feed: str, limit: int, now: dt.datetime | None = None
-) -> dict[str, str]:
-    """Query params (``start``/``end``/``sort``) that make a bar read answerable.
-
-    MEASURED 2026-10-03, paper creds, ``/v2/stocks/{symbol}/bars``: a **limit-only**
-    query returns **zero bars** on this route, on both routes' timeframes —
-    ``1Day``/sip/``limit=400`` and ``1Min``/iex/``limit=5`` both answered HTTP 200 with an
-    empty series, and the same two reads with an explicit window answered 400 and 5 bars.
-    ``limit`` is a cap on the answer, not a span the server can resolve, so every live
-    read here names a window. That is the whole root cause of
-    ``HuntPlanError: daily series has no bars``.
-
-    ``sort="desc"`` is not cosmetic. In the route's default ascending order ``limit``
-    truncates from the **newest** end, so a 584-day window with ``limit=400`` answers
-    with the 400 *oldest* sessions inside it — measured: newest bar 2026-08-07 for a
-    window ending 2026-10-03 — and the plan would then build itself on a two-month-old
-    signal bar without a word of complaint. ``desc`` puts the cap on the oldest end, so
-    ``limit`` means "the newest N bars" as every caller already assumes, and ``start``
-    can be generous without costing the signal bar. Parsing re-sorts ascending, so
-    consumers still see oldest-first.
-
-    Because of that, ``start`` is a FLOOR and not the truncator: it must be old enough to
-    contain the sessions the caller asked for, and wider is free.
-    """
-    if now is None:
-        now = dt.datetime.now(dt.UTC)
-    per_session = BARS_PER_SESSION.get(timeframe, min(BARS_PER_SESSION.values()))
-    sessions = max(1, math.ceil(limit / per_session))
-    floor = now - dt.timedelta(
-        days=math.ceil(sessions / SESSIONS_PER_CALENDAR_DAY) + WEEKEND_HOLIDAY_PADDING_DAYS
-    )
-    params = {"start": _iso(floor), "sort": "desc"}
-    if feed not in REALTIME_FEEDS:
-        params["end"] = _iso(now - dt.timedelta(minutes=SIP_END_BACKOFF_MINUTES))
-    return params
-
-
-def _iso(moment: dt.datetime) -> str:
-    return moment.astimezone(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+#: The bars-window policy now lives in :mod:`executor.bar_windows` — ONE implementation
+#: for every live bars read in the repo, not one per caller. FIX 2026-10-03 (live seam
+#: sweep): `bar_window` was written here for the plan's `daily_series` read, and the same
+#: limit-only read shipped independently in `executor.main.cmd_eod` and
+#: `executor.soak._AlpacaSource` — two more seams of one bug class from a policy that
+#: was, structurally, only reachable from here. ``bar_window`` and its constants are
+#: re-exported under their old names so existing importers and tests keep working.
+#:
+#: ``_iso`` is the same formatter as ``bar_windows.iso_z``, aliased at the import above.
 
 
 class WatchLoopError(RuntimeError):

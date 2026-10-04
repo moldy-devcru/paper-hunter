@@ -67,6 +67,7 @@ from executor.alpaca_client import (
     OptionContract,
     _chain_from_payload,
 )
+from executor.bar_windows import bar_window
 from executor.iv_rank import DEFAULT_DB_PATH as DEFAULT_IV_DB_PATH
 from executor.iv_rank import (
     DTE_BUCKET_DAYS,
@@ -178,17 +179,26 @@ class _AlpacaSource:
         self.bars_limit = bars_limit
 
     def daily_bars(self, symbol: str) -> BarSeries:
-        # `end` is derived from the wall clock with a 20-minute backoff rather than
-        # left to default. Alpaca's free tier rejects a SIP historical query whose
-        # `end` is inside the last 15 minutes; the client refuses to silently rewrite
-        # a caller's `end`, so the honest place to make the clock old enough is here,
-        # once, and to record that we did.
-        end = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=20)
+        # FIX 2026-10-03 (live seam sweep): this read named an `end` and a `limit` and NO
+        # `start`, which the live route answers with **zero bars** and HTTP 200 — measured
+        # today, paper creds, `1Day`/sip: `end+limit` -> n=0, `bar_window(limit)` -> n=400.
+        # An `end` alone is not a window; the API resolves a span, and `limit` is a cap on
+        # the answer rather than something it can resolve one from.
+        #
+        # The failure was SILENT and worse than a crash: `run_soak` reads
+        # `bars.bars[-1].c if bars.bars else 0.0` and raises `SoakError("no usable SPY
+        # close")` on 0.0 — so the reported symptom was "no close for the session", which
+        # reads like a data/calendar fact about the market rather than a query that never
+        # asked for a span. Every soak run would have blamed the tape.
+        #
+        # The 20-minute SIP backoff this used to apply by hand is now part of the shared
+        # policy (`executor.bar_windows.bar_window`), which also adds the `sort` that
+        # keeps the newest bar inside the limit — the same two omissions as `cmd_eod`.
         return self.client.get_daily_bars(
             symbol,
             feed=BAR_FEED,  # type: ignore[arg-type]
-            end=end.isoformat().replace("+00:00", "Z"),
             limit=self.bars_limit,
+            **bar_window(timeframe="1Day", feed=BAR_FEED, limit=self.bars_limit),
         )
 
     def option_chain(self, symbol: str) -> OptionChain:

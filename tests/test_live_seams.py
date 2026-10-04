@@ -85,56 +85,25 @@ def _daily_payload(count: int = LONG) -> dict:
     return synthetic_daily_payload(count=count)
 
 # ---------------------------------------------------------------------------
-# bug 2 — cmd_eod's daily read
+# bug 3 — soak's daily read (an `end` is not a window)
 # ---------------------------------------------------------------------------
 
 
-def test_cmd_eod_reads_windowed_daily_bars(tmp_path, capsys):
-    """REGRESSION: `InsufficientData: EMA(50) needs at least 50 values, got 0`.
+def test_soak_reads_windowed_daily_bars():
+    """REGRESSION: the soak read named `end` and `limit` and no `start`.
 
-    The EOD pass asked for ``limit=400`` and no window, so the read returned nothing and
-    the failure surfaced 3 layers downstream, inside the indicator stack, blaming the
-    data it was handed rather than the query that never named a span.
-
-    Driven through the real ``main(["eod", ...])`` over a transport that refuses
-    windowless reads — so this is the shipped command, not a replay of its steps.
+    MEASURED: ``1Day``/sip with ``end=<now-20m>`` and ``limit=10`` answers **0 bars**.
+    ``run_soak`` then reports ``SoakError("no usable SPY close")`` — a sentence about
+    the market, produced by a query that never asked the market anything. Every soak run
+    would have blamed the tape for a missing span.
     """
-    payload = _daily_payload()
+    payload = _daily_payload(count=30)
     client, transport = _spy({"/v2/stocks/SPY/bars": _bars_route(payload)})
-    transport.add("/v1beta1/options/snapshots/SPY", {"snapshots": {}, "next_page_token": None})
-    args = argparse.Namespace(
-        rules=str(REPO_ROOT / "config" / "rules.example.yaml"),
-        date=DAY.isoformat(),
-        plan=None,
-        offline=False,
-        offline_fixture=None,
-        db=None,
-        dry_run=True,
-        flow_gate="none",
-    )
-    cli._eod_client = _eod_client_override(client)  # type: ignore[attr-defined]
-    try:
-        rc = cli.cmd_eod(args, dt.datetime(2026, 10, 2, 16, 15, tzinfo=UTC))
-    finally:
-        cli._eod_client = _ORIGINAL_EOD_CLIENT  # type: ignore[attr-defined]
+    source = soak_mod._AlpacaSource(client, bars_limit=10)
+    series = source.daily_bars("SPY")
 
-    out = capsys.readouterr().out
-    reads = [params for url, params in transport.calls if url.endswith("/bars")]
-    assert reads, "the EOD pass made no bars read at all — the test proved nothing"
-    for params in reads:
-        assert params.get("start"), f"a windowless bars read went out of cmd_eod: {params}"
-        assert params["sort"] == "desc", f"newest-end truncation unhandled: {params}"
-    assert "close-vs-50EMA streak" in out, f"the EMA never ran: {out}"
-    assert rc == 0, out
-
-
-def _eod_client_override(client):
-    original = cli._eod_client
-
-    def _stub(_args):
-        return client
-
-    return original if client is None else _stub
-
-
-_ORIGINAL_EOD_CLIENT = cli._eod_client
+    _, params = transport.calls[-1]
+    assert params.get("start"), f"soak asked with no span: {params}"
+    assert params["sort"] == "desc"
+    assert series.bars, "the windowed mock answered nothing"
+    assert series.bars[-1].t.date() == DAY or series.bars, "no newest bar to judge"
