@@ -1021,6 +1021,7 @@ class AlpacaClient:
         adjustment: Literal["raw", "split", "dividend", "all"] | None = None,
         page_token: str | None = None,
         asof: str | None = None,
+        sort: Literal["asc", "desc"] | None = None,
     ) -> BarSeries:
         """``GET /v2/stocks/{symbol}/bars`` for one symbol.
 
@@ -1033,6 +1034,18 @@ class AlpacaClient:
         method does **not** silently rewrite the caller's ``end`` — quietly moving a
         timestamp to make a request succeed would hide exactly the free-tier
         behaviour the research note flagged as unverified.
+
+        ``start``/``end`` are not optional in practice: MEASURED 2026-10-03, this route
+        answers a ``limit``-only query with **zero bars** and HTTP 200, on both the daily
+        and the intraday timeframe. A ``limit`` is a cap on the answer, not a span the
+        server can resolve, so a caller that wants bars must name a window.
+
+        ``sort`` is documented on this route and is load-bearing for any windowed read
+        with a ``limit``: the default ascending order truncates from the **newest** end,
+        so a 584-day window with ``limit=400`` answers with the 400 *oldest* sessions in
+        the window and the newest (signal) bar is silently missing. ``sort="desc"`` puts
+        the cap on the oldest end instead. Parsing re-sorts ascending regardless, so
+        consumers always see oldest-first.
         """
         payload = self._get(
             self.data_base,
@@ -1046,6 +1059,7 @@ class AlpacaClient:
                 "adjustment": adjustment,
                 "page_token": page_token,
                 "asof": asof,
+                "sort": sort,
             },
         )
         return _bar_series_from_payload(symbol, timeframe, feed, payload)
@@ -1059,6 +1073,7 @@ class AlpacaClient:
         end: str | None = None,
         limit: int | None = None,
         adjustment: str | None = "all",
+        sort: Literal["asc", "desc"] | None = None,
     ) -> BarSeries:
         return self.get_bars(
             symbol,
@@ -1068,6 +1083,7 @@ class AlpacaClient:
             end=end,
             limit=limit,
             adjustment=adjustment,
+            sort=sort,
         )
 
     def get_intraday_bars(
@@ -1079,8 +1095,13 @@ class AlpacaClient:
         start: str | None = None,
         end: str | None = None,
         limit: int | None = None,
+        sort: Literal["asc", "desc"] | None = None,
     ) -> BarSeries:
-        """Intraday bars. Same single-symbol route; ``timeframe`` selects the interval."""
+        """Intraday bars. Same single-symbol route; ``timeframe`` selects the interval.
+
+        Same window requirement as :meth:`get_bars` — MEASURED 2026-10-03, a limit-only
+        intraday query on this route answers 0 bars just as the daily one does.
+        """
         return self.get_bars(
             symbol,
             timeframe=timeframe,
@@ -1089,6 +1110,7 @@ class AlpacaClient:
             end=end,
             limit=limit,
             adjustment="raw",
+            sort=sort,
         )
 
     # -- options ---------------------------------------------------------------

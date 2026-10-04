@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import math
 
 import pytest
 import yaml
@@ -1271,3 +1272,194 @@ def test_a_run_rate_carries_t4_when_relvol_is_pressed(rules, series, monkeypatch
     t4 = result.conditions["T4"]
     assert t4.status == "PASS"
     assert "PASS via intraday run-rate" in t4.detail
+
+
+# REGRESSION 2026-10-03: the bars route answers a WINDOW, not a limit
+# ---------------------------------------------------------------------------
+
+BARS_PATH = "/v2/stocks/SPY/bars"
+SNAPSHOT_PATH = "/v1beta1/options/snapshots/SPY"
+
+
+def _windowed_only(payload: dict):
+    """A bars route that behaves like the live one: no window means no bars.
+
+    MEASURED 2026-10-03, paper creds, ``/v2/stocks/{symbol}/bars``: a limit-only
+    ``1Day``/sip/``limit=400`` read and a limit-only ``1Min``/iex/``limit=5`` read BOTH
+    answered HTTP 200 with an empty series, and the same reads with an explicit window
+    answered 400 bars and 5 bars. A mock that always answers bars is precisely why this
+    reached production, so this one refuses to.
+    """
+
+    def route(params: dict) -> dict:
+        if not params.get("start"):
+            return {"bars": [], "symbol": "SPY", "next_page_token": None}
+        return payload
+
+    return route
+
+
+def _windowed_truncating(payload: dict):
+    """The same route, but honouring ``limit`` the way Alpaca does.
+
+    In the route's default ascending order the cap falls on the **newest** end, so a
+    window holding more sessions than ``limit`` answers with the oldest ones. Measured:
+    a 640-day window with ``limit=400`` came back with its newest bar dated 2026-08-07
+    for a window ending 2026-10-03. ``sort=desc`` moves the cap to the oldest end.
+    """
+    bars = payload["bars"]
+
+    def route(params: dict) -> dict:
+        if not params.get("start"):
+            return {"bars": [], "symbol": "SPY", "next_page_token": None}
+        limit = int(params.get("limit", len(bars)))
+        chosen = bars[-limit:] if params.get("sort") == "desc" else bars[:limit]
+        return {"bars": list(chosen), "symbol": "SPY", "next_page_token": None}
+
+    return route
+
+
+def _spy_client(routes: dict):
+    from executor.alpaca_client import AlpacaClient, MockTransport
+
+    transport = MockTransport(routes)
+    client = AlpacaClient(transport=transport, key="k-not-real", secret="s-not-real")
+    return client, transport
+
+
+def test_the_live_provider_asks_for_a_window_of_daily_bars():
+    """``daily_series`` must send start+end — the assertion that failed for 2 days.
+
+    REGRESSION 2026-10-03 — ``HuntPlanError: daily series has no bars — cannot build a
+    hunt plan``. The provider read ``limit=400`` and no window, and the live route
+    answers that with nothing. Transport-level on purpose: a stub client with a
+    ``**kwargs`` catch-all would happily accept a call that never names a window, so the
+    assertion has to be on the params that actually went out.
+    """
+    from executor.watch_loop import AlpacaWatchData
+
+    payload = synthetic_daily_payload(count=LONG)
+    client, transport = _spy_client({BARS_PATH: _windowed_only(payload)})
+    series = AlpacaWatchData(client).daily_series("SPY")
+    assert series.bars, "the mock's windowed route should have answered"
+
+    _, params = transport.calls[-1]
+    assert params["start"] and params["end"], f"no window on the wire: {params}"
+    assert int(params["limit"]) == 400
+    start = dt.datetime.fromisoformat(params["start"].replace("Z", "+00:00"))
+    end = dt.datetime.fromisoformat(params["end"].replace("Z", "+00:00"))
+    assert start < end
+    # The end must sit off the SIP recency gate ("subscription does not permit querying
+    # recent SIP data" on the free tier), not at "now".
+    assert end <= dt.datetime.now(dt.UTC) - dt.timedelta(minutes=watch_loop.SIP_END_BACKOFF_MINUTES)
+    # And the window must be wide enough to hold the sessions the limit asks for, since
+    # a narrow window quietly returns a shorter series than the caller requested.
+    assert (end - start).days >= 400, f"window of {(end - start).days}d cannot hold 400 sessions"
+
+
+def test_the_daily_signal_bar_survives_the_limit():
+    """The newest bar in the series must be the newest bar in the window.
+
+    The trap behind the trap: widening the window is not enough on its own. Alpaca caps
+    the *newest* end in the default sort order, so a wide window with ``limit=400``
+    answers with the 400 OLDEST sessions in it and the plan builds itself on a
+    two-month-old signal bar without raising anything.
+    """
+    from executor.watch_loop import AlpacaWatchData
+
+    payload = synthetic_daily_payload(count=700)
+    client, _ = _spy_client({BARS_PATH: _windowed_truncating(payload)})
+    series = AlpacaWatchData(client, daily_limit=400).daily_series("SPY")
+    assert len(series.bars) == 400
+    assert series.bars[-1].t == series_from(payload).bars[-1].t, (
+        "the cap fell on the newest end — the plan's signal bar would be months stale"
+    )
+
+
+def test_watch_snapshot_asks_for_a_window_of_intraday_bars():
+    """``1Min``/iex/``limit=5`` with no window returns 0 bars live — same bug, same route.
+
+    Every poll would have raised ``WatchLoopError: no 1Min bars for SPY``, and the
+    run-rate series below would have silently degraded to the relative-volume branch,
+    which reads like a passing run rather than a missing read.
+    """
+    from executor.watch_loop import AlpacaWatchData
+
+    payload = synthetic_daily_payload(count=5)
+    client, transport = _spy_client(
+        {BARS_PATH: _windowed_only(payload), SNAPSHOT_PATH: {"snapshots": {}}}
+    )
+    snapshot = AlpacaWatchData(client).watch_snapshot("SPY")
+    assert snapshot.spot > 0
+
+    reads = [params for url, params in transport.calls if url.endswith(BARS_PATH)]
+    assert reads, "no reads recorded"
+    for params in reads:
+        assert params.get("start"), f"a windowless bars read went out: {params}"
+        assert params["sort"] == "desc", f"the newest-end truncation is unhandled: {params}"
+    # IEX is realtime and free, so it must not be pinned to the SIP end-clamp; a 20-minute
+    # old "spot" is a stale spot.
+    assert "end" not in reads[0], "IEX was asked for a window ending 20 minutes ago"
+
+
+def test_a_run_rate_series_built_live_is_not_silently_empty():
+    """A limit-only run-rate read degrades T4 silently, so it is worth pinning."""
+    from executor.watch_loop import AlpacaWatchData
+
+    payload = synthetic_daily_payload(count=300)
+    client, _ = _spy_client({BARS_PATH: _windowed_only(payload), SNAPSHOT_PATH: {"snapshots": {}}})
+    provider = AlpacaWatchData(client)
+    snapshot = provider.watch_snapshot("SPY")
+    assert snapshot.intraday is not None and snapshot.intraday.bars
+    assert not any("run-rate series unavailable" in note for note in snapshot.notes)
+
+
+def test_hunt_plan_over_a_windowed_mock_writes_a_plan(tmp_path, monkeypatch):
+    """The dead seam, end to end and offline: the exact error the live run died with."""
+    from executor.alpaca_client import AlpacaClient
+    from executor.main import build_parser, cmd_hunt_plan
+
+    payload = synthetic_daily_payload(count=LONG)
+    client, _ = _spy_client(
+        {
+            BARS_PATH: _windowed_only(payload),
+            SNAPSHOT_PATH: {"snapshots": {}, "next_page_token": None},
+        }
+    )
+    monkeypatch.setattr(AlpacaClient, "from_env", classmethod(lambda _cls: client))
+    out = tmp_path / "plan.json"
+    args = build_parser().parse_args(
+        [
+            "hunt-plan",
+            "--out",
+            str(out),
+            "--ivrank",
+            str(tmp_path / "absent.db"),
+            "--flow-gate",
+            "none",
+        ]
+    )
+    assert cmd_hunt_plan(args, at(8, 0)) == 0
+    assert load_plan_file(out).arms
+
+
+def test_bar_window_answers_only_what_a_free_tier_can():
+    """The window policy itself: a floor that holds the ask, and an end off the gate."""
+    now = dt.datetime(2026, 10, 2, 13, 5, tzinfo=dt.UTC)
+
+    sip = watch_loop.bar_window(timeframe="1Day", feed="sip", limit=400, now=now)
+    assert sip["sort"] == "desc"
+    assert dt.datetime.fromisoformat(sip["end"].replace("Z", "+00:00")) == now - dt.timedelta(
+        minutes=watch_loop.SIP_END_BACKOFF_MINUTES
+    )
+    iex = watch_loop.bar_window(timeframe="15Min", feed="iex", limit=700, now=now)
+    assert "end" not in iex, "a realtime feed must not be pinned off the recency gate"
+    # Each floor must hold the sessions its own limit asks for, plus the weekend padding.
+    for window, limit, timeframe in ((sip, 400, "1Day"), (iex, 700, "15Min")):
+        start = dt.datetime.fromisoformat(window["start"].replace("Z", "+00:00"))
+        per_session = watch_loop.BARS_PER_SESSION[timeframe]
+        sessions_wanted = math.ceil(limit / per_session)
+        assert (now - start).days * watch_loop.SESSIONS_PER_CALENDAR_DAY >= sessions_wanted, (
+            f"{timeframe} floor is too narrow for {sessions_wanted} sessions"
+        )
+        assert (now - start).days >= watch_loop.WEEKEND_HOLIDAY_PADDING_DAYS
