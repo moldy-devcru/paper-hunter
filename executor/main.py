@@ -61,6 +61,7 @@ from typing import Any
 from config.loader import DEFAULT_RULES_PATH, Rulebook, load_rules
 from data.event_calendar import EventCalendar
 from executor.alpaca_client import BarSeries
+from executor.bar_windows import bar_window
 from executor.flow_gate import POLICIES as FLOW_GATE_POLICIES  # noqa: F401
 from executor.hunt_plan import HuntPlan, build_hunt_plan, summarise, write_hunt_plan
 from executor.indicators import ema
@@ -471,12 +472,26 @@ def _watch_iv_rank(
     Precedence, per cell:
       1. ``--iv-rank`` — the operator states it, for every cell, unchanged.
       2. the rank the pre-market plan recorded for THAT cell, with its tenor key.
-      3. the newest ranked observation whose tenor key is the one the plan chose for
-         that cell. Falling back to "newest overall" is what made the old value
-         arbitrary, so a cell with no plan-time read is left PENDING instead.
+      3. the newest tenor in the store whose rank is DEFINED. Falling back to "newest
+         overall" is what made the old value arbitrary, so a cell with no plan-time read
+         is left PENDING instead.
 
     Returns a mapping keyed by ``ArmPlan.key`` (``"B/call"``), a bare float when
     ``--iv-rank`` pinned one, or ``None`` when nothing resolved.
+
+    # FIX 2026-10-03 (live seam sweep): step 3 read ``o.rank`` off each object from
+    # ``store.observations()``. That accessor returns :class:`~executor.iv_rank.IvObservation`
+    # — a stored *reading* — which has no ``rank`` attribute at all; ``rank`` lives on
+    # :class:`~executor.iv_rank.IvRankResult`, the thing ``store.iv_rank()`` RETURNS.
+    # So the branch raised ``AttributeError: 'IvObservation' object has no attribute
+    # 'rank'`` on every store that had rows — i.e. on exactly the stores worth having,
+    # and never on the empty ones the tests were written against. It only showed up when
+    # the store finally held real backfilled rows.
+    #
+    # The rank is now computed the way the rest of the repo computes it: newest stored IV
+    # for a tenor, scored through ``store.iv_rank`` (the same call
+    # ``scripts/verify_t5_warm.py`` measures with). An observation is a reading; a rank is
+    # a reading scored against a window, and only the store can do the scoring.
     """
     if getattr(args, "iv_rank", None) is not None:
         return float(args.iv_rank), "--iv-rank (operator supplied)"
@@ -500,20 +515,37 @@ def _watch_iv_rank(
             return None, "no IV store"
         if not observations:
             return None, "IV store has no observations"
-        ranked = [o for o in observations if o.rank is not None]
-        if not ranked:
+        best: tuple[str, str, float] | None = None
+        newest: dict[str, Any] = {}
+        for obs in observations:
+            prior = newest.get(obs.tenor_key)
+            if prior is None or obs.as_of > prior.as_of:
+                newest[obs.tenor_key] = obs
+        for key, obs in newest.items():
+            try:
+                result = store.iv_rank(
+                    obs.iv, rules.strategy.symbol, key, as_of=obs.as_of
+                )
+            except Exception:  # noqa: BLE001 - one unreadable tenor must not stop the rest
+                continue
+            if result.rank is None:
+                continue
+            candidate = (obs.as_of, key, float(result.rank))
+            if best is None or candidate[:2] > best[:2]:
+                best = candidate
+        if best is None:
             return None, (
-                f"IV store has {len(observations)} observation(s) but no tenor has reached "
-                f"MIN_OBSERVATIONS — T5 cannot be evaluated until the history warms up"
+                f"IV store has {len(observations)} observation(s) across "
+                f"{len(newest)} tenor(s) but no tenor has reached MIN_OBSERVATIONS — "
+                f"T5 cannot be evaluated until the history warms up"
             )
         # No plan-time read for any cell, so there is no tenor to be faithful to.
         # Say that rather than inventing one: under R4 the newest tenor is as likely
         # to be the wrong one as the right one, and a wrong-but-warm rank is worse
         # than a PENDING that says why.
-        best = max(ranked, key=lambda o: (o.as_of, o.tenor_key))
         return (
-            float(best.rank),
-            f"IV store tenor {best.tenor_key} as of {best.as_of} "
+            best[2],
+            f"IV store tenor {best[1]} as of {best[0]} "
             f"(no plan-time read for this session — tenor may not match the cell)",
         )
     return resolved, "; ".join(notes) if notes else "plan cells"
