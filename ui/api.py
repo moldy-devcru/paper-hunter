@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import sqlite3
 import urllib.parse
 from collections.abc import Iterator, Sequence
@@ -235,6 +236,11 @@ class UISettings:
     #: U1 ships the server without a live Alpaca client by default: a LAN research
     #: box with no credentials should still serve the cache instead of erroring. A
     #: request with ``fetch=true`` still works when credentials ARE present.
+    #: Production opt-in is ``PAPERHUNTER_UI_ALLOW_FETCH=1`` in the unit file (read
+    #: once at import by the module-level ``configure()`` below): the bar cache is
+    #: the one mutable, rebuildable store in the design, so a deployment WITH paper
+    #: credentials turns on gap-only refills and the chart is never blank just
+    #: because the cache went stale. Every other database stays mode=ro regardless.
     allow_fetch: bool = False
 
 
@@ -597,7 +603,15 @@ def configure(
     return ctx
 
 
-configure()
+def _env_flag(name: str) -> bool:
+    """Truthy env check for deployment toggles: 1/true/yes/on, case-insensitive."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Production configure: the ONLY setting the environment may flip is allow_fetch,
+# and it can only ever enable the gap-only bar-cache refill — never a write to the
+# journal or IV stores, which have no write path in this module at all.
+configure(UISettings(allow_fetch=_env_flag("PAPERHUNTER_UI_ALLOW_FETCH")))
 
 
 @app.get("/", include_in_schema=False)
@@ -766,6 +780,7 @@ def indicator_values(
     set_: Annotated[str | None, Query(alias="set", description="comma-separated names")] = None,
     from_: Annotated[dt.date | None, Query(alias="from")] = None,
     to: Annotated[dt.date | None, Query()] = None,
+    fetch: Annotated[bool, Query(description="allow a gap-only live fetch")] = False,
 ) -> dict[str, Any]:
     """Indicators for the aggregated closes, computed by ``executor.indicators``."""
     query = _validate(
@@ -783,6 +798,7 @@ def indicator_values(
             timeframe=query.timeframe,
             start=query.start,
             end=query.end,
+            fetch=fetch,
         ),
     )
     payload = _indicator_payload(buckets.bars, names)

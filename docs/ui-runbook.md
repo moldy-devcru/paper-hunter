@@ -93,14 +93,23 @@ stopped. Logs are plain journal lines under the `paper-hunter-ui` syslog identif
 
 ### Environment
 
-**None is required.** The server starts with no credentials and serves the bar cache
-cache-only: `ui.api.UISettings.allow_fetch` defaults to `False`, and
-`ui.barcache.open_cache` only builds a live Alpaca client when `ALPACA_PAPER_KEY` and
-`ALPACA_PAPER_SECRET` are present *and* fetching was asked for. The unit's
+**None is required to serve the cache.** The server starts with no credentials and
+serves the bar cache cache-only: `ui.api.UISettings.allow_fetch` defaults to `False`,
+and `ui.barcache.open_cache` only builds a live Alpaca client when `ALPACA_PAPER_KEY`
+and `ALPACA_PAPER_SECRET` are present *and* fetching was asked for. The unit's
 `EnvironmentFile=-/etc/paper-hunter/soak.env` is prefixed with `-` precisely because it is
 optional: if the soak's credentials file happens to exist, the view can see the same two
-variables; if it does not, nothing changes. Those credentials are paper-only, and the
-terminal needs them for nothing it does today.
+variables; if it does not, nothing changes. Those credentials are paper-only.
+
+**This deployment opts into gap-only live refills.** The unit sets
+`PAPERHUNTER_UI_ALLOW_FETCH=1`, which `ui.api` reads once at import and passes to
+`UISettings(allow_fetch=…)`. With it on (and the soak's paper credentials present), the
+terminal's bar requests carry `fetch=true` and the server fills cache gaps from Alpaca
+on demand — the chart is never blank merely because the cache went stale. The flag can
+only ever enable bar-cache refills: the journal and IV stores have no write path in
+`ui.api` at all, every database is still opened `mode=ro`, and the route table is still
+GET-only. Without the credentials file the flag is inert and the server is exactly as
+cache-only as before.
 
 ---
 
@@ -147,10 +156,13 @@ curl -s http://127.0.0.1:8478/api/health | python3 -m json.tool | head -20
 ```
 
 The terminal refills it from the cache on the next request; to actively re-pull history it
-must be given credentials *and* a request with `fetch=true` (`/api/bars?...&fetch=true`),
-which the UI never sends. So a deleted cache is a genuinely empty chart until something
-fills it — the page will say "no bars in the window" rather than draw a flat line, which
-is the honest state.
+must be given credentials *and* a request with `fetch=true` (`/api/bars?...&fetch=true`).
+Since the allow-fetch deployment (see § Environment), the UI sends exactly that on every
+bar request, so a deleted cache refills from Alpaca on the first page load — gap-only,
+rate-limited, and only for the window being viewed. On a host WITHOUT credentials or
+without `PAPERHUNTER_UI_ALLOW_FETCH=1`, a deleted cache is still a genuinely empty chart
+until something fills it — the page will say "no bars in the window" rather than draw a
+flat line, which is the honest state.
 
 There is no `cache-clear` button. A read-only service cannot delete its own cache, and
 giving it one would have been the first write endpoint.

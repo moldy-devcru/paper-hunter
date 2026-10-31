@@ -171,8 +171,14 @@ const etDate = (iso) =>
 // getJSON lives in net.js since U3 — one fetch helper for the whole frontend, so the
 // "GETs only, /api/ only" property has a single place to hold. windowParams() below is
 // the terminal's own window; the other pages build their own query strings.
+//
+// fetch=true asks the server to gap-fill the bar cache live when it can. It is a
+// HINT, not a demand: a cache-only server (no credentials, or allow_fetch off)
+// ignores it and serves the cache exactly as before. It still rides a GET, so the
+// read-only transport property in net.js is untouched — the only thing a fetch=true
+// response can mutate server-side is the rebuildable bar cache, never a record.
 function windowParams() {
-  const params = new URLSearchParams({ symbol: SYMBOL, tf: state.tf });
+  const params = new URLSearchParams({ symbol: SYMBOL, tf: state.tf, fetch: "true" });
   if (state.from) params.set("from", state.from);
   if (state.to) params.set("to", state.to);
   return params;

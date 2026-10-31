@@ -26,13 +26,15 @@
 #   sudo systemctl restart paper-hunter-ui.service
 #   journalctl -u paper-hunter-ui.service -n 20
 #
-# NOT NEEDED for the cache-only default: the server starts and serves whatever is already
-# in data/barcache.db with no credentials at all (ui.api.UISettings.allow_fetch defaults
-# to False, and ui.barcache.open_cache only builds a live client when credentials exist).
-# The EnvironmentFile below is therefore OPTIONAL and prefixed with `-`: it is here so
-# that a future gap-only fetch has somewhere to read paper credentials from, NOT because
-# the read-only view needs them. The variables it would carry are the same two the soak
-# uses: ALPACA_PAPER_KEY / ALPACA_PAPER_SECRET (executor.alpaca_client.KEY_ENV/SECRET_ENV).
+# The credential file is OPTIONAL (`-` prefix) and None is required to serve the cache:
+# cache-only is the default, but this deployment opts into gap-only live refills.
+# PAPERHUNTER_UI_ALLOW_FETCH=1 below lets a request with fetch=true top the bar cache
+# up from Alpaca (paper creds from the EnvironmentFile). The bar cache is the one
+# mutable, rebuildable store in the design — every record database stays mode=ro and
+# the route table stays GET-only either way. Without the env file the flag is inert:
+# ui.barcache.open_cache only builds a live client when ALPACA_PAPER_KEY and
+# ALPACA_PAPER_SECRET are present. The variables are the same two the soak uses
+# (executor.alpaca_client.KEY_ENV/SECRET_ENV).
 # Never put live keys here — paper only, mode 0640 root:paper-hunter, same as soak.env.
 
 [Unit]
@@ -51,6 +53,10 @@ WorkingDirectory=/opt/paper-hunter
 EnvironmentFile=-/etc/paper-hunter/soak.env
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
+# Gap-only live refill of the bar cache (see the block above). The chart should never
+# be blank just because the cache is stale: the terminal asks with fetch=true and the
+# server fills the hole from Alpaca when it has credentials.
+Environment=PAPERHUNTER_UI_ALLOW_FETCH=1
 # No reload in production: a reload on every edit is a research tool that changes under
 # the operator while they are reading a number off it.
 ExecStart=/opt/paper-hunter/.venv/bin/python -m uvicorn ui.api:app --host 0.0.0.0 --port 8478 --no-server-header
