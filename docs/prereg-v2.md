@@ -1,12 +1,13 @@
-# Pre-registration v2 — DRAFT, awaiting operator signature
+# Pre-registration v2 — RATIFIED 2026-11-18
 
-**Status:** DRAFT. Drafted 2026-11-18 by the lead (Moldy) under mads's ruling of
+**Status:** RATIFIED. Operator mads approved the draft as written on 2026-11-18
+23:26 ET via Discord #paper-hunter (message `1572830369256833066`: "OK. I
+approve."). Drafted 2026-11-18 by the lead (Moldy) under mads's ruling of
 2026-11-18 23:16 ET: *"I'll go with your gut. V5 it is."* — selecting variant V5
 from the measured candidates in
 [`docs/research/2026-11-18-v2-gate-candidates.md`](research/2026-11-18-v2-gate-candidates.md)
-(commit `964a941`, branch `v2-gate-candidates`). Nothing in this document is in
-force until signed. No v2 results exist; every number below is a pre-results
-measurement or expectation.
+(commit `964a941`, branch `v2-gate-candidates`). Every number below is a
+pre-results measurement or expectation; nothing was edited after approval.
 
 **Lineage.** v1 (`docs/ratification.md`) stays the record of the as-is window:
 its (e)/(f) signatures are still pending, and its soak/data collection continues
@@ -122,11 +123,13 @@ approximation is generous.
   coverage checked, full dry run into a scratch DB with the journal inspected,
   loader prints `pending_calibrations == []` under the v2 config.
 
-**Operator signature:** ______________________  **Date:** ____________
+**Operator signature:** mads — ratified via Discord #paper-hunter, 2026-11-18
+23:26 ET, message `1572830369256833066` ("OK. I approve."). A dated, attributable
+operator approval is the record; no wet signature required.  **Date:** 2026-11-18
 
 **Lead (Moldy):** drafted 2026-11-18, stands behind every row above.
 
-### Open items the signature covers
+### Items covered by the ratification (all approved 2026-11-18 23:26 ET)
 
 1. Counter-trend entries permitted (§1) — the philosophy change.
 2. T6 re-specification + freeze numbers (§3).
