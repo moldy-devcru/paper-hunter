@@ -74,8 +74,16 @@ def calibrated():
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
-        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "call": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated multiplier",
+        },
+        "put": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated multiplier",
+        },
     }
     return load_rules_text(yaml.safe_dump(data))
 
