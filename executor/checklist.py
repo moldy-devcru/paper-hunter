@@ -22,6 +22,16 @@ Arm scoping
 so the journal snapshot shows the full seven-condition grid with the arm's real
 scope visible rather than a six-item list with a silent gap.
 
+The v2 blocking set (prereg-v2 §1, ratified 2026-11-18)
+--------------------------------------------------------
+``fire`` is "every blocking condition PASSes", and the blocking set for arms B and C
+in v2 is **T4 AND (T2b OR T3-group)** — T2b OR'd with the (T3a OR T3b) group, both
+satisfied on a PASS. T1, T2 and T5 are **non-blocking observations**: still computed
+and journaled on every plan, never a veto (the list is ``checklist.non_blocking``,
+loader-pinned to T1/T2/T5). T6 remains blocking for arm B, with its multiplier now
+per side (``call`` / ``put``, prereg-v2 §3) — ``side: trade_direction`` selects the
+leg the trade is actually trading.
+
 Everything here reads thresholds from the loaded ``Rulebook``; no threshold is
 duplicated as a literal in this file. That is what lets the rulebook stay the single
 frozen source of truth for a veto.
@@ -423,17 +433,21 @@ def _t4(snap: IndicatorSnapshot, rules: Rulebook) -> ConditionResult:
 
 def _t5(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
     cfg = rules.checklist.t5_options_chain
-    # INTERPRETATION: an event day is checked FIRST and short-circuits T5. The brief
-    # calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it
-    # outranks a healthy IV rank rather than being one AND-condition among several.
-    # RULED 2026-10-02: the earnings half of that veto is dropped for SPY (component
-    # earnings do not move index IV regime), so veto_kinds is fomc/cpi only.
+    # INTERPRETATION: an event day is checked FIRST and short-circuits T5's IV read —
+    # the calendar read is the more important one on that day. RULED 2026-10-02: the
+    # earnings half of the veto is dropped for SPY (component earnings do not move
+    # index IV regime), so veto_kinds is fomc/cpi only.
+    # prereg-v2 §1 (ratified 2026-11-18): the event-day HARD VETO is retired. T5 is a
+    # non-blocking observation now, so an event day is computed and journaled as a T5
+    # FAIL but never stops the trade.
     if snap.is_event_day:
         kinds = ",".join(snap.event_kinds) or "unspecified"
         return ConditionResult("T5", "FAIL",
-                              f"EVENT DAY HARD VETO: {kinds} "
+                              f"EVENT DAY: {kinds} "
                               f"(veto_kinds={cfg.event_calendar.veto_kinds}, "
-                              f"hard_veto={cfg.event_calendar.hard_veto})")
+                              f"hard_veto={cfg.event_calendar.hard_veto}) — the v1 hard "
+                              f"veto is retired in v2 (prereg-v2 §1); journaled as an "
+                              f"observation, not a stop")
     if arm == "B":
         if snap.iv_rank is None:
             return ConditionResult("T5", "PENDING",
@@ -471,14 +485,21 @@ def _t5(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
     )
 
 
-def _t6(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
+def _t6(
+    snap: IndicatorSnapshot,
+    rules: Rulebook,
+    arm: Arm,
+    direction: Direction,
+) -> ConditionResult:
     cfg = rules.checklist.t6_flow
     if arm not in cfg.applies_to:
         return ConditionResult("T6", "SKIPPED",
                               f"T6 applies to {cfg.applies_to} only "
                               f"(brief: 'Arm B only, flow gate')",
                               blocking=False)
-    mult = cfg.multiplier
+    # prereg-v2 §3: the multiplier is per side (``side: trade_direction`` selects the
+    # leg — the one the trade is actually trading, as v1 always stated).
+    mult = cfg.multiplier.call if direction == "call" else cfg.multiplier.put
     if mult.calibration_pending:
         return ConditionResult("T6", "PENDING",
                               f"flow multiplier not calibrated ({mult.reason}) — "
@@ -597,36 +618,56 @@ def evaluate(
         "T3b": _t3b(snapshot, rules, direction),
         "T4": _t4(snapshot, rules),
         "T5": _t5(snapshot, rules, arm),
-        "T6": _t6(snapshot, rules, arm),
+        "T6": _t6(snapshot, rules, arm, direction),
     }
 
-    # T3 group semantics: the rulebook (and the brief: "T3: Bollinger condition —
-    # one of: (a) squeeze release, (b) band rejection") declares
-    # ``satisfied_if_any_of: [squeeze_release, band_rejection]``. Evaluate T3a/T3b
-    # as an OR group: if either PASSes the sibling becomes non-blocking context;
-    # if neither PASSes the group produces ONE veto (carried by T3a, with T3b's
-    # detail folded in) so the failure histogram counts T3 once, not twice.
-    # FIX (2026-10-02, Moldy review of Phase 4a flag): previously both were
-    # independently blocking, making T3 an AND — no series could ever fire.
+    # T2b OR T3-group semantics (prereg-v2 §1, ratified 2026-11-18): the v2 blocking
+    # set for arms B and C is T4 AND (T2b OR T3-group), where the T3 group itself is
+    # (T3a OR T3b) per ``satisfied_if_any_of: [squeeze_release, band_rejection]`` (the
+    # v1 OR pattern below, unchanged). If T2b PASSes, the T3 legs become non-blocking
+    # context; if T3a or T3b PASSes, T2b becomes non-blocking; if no member PASSes,
+    # the group produces ONE veto, carried by T3a with T2b's and T3b's details folded
+    # in, so the failure histogram counts the group once, not three times.
+    # v1 carried the same single-veto pattern for (T3a OR T3b) alone, after the
+    # 2026-10-02 fix that un-ANDed T3 (both independently blocking meant no series
+    # could ever fire).
+    t2b = conditions["T2b"]
     t3a, t3b = conditions["T3a"], conditions["T3b"]
-    if t3a.status == "PASS" or t3b.status == "PASS":
-        satisfied_by = "T3a squeeze-release" if t3a.status == "PASS" else "T3b band-rejection"
-        if t3a.status != "PASS":
-            conditions["T3a"] = dataclasses.replace(
-                t3a, blocking=False,
-                detail=f"{t3a.detail} | T3 group satisfied by {satisfied_by}")
-        if t3b.status != "PASS":
-            conditions["T3b"] = dataclasses.replace(
-                t3b, blocking=False,
-                detail=f"{t3b.detail} | T3 group satisfied by {satisfied_by}")
+    t2b_passed = t2b.status == "PASS"
+    t3_passed = (t3a.status == "PASS") or (t3b.status == "PASS")
+    if t2b_passed or t3_passed:
+        satisfied_by = (
+            "T2b macd" if t2b_passed
+            else ("T3a squeeze-release" if t3a.status == "PASS" else "T3b band-rejection")
+        )
+        for cid in ("T2b", "T3a", "T3b"):
+            res = conditions[cid]
+            if res.status != "PASS":
+                conditions[cid] = dataclasses.replace(
+                    res, blocking=False,
+                    detail=f"{res.detail} | T2b OR T3-group satisfied by {satisfied_by}")
     else:
         conditions["T3a"] = dataclasses.replace(
             t3a,
-            detail=f"{t3a.detail} | T3 group veto: neither arm satisfied — "
-                   f"T3b also {t3b.status} ({t3b.detail})")
+            detail=f"{t3a.detail} | T2b OR T3-group veto: no member satisfied — "
+                   f"T2b {t2b.status} ({t2b.detail}); T3b {t3b.status} ({t3b.detail})")
         conditions["T3b"] = dataclasses.replace(
             t3b, blocking=False,
-            detail=f"{t3b.detail} | folded into T3 group veto (carried by T3a)")
+            detail=f"{t3b.detail} | folded into T2b OR T3-group veto (carried by T3a)")
+        conditions["T2b"] = dataclasses.replace(
+            t2b, blocking=False,
+            detail=f"{t2b.detail} | folded into T2b OR T3-group veto (carried by T3a)")
+
+    # Non-blocking observations (prereg-v2 §1): T1, T2 and T5 are still computed and
+    # journaled on every plan but no longer gate the entry. The list comes from the
+    # rulebook (loader-pinned to T1/T2/T5), so a hand-edit cannot silently un-freeze
+    # a blocking veto; the note lands on the journaled row, not just in code.
+    for cid in rules.checklist.non_blocking:
+        res = conditions[cid]
+        if res.blocking:
+            conditions[cid] = dataclasses.replace(
+                res, blocking=False,
+                detail=f"{res.detail} | non-blocking observation in v2 (prereg-v2 §1)")
 
     veto_reasons: list[str] = []
     for condition_id, result in conditions.items():

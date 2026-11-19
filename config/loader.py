@@ -43,7 +43,9 @@ FROZEN = {
     "macd_fresh_cross_hours": 24,
     "bb_percentile": 20,
     "bb_lookback_days": 60,
-    "relvol_min": 1.5,
+    # v1 froze 1.5 from the brief; prereg-v2 §1 (ratified 2026-11-18) re-measures the
+    # floor at 1.2 (V5) — the value the candidate set was chosen from.
+    "relvol_min": 1.2,
     "relvol_lookback_days": 20,
     "iv_rank_max": 50,
     "arm_c_iv_rank_max": 50,
@@ -344,21 +346,28 @@ class T1CounterTrend(FrozenModel):
 
     @model_validator(mode="after")
     def _counter_trend_is_earned(self) -> T1CounterTrend:
-        """The brief: counter-trend entries need T2+T3+T4+T5 ALL plus a documented
+        """Counter-trend entries must clear the arm's BLOCKING set plus a documented
         reversal trigger. Enabling counter-trend without those guardrails is a
-        rulebook that contradicts itself, so it fails validation."""
+        rulebook that contradicts itself, so it fails validation.
+
+        v1 (brief): T2+T3+T4+T5 ALL. prereg-v2 §1 (ratified 2026-11-18) redefines the
+        blocking set as T4 AND (T2b OR T3-group) — T2 and T5 are observations, not
+        gates — so the required set follows the v2 blocking set: T2b, T3, T4. (T2b and
+        T3 form the OR group; both are named here because the group can only be
+        satisfied by one of them, and the rulebook must still name the pair.)
+        """
         if self.allowed:
-            missing = {"T2", "T3", "T4", "T5"} - set(self.requires_all_of)
+            missing = {"T2b", "T3", "T4"} - set(self.requires_all_of)
             if missing:
                 raise ValueError(
-                    "counter_trend.allowed=true requires all of T2,T3,T4,T5; "
-                    f"missing {sorted(missing)}"
+                    "counter_trend.allowed=true requires the v2 blocking set T2b,T3,T4 "
+                    f"(prereg-v2 §1); missing {sorted(missing)}"
                 )
             if not self.requires_documented_reversal_trigger:
                 raise ValueError(
                     "counter_trend.allowed=true requires a documented reversal trigger "
-                    "(brief: 'counter-trend trades require T2+T3+T4+T5 ALL plus a documented "
-                    "reversal trigger')"
+                    "(prereg-v2 §1: counter-trend entries clear the blocking set plus a "
+                    "documented reversal trigger)"
                 )
         return self
 
@@ -537,13 +546,30 @@ class T5(FrozenModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class T6Multiplier(FrozenModel):
+    """T6's frozen N, per side (prereg-v2 §3).
+
+    v1 stored ONE pooled multiplier under the assumption that ``side: trade_direction``
+    meant one number applied to whichever side was traded. The soak refuted it:
+    first-20 P90 was 16.9× call / 2.47× put, and the pooled number passed only 4 of 94
+    recorded days against the ~10% design intent. v2 re-specifies the calibration
+    window to ALL recorded sessions at a single deep-OTM threshold and freezes the two
+    sides separately — ``N_call = 5.59``, ``N_put = 3.07`` (P90, linear interpolation,
+    all 94 sessions as of 2026-11-18). A pending side is the same honesty contract as
+    ``Pending``: null value, calibration_pending true, no invented number.
+    """
+
+    call: Pending
+    put: Pending
+
+
 class T6(FrozenModel):
     id: Literal["T6"]
     applies_to: list[Literal["B"]]
     source: str
     side: str
     baseline_lookback_days: int = Field(gt=0)
-    multiplier: Pending
+    multiplier: T6Multiplier
     deep_otm: DeepOtm
     # `evaluation` is a fact about the DATA (flow_baseline rows are written by an EOD
     # soak); `intraday_policy` is the ruling about what to DO with that data when it
@@ -560,10 +586,10 @@ class T6(FrozenModel):
 
     @model_validator(mode="after")
     def _multiplier_is_pending_or_set(self) -> T6:
-        if not self.multiplier.calibration_pending and not isinstance(
-            self.multiplier.value, (int, float)
-        ):
-            raise ValueError("a calibrated T6 multiplier must be numeric")
+        for side in ("call", "put"):
+            leg = getattr(self.multiplier, side)
+            if not leg.calibration_pending and not isinstance(leg.value, (int, float)):
+                raise ValueError(f"a calibrated T6 multiplier ({side}) must be numeric")
         return self
 
 
@@ -599,6 +625,14 @@ class Checklist(FrozenModel):
     t4_volume: T4
     t5_options_chain: T5
     t6_flow: T6
+    # Conditions that are COMPUTED AND JOURNALED on every plan but no longer block an
+    # entry. prereg-v2 §1 (ratified 2026-11-18) removes T1, T2 and T5 from the
+    # blocking AND (the blocking set is T4 AND (T2b OR T3-group)); T5's IV series keeps
+    # accumulating as mechanism evidence. The literals are pinned to the conditions v2
+    # actually retired from the gate: putting T2b, T3, T4 or T6 in this list would
+    # silently un-freeze a veto, so the loader refuses it rather than trusting a
+    # hand-edit.
+    non_blocking: list[Literal["T1", "T2", "T5"]] = Field(default_factory=list)
 
     def for_arm(self, arm: str) -> list[str]:
         """Checklist condition ids that apply to an arm, in rulebook order."""
@@ -740,7 +774,11 @@ class Rulebook(FrozenModel):
     def pending_calibrations(self) -> list[str]:
         """Human-readable list of every value still marked calibration_pending."""
         t6 = self.checklist.t6_flow
-        pending = [f"checklist.t6_flow.multiplier (evaluation={t6.evaluation})"]
+        pending: list[str] = []
+        for side in ("call", "put"):
+            leg = getattr(t6.multiplier, side)
+            if leg.calibration_pending:
+                pending.append(f"checklist.t6_flow.multiplier.{side}")
         for side in ("calls", "puts"):
             leg = getattr(t6.deep_otm, side)
             if leg.calibration_pending:

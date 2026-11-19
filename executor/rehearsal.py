@@ -375,10 +375,12 @@ def rehearsal_rules_text(
 
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     reason = "REHEARSAL SIMULATION of the first-monthly-review freeze; not a rulebook edit"
+    # prereg-v2 §3: the v2 schema stores N per side. The rehearsal's single proposal
+    # fills BOTH legs — the simulation's job is to exercise the post-calibration
+    # pipeline, and a pooled proposal written to both sides is the faithful shape.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": round(float(n), 4),
-        "calibration_pending": False,
-        "reason": reason,
+        "call": {"value": round(float(n), 4), "calibration_pending": False, "reason": reason},
+        "put": {"value": round(float(n), 4), "calibration_pending": False, "reason": reason},
     }
     for side in ("calls", "puts"):
         data["checklist"]["t6_flow"]["deep_otm"][side] = {
@@ -411,13 +413,13 @@ def rehearsal_rules(
     threshold_pct: float,
     arm_c_iv_rank_max: float = 50.0,
 ) -> Any:
-    """The shipped rulebook with its pending calibrations FILLED IN, for this run only.
+    """The shipped rulebook with the rehearsal's proposed values applied, for this run only.
 
-    The shipped file is untouched. T6's multiplier, both deep-OTM thresholds and arm C's
-    IV ceiling are ``calibration_pending`` there, and a pending gate is blocking by
-    construction — so with the shipped rules *no cell can ever fire* and the entry,
-    roll and exit branches are unreachable. Filling them in is how a rehearsal exercises
-    "the pipeline after the monthly review" without editing the pre-registration.
+    The shipped file is untouched. Since prereg-v2 (2026-11-18) the shipped rulebook
+    already carries its frozen calibrations, so this fill-in is now a re-simulation of
+    the calibration proposal (pooled N written to both per-side legs, the proposed
+    deep-OTM threshold, arm C's IV ceiling) — the pipeline is exercised exactly as it
+    would run under those proposed numbers, without editing the pre-registration.
 
     ``strategy.version`` is left alone: the loader validates the shape, and a fake
     version string in a temp journal is a worse lie than a clearly-labelled fixture
@@ -426,9 +428,8 @@ def rehearsal_rules(
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     reason = "REHEARSAL SIMULATION of the first-monthly-review freeze; not a rulebook edit"
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": round(float(n), 4),
-        "calibration_pending": False,
-        "reason": reason,
+        "call": {"value": round(float(n), 4), "calibration_pending": False, "reason": reason},
+        "put": {"value": round(float(n), 4), "calibration_pending": False, "reason": reason},
     }
     for side in ("calls", "puts"):
         data["checklist"]["t6_flow"]["deep_otm"][side] = {

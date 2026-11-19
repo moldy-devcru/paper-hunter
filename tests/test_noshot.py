@@ -72,10 +72,10 @@ def rules():
 def calibrated():
     """T6's multiplier calibrated, so a cell can actually fire."""
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0,
-        "calibration_pending": False,
-        "reason": "test fixture: calibrated multiplier",
+        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -180,15 +180,25 @@ def test_exactly_one_failure_is_a_sighting(calibrated):
 
 
 def test_two_failures_is_not_a_sighting(calibrated):
-    cell = cell_for(passing_snapshot(relvol=1.1, rsi=45.0), calibrated)
-    assert set(cell.failed()) == {"T2", "T4"}
+    # prereg-v2: the blocking set is T4 AND (T2b OR T3) AND T6 — two blocking
+    # failures are T4 (the floor) plus a failed flow gate.
+    cell = cell_for(
+        passing_snapshot(
+            relvol=1.1,
+            flow_gate=FlowGate(status="fail", ratio=0.5, eod_confirmed=True),
+        ),
+        calibrated,
+    )
+    assert set(cell.failed()) == {"T4", "T6"}
     assessment = assess_sights(cell)
     assert assessment.on is False
     assert "not a near miss" in assessment.reason
 
 
 def test_pending_only_is_blindness_not_a_sighting(rules):
-    # The shipped rulebook: T6 uncalibrated, so arm B is blocked without a single FAIL.
+    # Arm B on a cold flow journal: T6 PENDING (no prior session to read), so arm B
+    # is blocked without a single FAIL. (prereg-v2: the shipped rulebook's T6 is
+    # frozen — the pending comes from the missing flow read, not a missing N.)
     cell = cell_for(passing_snapshot(flow_gate=FlowGate(status="unknown")), rules)
     assert cell.failed() == ()
     assert cell.pending() == ("T6",)
@@ -482,7 +492,13 @@ def post_day_series(day=DAY, *, days=3, start=626.0, step=2.0, volume=55_000_000
 
 
 def test_fill_counterfactuals_computes_arm_b_outcome_from_the_post_day_series(rules, conn):
-    cell = cell_for(passing_snapshot(relvol=1.1), rules, arm="B", direction="call")
+    # the flow gate must clear the frozen call-side N (5.59) so the cell is a
+    # marginal ONE (T4 only) and a noshot gets drafted
+    cell = cell_for(
+        passing_snapshot(relvol=1.1, flow_gate=FlowGate(status="pass", ratio=6.0,
+                                                        eod_confirmed=True)),
+        rules, arm="B", direction="call",
+    )
     plan = plan_for([cell], rules)
     drafts = build_noshots(
         plan, setup_bar=session_bar(o=624.0, h=627.5, low=623.0, c=626.0),
@@ -568,7 +584,11 @@ def test_fill_counterfactuals_without_bars_leaves_everything_null(calibrated, co
 
 
 def test_fill_counterfactuals_can_be_run_in_dry_run(rules, conn):
-    cell = cell_for(passing_snapshot(relvol=1.1), rules)
+    cell = cell_for(
+        passing_snapshot(relvol=1.1, flow_gate=FlowGate(status="pass", ratio=6.0,
+                                                        eod_confirmed=True)),
+        rules,
+    )
     plan = plan_for([cell], rules)
     write_noshots(
         conn,

@@ -740,7 +740,10 @@ def test_calibration_reports_flow_p90_and_pending_values(tmp_path: Path) -> None
     assert payload["distance_histogram"]["call"]["1"] == pytest.approx(
         sum(400.0 + 10 * i for i in range(20))
     )
-    assert payload["pending_calibrations"], "the shipped rulebook has uncalibrated gates"
+    # prereg-v2 §3 froze the T6 pair and the deep-OTM legs; T5 arm C was ruled
+    # 2026-10-02 — the v2 rulebook opens with nothing pending, and the endpoint
+    # must say so (the UI renders the empty state, calibration.js).
+    assert payload["pending_calibrations"] == []
     assert payload["strategy_version"], "the example rulebook still fingerprints"
     assert payload["ivrank"]["count"] == 0
 

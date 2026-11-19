@@ -792,8 +792,10 @@ def test_the_roll_is_not_gated_by_the_entry_window(rules):
 def test_a_calibrated_rulebook_does_not_change_the_governors(rules):
     """Governors read their numbers from the rulebook; T6 calibration is irrelevant."""
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0, "calibration_pending": False, "reason": "test",
+        "call": {"value": 2.0, "calibration_pending": False, "reason": "test"},
+        "put": {"value": 2.0, "calibration_pending": False, "reason": "test"},
     }
     calibrated = load_rules_text(yaml.safe_dump(data))
     position = b_position(entry_price=1.0, entry_ts=at(10, 0))

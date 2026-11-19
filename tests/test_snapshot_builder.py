@@ -503,7 +503,8 @@ def test_snapshot_feeds_the_checklist_without_crashing(long_payload, rules):
     # T1 must be decidable on a 260-bar series, and T5 must be decidable given an iv_rank.
     assert outcome.status("T1") in ("PASS", "FAIL")
     assert outcome.status("T5") in ("PASS", "FAIL")
-    # T6's multiplier is still calibration_pending in the frozen rulebook.
+    # T6 is PENDING on a cold flow journal (no prior EOD session to read) — the
+    # frozen rulebook's per-side N is set; the pending is the missing flow read.
     assert outcome.status("T6") == "PENDING"
     assert outcome.fire is False
 
@@ -514,7 +515,9 @@ def test_warmup_snapshot_makes_t1_pending_not_failed(short_payload, rules):
     result = build_from_bars(short_payload, iv_rank=30.0)
     outcome = evaluate(result.snapshot, rules, direction="call", arm="B")
     assert outcome.status("T1") == "PENDING"
-    assert any("T1: pending" in r for r in outcome.veto_reasons)
+    # prereg-v2 §1: T1 is a non-blocking observation — a warmup PENDING is
+    # journaled, not vetored (v1 listed it as "T1: pending").
+    assert not any("T1:" in r for r in outcome.veto_reasons)
 
 
 def test_event_day_short_circuits_t5(long_payload, rules):
@@ -523,7 +526,11 @@ def test_event_day_short_circuits_t5(long_payload, rules):
     result = build_from_bars(long_payload, iv_rank=90.0, calendar=calendar_with("fomc", day))
     outcome = evaluate(result.snapshot, rules, direction="call", arm="B")
     assert outcome.status("T5") == "FAIL"
-    assert "EVENT DAY HARD VETO" in outcome.conditions["T5"].detail
+    # prereg-v2 §1: the event-day hard veto is retired — the detail says
+    # observation, not veto, and the condition is non-blocking.
+    assert "EVENT DAY" in outcome.conditions["T5"].detail
+    assert "HARD VETO" not in outcome.conditions["T5"].detail
+    assert outcome.conditions["T5"].blocking is False
 
 
 # ---------------------------------------------------------------------------

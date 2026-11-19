@@ -79,7 +79,8 @@ def test_checklist_thresholds_match_the_brief():
     assert c.t2b_macd.fresh_cross_guard.max_age_hours == 24
     assert c.t3_bollinger.satisfied_if_any_of.squeeze_release.bandwidth_below_percentile == 20
     assert c.t3_bollinger.satisfied_if_any_of.squeeze_release.lookback_days == 60
-    assert (c.t4_volume.relative_volume_min, c.t4_volume.lookback_days) == (1.5, 20)
+    # prereg-v2 §1: the relative-volume floor is 1.2 (v1: 1.5); run-rate and lookback unchanged.
+    assert (c.t4_volume.relative_volume_min, c.t4_volume.lookback_days) == (1.2, 20)
     assert c.t4_volume.intraday_run_rate_min == 1.5
     assert c.t5_options_chain.arm_b.iv_rank_max == 50
     assert c.t5_options_chain.event_calendar.hard_veto is True
@@ -124,15 +125,13 @@ def test_arm_c_declares_its_own_entry_window():
     """
     window = load_rules().arms.C.entry.window_et
     assert (window.start, window.end) == ("09:45", "15:30")
-    # Still a DRAFT, and T6 still pending: this ruling changed arm C's entry window,
-    # nothing about the arms being settled. The version has since moved to 1.3.0-draft
-    # (T4's run-rate branch implemented, 2026-10-03) and then 1.4.0-draft (T5's tenor key
-    # re-keyed onto moneyness, ruled the same day) — the point of the assertion is that
-    # the *status* stays DRAFT across those bumps, not that the number never changes.
+    # prereg-v2 (ratified 2026-11-18): the rulebook is now FROZEN at 2.0.0 and T6's
+    # multiplier is frozen per side (§3) — the point of the assertion is that the
+    # version *status* tracks the pre-registration lifecycle, not the window shape.
     rules = load_rules()
-    assert rules.strategy.status == "DRAFT"
-    assert rules.strategy.version.startswith("1.4.0-draft")
-    assert rules.checklist.t6_flow.multiplier.calibration_pending is True
+    assert rules.strategy.status == "FROZEN"
+    assert rules.strategy.version == "2.0.0"
+    assert rules.checklist.t6_flow.multiplier.call.calibration_pending is False
 
 
 def test_arm_c_without_a_window_fails_to_load():
@@ -155,13 +154,18 @@ def test_arm_a_is_buy_and_hold_day_one():
     assert a.managed is False
 
 
-def test_t6_is_pending_not_invented():
+def test_t6_is_frozen_per_side_not_invented():
+    # prereg-v2 §3: N is frozen per side (call 5.59 / put 3.07 — P90 over all 94
+    # recorded soak sessions at the working 3% deep-OTM threshold), deep-OTM 3.0 on
+    # both legs. The old "pending until the first monthly review" state is gone.
     t6 = load_rules().checklist.t6_flow
     assert t6.applies_to == ["B"]
-    assert t6.multiplier.value is None
-    assert t6.multiplier.calibration_pending is True
+    assert (t6.multiplier.call.value, t6.multiplier.call.calibration_pending) == (5.59, False)
+    assert (t6.multiplier.put.value, t6.multiplier.put.calibration_pending) == (3.07, False)
+    assert (t6.deep_otm.calls.value, t6.deep_otm.calls.calibration_pending) == (3.0, False)
+    assert (t6.deep_otm.puts.value, t6.deep_otm.puts.calibration_pending) == (3.0, False)
     assert t6.evaluation == "EOD_only"
-    assert any("t6" in p for p in load_rules().pending_calibrations)
+    assert load_rules().pending_calibrations == []
 
 
 # ---------------------------------------------------------------------------
@@ -176,38 +180,33 @@ def test_window_is_three_months_sixty_sessions_renewable_only_at_review():
     assert w.extension == "monthly_review_only"
 
 
-def test_window_starts_on_the_ratified_november_date_with_arms_a_and_c():
-    """RULED 2026-10-03 (R5): the window's start is pinned, not deferred.
+def test_window_opens_all_three_arms_on_the_v2_start_date():
+    """RULED 2026-10-03 (R5) pinned the start; prereg-v2 §2 renamed the roster.
 
-    This used to assert ``start is None`` ("stamped when the window opens, not claimed
-    in advance"). R5 moved the November window's start to a specific date and named which
-    arms open with it, so the start is now a number in the rulebook that can be read and
-    checked — a stronger claim than the absence it replaced.
+    The v2 window opens arms A + B + C together on 2026-11-19. The start is a number
+    in the rulebook that can be read and checked — a stronger claim than the absence
+    ("stamped when the window opens") it originally replaced.
     """
     w = load_rules().window
-    assert w.start == dt.date(2026, 11, 2)
-    assert w.arms == ["A", "C"], "November opens arms A+C; B waits for T5 to warm"
+    assert w.start == dt.date(2026, 11, 19)
+    assert w.arms == ["A", "B", "C"]
 
 
-def test_arm_b_is_reported_inert_until_t5_is_defined():
-    """Deferred is not the same as dropped — the watch loop skips B *by name*.
+def test_arm_b_gate_is_retired_not_deferred():
+    """prereg-v2 §1: the arm B activation gate is retired, not just satisfied.
 
-    The default (``t5_iv_rank_defined=None``) is the conservative one: until something
-    positively reports an IV rank, arm B stays inert.
+    It existed only because T5 was blocking and could not warm for 0-DTE. With T5 a
+    non-blocking observation, arm B opens at window start — ``arm_b_gate: null`` is
+    the visible record of that retirement (an absence of the gate, not a gate that
+    happens to pass).
     """
     rb = load_rules()
-    assert rb.inert_arms() == ["B"]
-    assert rb.active_arms() == ["A", "C"]
-    # No `enabled` flag on the arm: arm B is *deferred by the window*, not disabled by
-    # its own rules. Asserting via inert_arms() is what makes that distinction real.
-    assert rb.window.arm_b_gate is not None
-
-
-def test_arm_b_leaves_the_inert_set_once_t5_can_be_warmed():
-    """The gate is the condition, so a defined T5 opens B without a second ruling."""
-    rb = load_rules()
+    assert rb.window.arm_b_gate is None
+    assert rb.inert_arms() == []
+    assert rb.active_arms() == ["A", "B", "C"]
+    # and the t5_iv_rank_defined knob no longer changes anything with the gate gone
     assert rb.inert_arms(t5_iv_rank_defined=True) == []
-    assert sorted(rb.active_arms(t5_iv_rank_defined=True)) == ["A", "B", "C"]
+    assert rb.active_arms(t5_iv_rank_defined=True) == ["A", "B", "C"]
 
 
 def test_window_length_must_be_plausible():
@@ -303,11 +302,10 @@ def test_earnings_kind_no_longer_vetoes_by_default():
     assert ev.is_event_day(day, veto_kinds=["fomc", "cpi"]) is False
 
 
-def test_only_the_t6_calibrations_remain_pending():
-    """After the 2026-10-02 rulings the only open items are the algo-calibrated T6 pair."""
-    pending = load_rules().pending_calibrations
-    assert all("t6_flow" in p for p in pending), pending
-    assert len(pending) == 3
+def test_no_calibrations_remain_pending():
+    """prereg-v2 §3 froze the T6 pair and both deep-OTM legs; T5 arm C was ruled
+    2026-10-02. The v2 rulebook opens with nothing pending."""
+    assert load_rules().pending_calibrations == []
 
 
 def test_strategy_version_is_version_plus_content_hash():
@@ -347,25 +345,52 @@ def test_unknown_keys_are_rejected(label, path, value):
 
 
 def test_pending_value_with_a_number_in_it_is_rejected():
-    """The whole point of calibration_pending: a fabricated threshold is not a default."""
-    with pytest.raises(RulesError):
-        load_rules_text(_tamper(lambda d: _set(d, "checklist.t6_flow.multiplier.value", 2.0)))
+    """The whole point of calibration_pending: a fabricated threshold is not a default.
+
+    prereg-v2 §3: the schema is per-side; both legs still carry the honesty rules.
+    """
+    # value null WITH the pending flag is the honest pending state — it loads
+    honest = load_rules_text(
+        _tamper(
+            lambda d: d["checklist"]["t6_flow"]["multiplier"]["call"].update(
+                {"value": None, "calibration_pending": True}
+            )
+        )
+    )
+    assert honest.checklist.t6_flow.multiplier.call.calibration_pending is True
+    # pending flag + a number in it is an invented threshold
     with pytest.raises(RulesError):
         load_rules_text(
-            _tamper(lambda d: _set(d, "checklist.t6_flow.multiplier.calibration_pending", False))
+            _tamper(
+                lambda d: d["checklist"]["t6_flow"]["multiplier"]["call"].update(
+                    {"value": 2.0, "calibration_pending": True}
+                )
+            )
+        )
+    # value null without the pending flag is an unexplained null
+    with pytest.raises(RulesError):
+        load_rules_text(
+            _tamper(
+                lambda d: d["checklist"]["t6_flow"]["multiplier"]["call"].update(
+                    {"value": None, "calibration_pending": False}
+                )
+            )
         )
 
 
 def test_calibrated_t6_multiplier_is_allowed():
-    """Once calibrated, a real number is legitimate — still must be numeric."""
+    """Once calibrated, a real number is legitimate — still must be numeric.
+
+    prereg-v2 §3: per-side schema, so the call leg is the one under test here.
+    """
     rules = load_rules_text(
         _tamper(
-            lambda d: d["checklist"]["t6_flow"]["multiplier"].update(
+            lambda d: d["checklist"]["t6_flow"]["multiplier"]["call"].update(
                 {"value": 1.8, "calibration_pending": False}
             )
         )
     )
-    assert rules.checklist.t6_flow.multiplier.value == 1.8
+    assert rules.checklist.t6_flow.multiplier.call.value == 1.8
 
 
 @pytest.mark.parametrize(
@@ -392,8 +417,10 @@ def test_incoherent_rulebooks_are_rejected(label, path, value):
 
 
 def test_counter_trend_needs_the_full_guardrail():
-    """Enabling counter-trend is allowed, but only with T2-T5 ALL + a documented
-    reversal trigger (brief, T1). Half-enabling it is a rulebook contradicting itself."""
+    """Enabling counter-trend is allowed, but only with the v2 blocking set
+    (T4 AND (T2b OR T3-group) -> ``requires_all_of: [T2b, T3, T4]``) plus a documented
+    reversal trigger (brief, T1). Half-enabling it is a rulebook contradicting itself.
+    prereg-v2 §1: v1's guardrail was T2-T5 all; v2 narrows it to the v2 blocking set."""
     ct = "checklist.t1_ema_alignment.counter_trend"
 
     def enable(d, **overrides):
@@ -401,16 +428,16 @@ def test_counter_trend_needs_the_full_guardrail():
         for key, value in overrides.items():
             _set(d, f"{ct}.{key}", value)
 
-    # fully specified: fine
-    rules = load_rules_text(_tamper(enable))
+    # fully specified (the v2 blocking set): fine
+    rules = load_rules_text(_tamper(lambda d: enable(d, requires_all_of=["T2b", "T3", "T4"])))
     assert rules.checklist.t1_ema_alignment.counter_trend.allowed is True
 
     # no documented reversal trigger: rejected
     with pytest.raises(RulesError):
         load_rules_text(_tamper(lambda d: enable(d, requires_documented_reversal_trigger=False)))
-    # a condition dropped from the required set: rejected
+    # T4 dropped from the required set: rejected (it is the floor of the v2 gate)
     with pytest.raises(RulesError):
-        load_rules_text(_tamper(lambda d: enable(d, requires_all_of=["T2", "T3"])))
+        load_rules_text(_tamper(lambda d: enable(d, requires_all_of=["T2b", "T3"])))
 
 
 def test_missing_file_is_an_error():

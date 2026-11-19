@@ -45,8 +45,23 @@ strategy:
   # old axis can never be counted toward the new one — the R7 disposition, by
   # construction. Warm-up restarts from zero a second time; that cost is stated in
   # docs/ratification.md, not buried here.
-  version: "1.4.0-draft"         # bump on every rule change (brief: "any change = new strategy version")
-  status: "DRAFT"                 # flipped to "FROZEN" by the operator at ratification
+  #
+  # 2.0.0 (2026-11-18): RATIFIED and FROZEN. docs/prereg-v2.md — the operator approved
+  # the draft as written 2026-11-18 23:26 ET (Discord #paper-hunter, message
+  # 1572830369256833066, "OK. I approve."), selecting variant V5 from the pre-measured
+  # candidate set. Changes carried at this seam, all from prereg-v2.md:
+  #   §1  blocking set for arms B/C is T4 AND (T2b OR T3-group); T4 floor 1.2 (was 1.5);
+  #       T1/T2/T5 become non-blocking observations (still computed and journaled);
+  #       counter-trend entries explicitly permitted (retires with-trend-only);
+  #       arm B's activation gate retired (T5 no longer blocks, so B opens at start).
+  #   §2  one window, arms A + B + C; start 2026-11-19 (first trading day after
+  #       signature; lead verifies the §6 ops checklist before deploy).
+  #   §3  T6 re-specified: per-side frozen N (call 5.59 / put 3.07, P90 over all 94
+  #       recorded sessions) and deep_otm threshold frozen at 3.0 both sides.
+  # v1 (docs/ratification.md) stays the record of the as-is window and is superseded
+  # only for the trading scope, per the lineage note in prereg-v2.md.
+  version: "2.0.0"             # bump on every rule change (brief: "any change = new strategy version")
+  status: "FROZEN"              # flipped to "FROZEN" by the operator at ratification (2026-11-18, prereg-v2.md)
   symbol: SPY
   timezone: America/New_York
   brief: docs/brief.md
@@ -69,22 +84,19 @@ window:
   months: 3
   target_sessions: 60
   extension: monthly_review_only
-  start: 2026-11-02
-  # RULED 2026-10-03 (operator): the November window opens ARMS A + C ONLY. Arm B is
-  # inert until T5 can resolve, because the deployed IV store has one observation per
-  # tenor and `IvRankStore.MIN_OBSERVATIONS = 60` — T5 is PENDING, and T5 is blocking
-  # for arm B, so arm B could not take a single position in the window no matter how
-  # good the rest of the stack looked. Naming the arms here makes "B is inert" a fact
-  # of the pre-registration rather than a surprise found in a journal.
-  #
-  # `arm_b` is gated, not disabled: when T5's IV rank resolves the gate opens and arm
-  # B plans and trades under its existing rules with no further ruling. Arm B's rules
-  # are frozen and unchanged; only its activation is gated.
-  arms: [A, C]
-  arm_b_gate:
-    requires: t5_iv_rank_defined
-    status: armed_pending_warmup
-    note: "opens automatically when a tenor the plan reads reaches MIN_OBSERVATIONS; no new ruling needed"
+  # prereg-v2 §2: start is the first trading day after signature AND the §6 ops
+  # checklist is green. 2026-11-19 is that day for the 2026-11-18 23:26 ET
+  # ratification (lead verifies the ops checklist before deploy).
+  start: 2026-11-19
+  # v1 (R5, 2026-10-03) opened ARMS A + C ONLY with arm B gated on T5's IV rank
+  # resolving — the gate existed only because T5 was blocking and could not warm for
+  # 0-DTE. prereg-v2 §1 makes T5 a non-blocking observation, so the activation gate is
+  # RETIRED and arm B opens at window start under its existing frozen rules. The
+  # loader's `arm_b_gate` field is optional (`null` = no gate), which is the retired
+  # state; keeping the key explicit rather than deleting it so the retirement is a
+  # visible, versioned row instead of an absence.
+  arms: [A, B, C]
+  arm_b_gate: null
 
 # ---------------------------------------------------------------------------
 # arms — 3 x $10k paper, same window (brief: "Arms")
@@ -181,6 +193,14 @@ arms:
 # checklist — confluence, not any-one. ALL listed conditions must be true.
 # ---------------------------------------------------------------------------
 checklist:
+  # prereg-v2 §1 (ratified 2026-11-18): the blocking set for arms B and C is
+  # T4 AND (T2b OR T3-group). T1, T2 and T5 are retired from the blocking AND and are
+  # computed and journaled as observations on every plan (the loader pins this list to
+  # T1/T2/T5 only — a hand-edit putting T2b, T3, T4 or T6 here fails to load).
+  # T5's IV series keeps accumulating: it is mechanism evidence, and a future cycle
+  # may re-admit it.
+  non_blocking: [T1, T2, T5]
+
   t1_ema_alignment:
     id: T1
     applies_to: [B, C]
@@ -189,8 +209,14 @@ checklist:
     call_bias: close_above_ema_fast_and_ema_fast_above_ema_slow
     put_bias: inverted
     counter_trend:
-      allowed: false                        # "default is WITH trend only"
-      requires_all_of: [T2, T2b, T3, T4, T5]
+      # prereg-v2 §1 — DECLARED CONSEQUENCE, not a side effect: v1's T1 carried
+      # `allowed: false` (with-trend only). The measured V5 put-side frequency (+38
+      # fires vs V0 over 22.7 years) is predominantly counter-trend puts released by
+      # dropping T1, so v2 explicitly retires with-trend-only. The guardrails follow
+      # the v2 blocking set: T4 AND (T2b OR T3-group), plus the documented reversal
+      # trigger the brief required.
+      allowed: true
+      requires_all_of: [T2b, T3, T4]
       requires_documented_reversal_trigger: true
 
   t2_rsi:
@@ -233,9 +259,9 @@ checklist:
   t4_volume:
     id: T4
     applies_to: [B, C]
-    relative_volume_min: 1.5                # "relative volume >= 1.5x 20-day average"
+    relative_volume_min: 1.2               # prereg-v2 §1: V5 floor 1.2 (v1: 1.5), chosen from the pre-measured candidate set
     lookback_days: 20
-    intraday_run_rate_min: 1.5             # "or intraday run-rate >= 1.5x for intraday triggers"
+    intraday_run_rate_min: 1.5             # "or intraday run-rate >= 1.5x for intraday triggers" (unchanged in v2)
 
   t5_options_chain:
     id: T5
@@ -315,30 +341,40 @@ checklist:
     side: trade_direction
     baseline_lookback_days: 20
     multiplier:
-      value: null                      # "N to be calibrated from historical SPY flow data during implementation"
-      calibration_pending: true             # ...and frozen at the first monthly review (operator ruling 2026-10-02)
-      reason: N = P90 of the soak's 20-session ratio distribution, frozen at the first monthly review with the numbers shown (operator ruling 2026-10-02, delegated to the algo)
+      # prereg-v2 §3 — FROZEN PER SIDE. P90 of the daily deep-OTM (>= 3.0) volume /
+      # 20d mean over ALL 94 recorded sessions (2026-09-24 .. 2026-11-17), linear
+      # interpolation, threshold 3.0 for both sides. v1's single pooled multiplier is
+      # retired: the soak refuted the one-number assumption (first-20 P90 was 16.9x
+      # call / 2.47x put; a pooled N passed only 4/94 days against the ~10% design
+      # intent), so the operator's v1 "one multiplier applied to whichever side is
+      # traded" question is answered by the per-side split itself.
+      call:
+        value: 5.59
+        calibration_pending: false
+        reason: "prereg-v2 §3: N_call = 5.59 (P90, all 94 recorded sessions, threshold 3.0); ratified 2026-11-18 23:26 ET"
+      put:
+        value: 3.07
+        calibration_pending: false
+        reason: "prereg-v2 §3: N_put = 3.07 (P90, all 94 recorded sessions, threshold 3.0); ratified 2026-11-18 23:26 ET"
     # What "deep OTM" means numerically. The brief does not define it; the research
     # note illustrates it (">=3% OTM", 2026-10-02-flow-data-market.md §5.3). Separate
     # thresholds per side.
     #
-    # RULED 2026-10-02 (operator, delegated to the algo): BOTH this threshold and the
-    # N multiplier below are CALIBRATED BY THE ALGO from the soak's 20-session
-    # distribution and frozen at the first monthly review, with the numbers shown.
-    # Until that review they stay exactly here — null, calibration_pending, visibly
-    # unfrozen. The working 3% the soak runs at is the *input to* the calibration,
-    # not the frozen value: an "e.g." in a research note is an illustration, and a
-    # silent 3% default would be an invented threshold.
+    # prereg-v2 §3 (2026-11-18): FROZEN at 3.0 for BOTH sides — the same 3.0 the
+    # working soak has run at, now an explicit frozen value (calls by measurement,
+    # puts by applying the same threshold symmetrically, as §3 specifies). If a
+    # future re-decision splits the threshold, that is a NEW calibration: a pending
+    # state with a null value, never a quietly edited number.
     deep_otm:
       measure: pct_distance_from_spot
       calls:
-        value: null
-        calibration_pending: true
-        reason: working 3% from research note §5.3; operator ruled 2026-10-02 that the algo calibrates it from the 20-session distribution and freezes it at the first monthly review
+        value: 3.0
+        calibration_pending: false
+        reason: "prereg-v2 §3: frozen at 3.0 both sides; ratified 2026-11-18 23:26 ET"
       puts:
-        value: null
-        calibration_pending: true
-        reason: working 3% from research note §5.3; operator ruled 2026-10-02 that the algo calibrates it from the 20-session distribution and freezes it at the first monthly review
+        value: 3.0
+        calibration_pending: false
+        reason: "prereg-v2 §3: frozen at 3.0 both sides; ratified 2026-11-18 23:26 ET"
       bucket_size_pct: 1.0                 # histogram bucket width; integer thresholds re-derive exactly
       applies_to_expiry: zero_dte
       volume_source: daily_bar_volume      # the snapshot's dailyBar.v, not quote size
@@ -361,17 +397,20 @@ checklist:
     # `executor/flow_gate.py` records `sessions_stale` on every read, so the staleness
     # is measured in the journal rather than asserted here.
     #
-    # REVISIT: at the first monthly review, once the baseline has enough sessions to
-    # say whether the carry-forward is behaving — i.e. whether the call side's P90
-    # (1.157) and the put side's (4.024) describe a distribution stable enough for one
-    # multiplier applied to whichever side is traded.
+    # REVISIT, v2 (prereg-v2 §3, 2026-11-18): the carry-forward staleness question
+    # ("one multiplier applied to whichever side is traded") is RESOLVED by the
+    # per-side freeze above — the call and put legs carry their own N, so a carried
+    # ratio is always compared against the N of the side being traded. The remaining
+    # caveat is regime drift: this baseline is a paper-trading journal, and if the
+    # journal's flow regime shifts materially, N re-enters calibration at the next
+    # review cycle.
     intraday_policy: carry_forward
     intraday_policy_operator_ruling: "2026-10-03T00:43:00-04:00"
     purpose: quantifiable_gamma_squeeze_footprint
     notes:
       - "The robot-executable half of the social signal. Social text never enters the robot path."
       - "executor/soak.py writes one immutable flow_baseline row per session and builds
-         the 20-day baseline from prior rows. N stays pending until that baseline exists."
+         the 20-day baseline from prior rows. N is frozen per side per prereg-v2 §3."
 
 # ---------------------------------------------------------------------------
 # signal cadence (brief: "Signal cadence")

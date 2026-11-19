@@ -2,15 +2,15 @@
 
 Two rulebooks are used deliberately:
 
-* ``load_example()`` — the shipped DRAFT rulebook. After the operator rulings of
-  2026-10-02 arm C's IV ceiling is no longer a dead end: it carries the same
-  ``iv_rank_max: 50`` arm B has, so on this snapshot every arm-C condition passes
-  and arm C can fire. Arm B remains inert on ``t6_flow.multiplier``
-  (``calibration_pending: true``). Both facts are pinned below, because "a gate
-  that stops gating" is as much a failure mode as "pending treated as a pass".
-* a **calibrated** fixture rulebook (T6 multiplier filled in) — this is what the
-  all-pass and per-condition blocking tables run against, so each row is an isolated
-  block rather than one more failure riding on top of an uncalibrated gate.
+* ``load_example()`` — the shipped v2 FROZEN rulebook (prereg-v2, ratified
+  2026-11-18). T6's multiplier is frozen per side (call 5.59 / put 3.07, §3), the
+  blocking set for arms B/C is T4 AND (T2b OR T3-group) (§1), and T1/T2/T5 are
+  non-blocking observations. Both facts are pinned below, because "a gate that
+  stops gating" is as much a failure mode as "pending treated as a pass".
+* a **calibrated** fixture rulebook (both per-side T6 legs filled with N=2.0) —
+  this is what the all-pass and per-condition blocking tables run against, so each
+  row is an isolated block rather than one more failure riding on top of the frozen
+  5.59 call leg.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from executor.checklist import (
 
 @pytest.fixture(scope="module")
 def rules():
-    """The shipped DRAFT rulebook (T6 uncalibrated; arm C's IV ceiling ruled 2026-10-02)."""
+    """The shipped v2 FROZEN rulebook (T6 frozen per side, prereg-v2 §3)."""
     return load_example()
 
 
@@ -53,10 +53,12 @@ def calibrated(rules):
     ``calibrated`` is attributable to the T6 calibration alone.
     """
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0,
-        "calibration_pending": False,
-        "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study",
+        "call": {"value": 2.0, "calibration_pending": False,
+                 "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study"},
+        "put": {"value": 2.0, "calibration_pending": False,
+                "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study"},
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -170,25 +172,27 @@ def test_result_records_every_indicator_for_the_journal(calibrated):
 
 
 # ---------------------------------------------------------------------------
-# uncalibrated gates: the shipped rulebook cannot fire either active arm
+# T6 on the shipped v2 rulebook: frozen per side (prereg-v2 §3)
 # ---------------------------------------------------------------------------
 
 
-def test_t6_pending_blocks_arm_b_on_the_shipped_rulebook(rules):
+def test_t6_blocks_arm_b_when_flow_is_below_the_frozen_call_n(rules):
+    # prereg-v2 §3: N is frozen per side (call 5.59 / put 3.07). The base snapshot's
+    # 2.4x flow read is below the call N, so arm B is still gated on the shipped
+    # rulebook — the gate stopped being PENDING, not gone.
     result = evaluate_arm_b(_snapshot(), rules)
-    assert result.status("T6") == "PENDING"
-    assert "not calibrated" in result.conditions["T6"].detail
+    assert result.status("T6") == "FAIL"
     assert result.fire is False
-    assert any(r.startswith("T6: pending") for r in result.veto_reasons)
+    assert any(r.startswith("T6: veto") for r in result.veto_reasons)
 
 
-def test_t6_never_passes_while_the_multiplier_is_uncalibrated(rules):
-    # Even with a spectacular EOD-confirmed flow read, an uncalibrated multiplier
-    # leaves T6 PENDING. A pending gate cannot pass.
-    snap = _snapshot(flow_gate=FlowGate(status="pass", ratio=99.0, eod_confirmed=True))
-    result = evaluate_arm_b(snap, rules)
-    assert result.status("T6") == "PENDING"
-    assert result.fire is False
+def test_t6_uses_the_leg_of_the_trade_direction(rules):
+    # prereg-v2 §3: per-side N (call 5.59 / put 3.07). A 4.0x read clears the put
+    # leg but not the call leg — the gate must compare each side against its own
+    # frozen N, not one pooled number.
+    snap = _snapshot(flow_gate=FlowGate(status="pass", ratio=4.0, eod_confirmed=True))
+    assert evaluate_arm_b(snap, rules, direction="put").status("T6") == "PASS"
+    assert evaluate_arm_b(snap, rules, direction="call").status("T6") == "FAIL"
 
 
 def test_t6_requires_eod_confirmed_flow(rules):
@@ -196,7 +200,7 @@ def test_t6_requires_eod_confirmed_flow(rules):
     # multiplier is calibrated, because an intraday volume is not comparable to a
     # 20-day daily baseline.
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
-    data["checklist"]["t6_flow"]["multiplier"] = {"value": 2.0, "calibration_pending": False}
+    data["checklist"]["t6_flow"]["multiplier"] = {"call": {"value": 2.0, "calibration_pending": False}, "put": {"value": 2.0, "calibration_pending": False}}
     calibrated_eod = load_rules_text(yaml.safe_dump(data))
     snap = _snapshot(flow_gate=FlowGate(status="pass", ratio=9.0, eod_confirmed=False))
     result = evaluate_arm_b(snap, calibrated_eod)
@@ -227,17 +231,19 @@ def test_t6_pending_flow_data_does_not_pass(calibrated):
 
 def test_arm_c_t5_is_an_iv_rank_ceiling_not_a_pending_band(rules):
     # Operator ruling 2026-10-02: arm C carries the same rank ceiling as arm B (< 50).
-    # It is a real gate now, so it must still read high IV rank as FAIL — the ruling
-    # set a number, it did not remove the gate.
+    # prereg-v2 §1: the ceiling is still computed and journaled (the IV series keeps
+    # accumulating), but it no longer vetoes — high IV rank is an observation now.
     result = evaluate(_snapshot(), rules, direction="call", arm="C")
     assert result.status("T5") == "PASS"          # snapshot ships iv_rank=40
 
     hot = evaluate(_snapshot(iv_rank=60.0), rules, direction="call", arm="C")
     assert hot.status("T5") == "FAIL"
-    assert hot.fire is False
+    assert hot.conditions["T5"].blocking is False
+    assert hot.fire is True
 
     unknown = evaluate(_snapshot(iv_rank=None), rules, direction="call", arm="C")
     assert unknown.status("T5") == "PENDING"      # no IV history yet, still not a pass
+    assert unknown.fire is True
 
     assert result.status("T6") == "SKIPPED"  # T6 is arm-B-only
     assert not any(r.startswith("T6") for r in result.veto_reasons)
@@ -296,17 +302,21 @@ def test_t6_is_skipped_for_arm_c_and_cannot_veto(rules):
         ({"ema_slow": 600.0}, "close below EMA200"),
     ],
 )
-def test_t1_failures(calibrated, overrides, why):
+def test_t1_failures_are_recorded_not_blocking(calibrated, overrides, why):
+    # prereg-v2 §1: T1 is out of the blocking AND — a broken with-trend structure is
+    # a journaled observation, not a veto (counter-trend entries are now explicitly
+    # permitted, §1 "Declared consequence").
     result = evaluate_arm_b(_snapshot(**overrides), calibrated)
-    assert result.fire is False
-    assert result.status("T1") == "FAIL"
-    assert any(r.startswith("T1: veto") for r in result.veto_reasons), why
+    assert result.status("T1") == "FAIL", why
+    assert result.conditions["T1"].blocking is False
+    assert result.fire is True, why
 
 
 def test_t1_pending_without_ema_history(calibrated):
     result = evaluate_arm_b(_snapshot(ema_fast=None, ema_slow=None), calibrated)
     assert result.status("T1") == "PENDING"
-    assert result.fire is False
+    assert result.conditions["T1"].blocking is False   # prereg-v2 §1: observation, not a veto
+    assert result.fire is True
 
 
 def test_t1_inverted_for_puts(calibrated):
@@ -323,25 +333,30 @@ def test_t1_inverted_for_puts(calibrated):
 
 
 def test_t2_regime_failure_on_the_bias_side(calibrated):
+    # prereg-v2 §1: T2 is out of the blocking AND — a bias-side RSI is context now.
     result = evaluate_arm_b(_snapshot(rsi=48.0), calibrated)
     assert result.status("T2") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T2"].blocking is False
+    assert result.fire is True
 
 
 @pytest.mark.parametrize("rsi", [75.1, 80.0, 99.0])
-def test_t2_exhaustion_high_blocks(calibrated, rsi):
+def test_t2_exhaustion_high_is_recorded_not_blocking(calibrated, rsi):
+    # prereg-v2 §1: exhaustion is journaled, not a veto, in v2.
     result = evaluate_arm_b(_snapshot(rsi=rsi), calibrated)
     assert result.status("T2") == "FAIL"
     assert "EXHAUSTED" in result.conditions["T2"].detail
-    assert result.fire is False
+    assert result.conditions["T2"].blocking is False
+    assert result.fire is True
 
 
 @pytest.mark.parametrize("rsi", [24.9, 10.0, 0.5])
-def test_t2_exhaustion_low_blocks(calibrated, rsi):
+def test_t2_exhaustion_low_is_recorded_not_blocking(calibrated, rsi):
     result = evaluate_arm_b(_snapshot(rsi=rsi), calibrated)
     assert result.status("T2") == "FAIL"
     assert "EXHAUSTED" in result.conditions["T2"].detail
-    assert result.fire is False
+    assert result.conditions["T2"].blocking is False
+    assert result.fire is True
 
 
 def test_t2_exhaustion_boundary_is_strict(calibrated):
@@ -362,7 +377,8 @@ def test_t2_exhaustion_boundary_is_strict(calibrated):
 def test_t2_pending_without_rsi(calibrated):
     result = evaluate_arm_b(_snapshot(rsi=None), calibrated)
     assert result.status("T2") == "PENDING"
-    assert result.fire is False
+    assert result.conditions["T2"].blocking is False   # prereg-v2 §1: observation, not a veto
+    assert result.fire is True
 
 
 # ---------------------------------------------------------------------------
@@ -370,20 +386,27 @@ def test_t2_pending_without_rsi(calibrated):
 # ---------------------------------------------------------------------------
 
 
-def test_t2b_line_against_bias(calibrated):
+def test_t2b_line_against_bias_is_context_when_the_t3_group_passes(calibrated):
+    # prereg-v2 §1: T2b still vetoes only when the T3 group also fails — here the
+    # squeeze-release carries the (T2b OR T3) group, so a MACD line against the bias
+    # is a journaled observation, not a veto.
     snap = _snapshot(macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2)
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T2b") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T2b"].blocking is False
+    assert "T2b OR T3-group satisfied by T3a squeeze-release" in result.conditions["T2b"].detail
+    assert result.fire is True
 
 
-def test_t2b_contracting_histogram_is_a_veto(calibrated):
+def test_t2b_contracting_histogram_is_context_when_the_t3_group_passes(calibrated):
     # Line still above signal, but the histogram is shrinking -> momentum fading.
+    # prereg-v2 §1: recorded, not a veto, while the T3 group carries the gate.
     snap = _snapshot(macd_line=1.2, macd_signal=1.0, macd_hist=0.05, macd_hist_prev=0.2)
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T2b") == "FAIL"
     assert "CONTRACTING" in result.conditions["T2b"].detail
-    assert result.fire is False
+    assert result.conditions["T2b"].blocking is False
+    assert result.fire is True
 
 
 def test_t2b_put_histogram_must_be_falling(calibrated):
@@ -404,21 +427,26 @@ def test_t2b_flat_histogram_is_a_pass(calibrated):
 
 
 def test_t2b_missing_previous_histogram_is_pending(calibrated):
+    # prereg-v2 §1: a pending T2b is an observation while the T3 group carries the gate.
     result = evaluate_arm_b(_snapshot(macd_hist_prev=None), calibrated)
     assert result.status("T2b") == "PENDING"
-    assert result.fire is False
+    assert result.conditions["T2b"].blocking is False
+    assert result.fire is True
 
 
-def test_t2b_fresh_cross_against_bias_blocks(calibrated):
+def test_t2b_fresh_cross_against_bias_is_context_when_t3b_carries(calibrated):
     # Cross down 3h ago (< 24h whipsaw guard), now trying to buy the recovery. No
-    # squeeze-release, so the rulebook's single exception does not apply.
+    # squeeze-release, so the rulebook's single exception does not apply — but the
+    # lower-band rejection still carries the (T2b OR T3) group, so in v2 the guard
+    # is journaled context rather than a veto. (prereg-v2 §1.)
     snap = _snapshot(
         macd_cross_direction="put", macd_cross_age_hours=3.0, bollinger=_bb(squeeze=False)
     )
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T2b") == "FAIL"
     assert "WHIPSAW GUARD" in result.conditions["T2b"].detail
-    assert result.fire is False
+    assert result.conditions["T2b"].blocking is False
+    assert result.fire is True
 
 
 def test_t2b_fresh_cross_against_bias_allowed_with_squeeze_release(calibrated):
@@ -431,7 +459,9 @@ def test_t2b_fresh_cross_against_bias_allowed_with_squeeze_release(calibrated):
     assert result.fire is True
 
 
-def test_t2b_fresh_cross_without_squeeze_release_still_blocks(calibrated):
+def test_t2b_fresh_cross_without_squeeze_release_is_context_when_t3b_passes(calibrated):
+    # The guard trips (fresh cross against bias, no squeeze-release exception), but
+    # the band rejection carries the group, so the guard is context in v2.
     snap = _snapshot(
         macd_cross_direction="put",
         macd_cross_age_hours=2.0,
@@ -439,7 +469,8 @@ def test_t2b_fresh_cross_without_squeeze_release_still_blocks(calibrated):
     )
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T2b") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T2b"].blocking is False
+    assert result.fire is True
 
 
 def test_t2b_fresh_cross_at_the_24h_boundary_does_not_trip_the_guard(calibrated):
@@ -511,16 +542,17 @@ def test_t3b_put_rejection_is_inverted(calibrated):
     assert result.status("T3b") == "FAIL"
 
 
-def test_t3_pending_without_bollinger_state(calibrated):
+def test_t3_pending_without_bollinger_state_is_context_when_t2b_carries(calibrated):
+    # prereg-v2 §1: T2b joined the OR group. With a healthy MACD read, T2b satisfies
+    # (T2b OR T3) and a pending T3 group is journaled context, not a veto.
     result = evaluate_arm_b(_snapshot(bollinger=None), calibrated)
     assert result.status("T3a") == "PENDING"
     assert result.status("T3b") == "PENDING"
-    # Neither arm can satisfy the group, so T3a carries one group veto (as PENDING,
-    # which blocks) and T3b is folded in rather than vetoing a second time.
-    assert result.conditions["T3a"].blocking is True
+    assert result.status("T2b") == "PASS"
+    assert result.conditions["T3a"].blocking is False
     assert result.conditions["T3b"].blocking is False
-    assert result.fire is False
-    assert len([r for r in result.veto_reasons if r.startswith("T3")]) == 1
+    assert "T2b OR T3-group satisfied by T2b macd" in result.conditions["T3a"].detail
+    assert result.fire is True
 
 
 # ---------------------------------------------------------------------------
@@ -531,50 +563,71 @@ def test_t3_pending_without_bollinger_state(calibrated):
 
 
 def test_t3_group_fires_when_only_t3a_passes(calibrated):
-    result = evaluate_arm_b(_snapshot(bollinger=_bb(squeeze=False)), calibrated)
+    # MACD broken so the group is carried by a T3 leg alone, not by T2b.
+    snap = _snapshot(bollinger=_bb(squeeze=False),
+                     macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2)
+    result = evaluate_arm_b(snap, calibrated)
+    assert result.status("T2b") == "FAIL"
     assert result.status("T3a") == "FAIL"
     assert result.status("T3b") == "PASS"
     assert result.conditions["T3a"].blocking is False
     assert result.fire is True
     assert result.veto_reasons == ()
-    # the losing arm's detail says the group is satisfied, and by which arm
-    assert "T3 group satisfied by T3b band-rejection" in result.conditions["T3a"].detail
+    # the losing arms' details say the group is satisfied, and by which arm
+    assert "T2b OR T3-group satisfied by T3b band-rejection" in result.conditions["T3a"].detail
+    assert "T2b OR T3-group satisfied by T3b band-rejection" in result.conditions["T2b"].detail
 
 
 def test_t3_group_fires_when_only_t3b_passes(calibrated):
-    result = evaluate_arm_b(_snapshot(bollinger=_bb(low=596.0)), calibrated)
+    # MACD broken so the group is carried by the squeeze-release alone, not by T2b.
+    snap = _snapshot(bollinger=_bb(low=596.0),
+                     macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2)
+    result = evaluate_arm_b(snap, calibrated)
+    assert result.status("T2b") == "FAIL"
     assert result.status("T3a") == "PASS"
     assert result.status("T3b") == "FAIL"
     assert result.conditions["T3b"].blocking is False
     assert result.fire is True
     assert result.veto_reasons == ()
-    assert "T3 group satisfied by T3a squeeze-release" in result.conditions["T3b"].detail
+    assert "T2b OR T3-group satisfied by T3a squeeze-release" in result.conditions["T3b"].detail
+    assert "T2b OR T3-group satisfied by T3a squeeze-release" in result.conditions["T2b"].detail
 
 
-def test_t3_group_vetoes_once_when_both_arms_fail(calibrated):
-    result = evaluate_arm_b(_snapshot(bollinger=_bb(squeeze=False, low=596.0)), calibrated)
+def test_t3_group_vetoes_once_when_the_whole_group_fails(calibrated):
+    # prereg-v2 §1: the group is now (T2b OR T3a OR T3b). Break all three members:
+    # MACD line against the bias kills T2b, no squeeze kills T3a, no band touch kills
+    # T3b. The group must still produce exactly ONE veto, carried by T3a.
+    snap = _snapshot(bollinger=_bb(squeeze=False, low=596.0),
+                     macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2)
+    result = evaluate_arm_b(snap, calibrated)
+    assert result.status("T2b") == "FAIL"
     assert result.status("T3a") == "FAIL"
     assert result.status("T3b") == "FAIL"
     assert result.fire is False
-    # ONE group veto, carried by T3a; T3b is context folded into it.
+    # ONE group veto, carried by T3a; T2b and T3b are context folded into it.
     assert result.conditions["T3a"].blocking is True
     assert result.conditions["T3b"].blocking is False
+    assert result.conditions["T2b"].blocking is False
     t3_vetoes = [r for r in result.veto_reasons if r.startswith("T3")]
     assert len(t3_vetoes) == 1, result.veto_reasons
     assert t3_vetoes[0].startswith("T3a:")
-    assert "T3 group veto: neither arm satisfied" in t3_vetoes[0]
+    assert "T2b OR T3-group veto: no member satisfied" in t3_vetoes[0]
     # T3b's own read is preserved in T3a's detail so the histogram is still readable.
     assert "tagged=False" in t3_vetoes[0]
-    assert "folded into T3 group veto" in result.conditions["T3b"].detail
+    assert "folded into T2b OR T3-group veto" in result.conditions["T3b"].detail
+    assert "folded into T2b OR T3-group veto" in result.conditions["T2b"].detail
 
 
 def test_t3_group_veto_is_direction_agnostic_on_the_put_side(calibrated):
     # Put side: squeeze-release needs the middle band FALLING and no upper-band tag.
     bear_bb = _bb(upper=410.0, middle=402.5, lower=395.0, low=399.0, high=409.0,
                   middle_rising=False, squeeze=False)
+    # Contracting put-side histogram breaks T2b too, so the whole group fails.
     result = evaluate_arm_b(
-        _bear_snapshot(bollinger=bear_bb), calibrated, direction="put"
+        _bear_snapshot(bollinger=bear_bb, macd_hist=-0.05, macd_hist_prev=-0.2),
+        calibrated, direction="put",
     )
+    assert result.status("T2b") == "FAIL"
     assert result.status("T3a") == "FAIL"
     assert result.status("T3b") == "FAIL"
     assert result.fire is False
@@ -599,13 +652,15 @@ def test_t3_group_fires_on_the_put_side_with_only_t3a(calibrated):
 
 
 def test_t4_below_threshold(calibrated):
-    result = evaluate_arm_b(_snapshot(relvol=1.49), calibrated)
+    # prereg-v2 §1: the floor is 1.2 now, not v1's 1.5.
+    result = evaluate_arm_b(_snapshot(relvol=1.09), calibrated)
     assert result.status("T4") == "FAIL"
     assert result.fire is False
 
 
 def test_t4_exactly_at_threshold_passes(calibrated):
-    result = evaluate_arm_b(_snapshot(relvol=1.5), calibrated)
+    # prereg-v2 §1: 1.2 is the frozen floor; "relative volume >= 1.2" is inclusive.
+    result = evaluate_arm_b(_snapshot(relvol=1.2), calibrated)
     assert result.status("T4") == "PASS"
     assert result.fire is True
 
@@ -627,12 +682,15 @@ def test_t4_pending_without_volume_data(calibrated):
 # ---------------------------------------------------------------------------
 
 
-def test_t5_event_day_is_a_hard_veto(calibrated):
+def test_t5_event_day_is_journaled_not_blocking(calibrated):
+    # prereg-v2 §1: T5 — including the event-day read — is out of the blocking AND.
+    # The event day is still flagged in the journal detail; it no longer stops the trade.
     snap = _snapshot(is_event_day=True, event_kinds=("fomc",))
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T5") == "FAIL"
     assert "HARD VETO" in result.conditions["T5"].detail
-    assert result.fire is False
+    assert result.conditions["T5"].blocking is False
+    assert result.fire is True
 
 
 def test_t5_event_veto_outranks_a_good_iv_rank(calibrated):
@@ -642,17 +700,21 @@ def test_t5_event_veto_outranks_a_good_iv_rank(calibrated):
     assert "HARD VETO" in result.conditions["T5"].detail
 
 
-def test_t5_arm_b_iv_rank_gate(calibrated):
+def test_t5_arm_b_iv_rank_gate_is_recorded_not_blocking(calibrated):
+    # prereg-v2 §1: the IV ceiling is still computed (the series keeps accumulating —
+    # mechanism evidence for a future cycle), but it no longer vetoes.
     assert evaluate_arm_b(_snapshot(iv_rank=49.9), calibrated).status("T5") == "PASS"
     result = evaluate_arm_b(_snapshot(iv_rank=50.0), calibrated)
     assert result.status("T5") == "FAIL"
-    assert result.fire is False
+    assert result.conditions["T5"].blocking is False
+    assert result.fire is True
 
 
 def test_t5_pending_without_iv_rank(calibrated):
     result = evaluate_arm_b(_snapshot(iv_rank=None), calibrated)
     assert result.status("T5") == "PENDING"
-    assert result.fire is False
+    assert result.conditions["T5"].blocking is False
+    assert result.fire is True
 
 
 # ---------------------------------------------------------------------------
@@ -673,9 +735,14 @@ def test_nan_close_rejected(calibrated):
 
 
 # ---------------------------------------------------------------------------
-# table-driven: every blocking condition can individually stop the trade.
+# table-driven: every v2 BLOCKING condition can individually stop the trade.
 # Arm B on the calibrated rulebook, so each row is the ONLY reason the trade did not
 # fire (asserted below).
+#
+# prereg-v2 §1: the blocking set is T4 AND (T2b OR T3-group), plus T6 for arm B.
+# T2b cannot veto on its own anymore — it vetoes only when the T3 group fails with
+# it, and the group veto is then carried by T3a with T2b folded in. The T1/T2/T5
+# rows from v1 moved to the observation table below.
 # ---------------------------------------------------------------------------
 
 Mutator = Callable[[IndicatorSnapshot], IndicatorSnapshot]
@@ -688,28 +755,19 @@ def _mutate(**kwargs: Any) -> Mutator:
     return apply
 
 
+# A T3-group-failing snapshot: no squeeze (kills T3a), no band touch (kills T3b),
+# and the MACD line against the bias (kills T2b) so the WHOLE group is unsatisfied.
+GROUP_FAIL = _mutate(macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2,
+                     bollinger=_bb(squeeze=False, low=596.0))
+
 CASES: list[tuple[str, Mutator, int]] = [
     # (condition id, mutator, expected number of vetoes)
-    ("T1", _mutate(ema_fast=605.0), 1),          # close 600 < EMA50 605
-    ("T2", _mutate(rsi=49.0), 1),
-    ("T2", _mutate(rsi=90.0), 1),
-    ("T2", _mutate(rsi=20.0), 1),
-    ("T2b", _mutate(macd_line=0.1, macd_signal=1.0), 1),
-    ("T2b", _mutate(macd_hist=0.0, macd_hist_prev=0.4), 1),
-    # The whipsaw guard fires only when T3a squeeze-release has NOT fired, and
-    # squeeze-release is exactly T3a's pass condition — so this row necessarily
-    # vetoes twice. `low=596.0` breaks T3b too, so the T3 group genuinely fails and
-    # carries its own veto; the coupling is the rulebook's own design, not a test
-    # artifact. (Under OR semantics a squeeze-only break would NOT add a second
-    # veto: T3b would still pass and carry the group.)
-    ("T2b", _mutate(macd_cross_direction="put", macd_cross_age_hours=1.0,
-                    bollinger=_bb(squeeze=False, low=596.0)), 2),
-    # T3 is one OR gate, so the blocking row is the GROUP: both arms failing is the
-    # only way T3 can veto, and it vetoes exactly once.
-    ("T3", _mutate(bollinger=_bb(squeeze=False, low=596.0)), 1),
+    # T2b broken together with the group: the veto is the group's, carried by T3a.
+    ("T2b", GROUP_FAIL, 1),
+    # T3 is one OR group, so the blocking row is the GROUP: every member failing is
+    # the only way it can veto, and it vetoes exactly once.
+    ("T3", GROUP_FAIL, 1),
     ("T4", _mutate(relvol=0.9), 1),
-    ("T5", _mutate(is_event_day=True, event_kinds=("fomc",)), 1),
-    ("T5", _mutate(iv_rank=80.0), 1),
     ("T6", _mutate(flow_gate=FlowGate(status="pass", ratio=0.5, eod_confirmed=True)), 1),
 ]
 
@@ -722,12 +780,13 @@ CASES: list[tuple[str, Mutator, int]] = [
 def test_each_condition_individually_blocks(calibrated, condition_id, mutate, expected_vetoes):
     result = evaluate_arm_b(mutate(_snapshot()), calibrated)
     assert result.fire is False, f"{condition_id} should have blocked"
-    if condition_id == "T3":
-        # The group veto is carried by T3a; the row must not also veto T3b.
+    if condition_id in ("T3", "T2b"):
+        # The group veto is carried by T3a; T2b and T3b are folded in, never second vetoes.
         assert result.status("T3a") == "FAIL"
         assert result.conditions["T3a"].blocking is True
         assert result.conditions["T3b"].blocking is False
-        assert any("T3 group veto" in r for r in result.veto_reasons)
+        assert result.conditions["T2b"].blocking is False
+        assert any("T2b OR T3-group veto" in r for r in result.veto_reasons)
         first_veto_id = "T3a"
     else:
         assert result.status(condition_id) != "PASS"
@@ -736,6 +795,52 @@ def test_each_condition_individually_blocks(calibrated, condition_id, mutate, ex
     # and nothing else fails beyond the expected coupled conditions.
     assert result.veto_reasons[0].startswith(f"{first_veto_id}:")
     assert len(result.veto_reasons) == expected_vetoes, result.veto_reasons
+
+
+def test_fresh_cross_guard_couples_into_the_group_veto(calibrated):
+    # The whipsaw guard fires only when T3a squeeze-release has NOT fired. With the
+    # band touch broken too, the whole (T2b OR T3) group fails and the guard's T2b
+    # failure is folded into the single group veto — counted once, as in v1's OR.
+    snap = _snapshot(
+        macd_cross_direction="put", macd_cross_age_hours=1.0,
+        bollinger=_bb(squeeze=False, low=596.0),
+    )
+    result = evaluate_arm_b(snap, calibrated)
+    assert result.status("T2b") == "FAIL"
+    assert "WHIPSAW GUARD" in result.conditions["T2b"].detail
+    assert result.conditions["T2b"].blocking is False
+    assert result.fire is False
+    assert len(result.veto_reasons) == 1
+    assert result.veto_reasons[0].startswith("T3a:")
+
+
+# ---------------------------------------------------------------------------
+# table-driven: every v2 OBSERVATION is computed but never blocks (prereg-v2 §1).
+# ---------------------------------------------------------------------------
+
+OBSERVATION_CASES: list[tuple[str, Mutator]] = [
+    ("T1", _mutate(ema_fast=605.0)),                  # close 600 < EMA50 605
+    ("T2", _mutate(rsi=49.0)),
+    ("T2", _mutate(rsi=90.0)),
+    ("T2", _mutate(rsi=20.0)),
+    ("T5", _mutate(is_event_day=True, event_kinds=("fomc",))),
+    ("T5", _mutate(iv_rank=80.0)),
+]
+
+
+@pytest.mark.parametrize(
+    ("condition_id", "mutate"),
+    OBSERVATION_CASES,
+    ids=[f"{cid}-{i}" for i, (cid, _m) in enumerate(OBSERVATION_CASES)],
+)
+def test_observations_are_journaled_never_blocking(calibrated, condition_id, mutate):
+    # prereg-v2 §1: T1, T2 and T5 are removed from the blocking AND. They are still
+    # computed (the row shows a real FAIL, not a skip) and never stop the trade.
+    result = evaluate_arm_b(mutate(_snapshot()), calibrated)
+    assert result.status(condition_id) != "PASS"
+    assert result.conditions[condition_id].blocking is False
+    assert result.fire is True, f"{condition_id} is a v2 observation, not a veto"
+    assert not any(r.startswith(f"{condition_id}:") for r in result.veto_reasons)
 
 def _t4_detail(result: ChecklistResult) -> str:
     return result.conditions["T4"].detail

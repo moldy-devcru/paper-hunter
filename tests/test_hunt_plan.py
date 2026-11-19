@@ -74,23 +74,24 @@ LONG = 260
 
 @pytest.fixture(scope="module")
 def rules():
-    """The shipped DRAFT rulebook."""
+    """The shipped v2 FROZEN rulebook (2.0.0, ratified 2026-11-18)."""
     return load_rules()
 
 
 @pytest.fixture(scope="module")
 def calibrated(rules):
-    """Same rulebook with T6's flow multiplier calibrated, so T6 can pass at all.
+    """Same rulebook with T6's flow multiplier lowered (per side, same N), so T6 can
+    pass at the fixture's ratio.
 
-    Arm C's T5 stays calibration_pending (the Phase-1b model types its band as
-    ``None``, so it cannot be written) — arm C therefore cannot fire in any test, by
-    design, and that fact is asserted rather than worked around.
+    prereg-v2: the shipped rulebook's T6 is already frozen (call 5.59 / put 3.07);
+    the fixture's N=2.0 exists purely so the fixture's 2.4-ratio flow gate passes —
+    the calibration machinery is exercised, not the frozen numbers.
     """
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0,
-        "calibration_pending": False,
-        "reason": "test fixture: calibrated multiplier",
+        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -360,7 +361,6 @@ def test_t3b_non_blocking_trigger_never_reads_as_a_veto(calibrated):
 @pytest.mark.parametrize(
     ("condition", "expected_fragment"),
     [
-        ("T2", "14-close statistic"),
         ("T4", "volume ratio"),
     ],
 )
@@ -375,6 +375,17 @@ def test_statistics_based_conditions_get_no_invented_price_level(calibrated, con
     assert expected_fragment in trigger.reason
 
 
+def test_t2_is_a_v2_observation_with_no_trigger_at_all(calibrated):
+    """prereg-v2 §1: T2 (RSI) is a non-blocking observation. It has no honest price
+    level to begin with (a 14-close statistic), and as an observation it no longer
+    earns a trigger row at all — the journal's conditions section carries it, the
+    trigger list does not."""
+    cell = cell_for(passing_snapshot(rsi=49.0), calibrated)
+    assert cell.checklist.status("T2") == "FAIL"
+    assert cell.checklist.conditions["T2"].blocking is False
+    assert not any(t.condition == "T2" for t in cell.triggers)
+
+
 def test_pending_conditions_get_a_null_trigger_and_say_why(rules):
     # Arm B under the shipped DRAFT rulebook: T6's multiplier is calibration_pending.
     cell = cell_for(passing_snapshot(flow_gate=FlowGate(status="unknown")), rules)
@@ -384,12 +395,17 @@ def test_pending_conditions_get_a_null_trigger_and_say_why(rules):
     assert "PENDING" in trigger.reason
 
 
-def test_event_day_trigger_for_t5_says_the_calendar_not_a_price(calibrated):
+def test_event_day_is_a_v2_observation_not_a_veto(calibrated):
+    """prereg-v2 §1: the event-day hard veto is retired. A FOMC day is still computed
+    and journaled (T5 FAIL observation), but it cannot stop the trade — and there is
+    no T5 price trigger to speak of, since a calendar read clears by time, not price."""
     snapshot = passing_snapshot(is_event_day=True, event_kinds=("fomc",))
     cell = cell_for(snapshot, calibrated, event_day_veto=True)
-    trigger = next(t for t in cell.triggers if t.condition == "T5")
-    assert trigger.level is None
-    assert "hard calendar veto" in trigger.reason
+    assert cell.checklist.status("T5") == "FAIL"
+    assert cell.checklist.conditions["T5"].blocking is False
+    assert cell.checklist.veto_reasons == ()
+    assert cell.fire is True
+    assert not any(t.condition == "T5" for t in cell.triggers)
 
 
 def test_passing_conditions_produce_no_triggers(calibrated):
@@ -413,7 +429,10 @@ def test_compute_triggers_matches_the_plan_builder(calibrated):
 # ---------------------------------------------------------------------------
 
 
-def test_event_day_vetoes_both_directions_on_both_arms(series, rules, session_day):
+def test_event_day_is_journaled_on_both_directions_and_both_arms(series, rules, session_day):
+    """prereg-v2 §1: an event day no longer vetoes. The plan still carries the
+    calendar fact (``event_day_veto`` metadata + reasons), every cell still records
+    the T5 FAIL observation, and no cell may reason its NO_TRADE on the calendar."""
     calendar = calendar_with(day=session_day, kind="fomc")
     plan = build_hunt_plan(
         data=StaticMarketData(series=series),
@@ -423,13 +442,13 @@ def test_event_day_vetoes_both_directions_on_both_arms(series, rules, session_da
     )
     assert plan.event_day_veto is True
     assert plan.event_reasons
-    assert plan.firing() == ()
     for cell in plan.arms:
         assert cell.checklist.status("T5") == "FAIL"
-        assert "EVENT DAY HARD VETO" in cell.checklist.conditions["T5"].detail
-        assert cell.decision_kind == "NO_TRADE"
-        assert "Event-day hard veto" in cell.reasoning
-        assert any("EVENT DAY HARD VETO" in r for r in cell.checklist.veto_reasons)
+        assert "EVENT DAY" in cell.checklist.conditions["T5"].detail
+        assert "HARD VETO" not in cell.checklist.conditions["T5"].detail
+        assert cell.checklist.conditions["T5"].blocking is False
+        assert not any("EVENT DAY" in r for r in cell.checklist.veto_reasons)
+        assert "suppresses the whole session" not in cell.reasoning
 
 
 def test_non_veto_event_kind_does_not_veto(series, rules, session_day):
@@ -680,10 +699,20 @@ def test_a_firing_cell_journals_a_proposal_not_a_trade(calibrated, conn):
 
 
 def test_conviction_ranks_near_misses_above_hopeless_days(rules):
-    one_fail = cell_for(passing_snapshot(relvol=1.1, flow_gate=FlowGate(status="unknown")),
-                        rules)
-    many_fail = cell_for(passing_snapshot(rsi=45.0, relvol=1.1, ema_fast=560.0,
-                                           ema_slow=620.0), rules)
+    # prereg-v2: the blocking set is T4 AND (T2b OR T3) AND T6, so near-miss and
+    # hopeless are expressed in those terms. The flow gate must clear the frozen
+    # call-side N (5.59) to keep T6 out of the failure sets it should not be in.
+    good_gate = FlowGate(status="pass", ratio=6.0, eod_confirmed=True)
+    one_fail = cell_for(passing_snapshot(relvol=1.1, flow_gate=good_gate), rules)
+    many_fail = cell_for(
+        passing_snapshot(
+            relvol=1.1,
+            flow_gate=FlowGate(status="fail", ratio=0.5, eod_confirmed=True),
+            macd_line=0.9, macd_signal=1.0, macd_hist=-0.1, macd_hist_prev=-0.2,
+            bollinger=_bb(squeeze=False, bandwidth_percentile=50.0, low=622.0),
+        ),
+        rules,
+    )
     assert len(one_fail.failed()) == 1
     assert len(many_fail.failed()) >= 3
     assert one_fail.conviction > many_fail.conviction

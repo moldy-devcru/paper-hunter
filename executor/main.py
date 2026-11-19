@@ -454,11 +454,16 @@ def _flow_gate(args: argparse.Namespace, conn: Any, rules: Rulebook, day: dt.dat
     from executor.flow_gate import flow_gate_from_journal
 
     t6 = rules.checklist.t6_flow
-    multiplier = None if t6.multiplier.calibration_pending else float(t6.multiplier.value)
+    # prereg-v2 §3: N is per side. The leg is selected by the SAME side whose ratio
+    # the read takes (``ratio_call`` / ``ratio_put``), so the carried ratio is always
+    # compared against the N of the side it describes.
+    side = getattr(args, "flow_side", "call")
+    leg = t6.multiplier.call if side == "call" else t6.multiplier.put
+    multiplier = None if leg.calibration_pending else float(leg.value)
     read = flow_gate_from_journal(
         conn,
         as_of=day,
-        side=getattr(args, "flow_side", "call"),
+        side=side,
         multiplier=multiplier,
         lookback_days=t6.baseline_lookback_days,
         policy=policy,

@@ -169,10 +169,10 @@ def test_an_impossible_side_is_refused_rather_than_defaulted(conn) -> None:
 @pytest.fixture(scope="module")
 def calibrated_rules():
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0,
-        "calibration_pending": False,
-        "reason": "test fixture: calibrated multiplier",
+        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -181,12 +181,14 @@ def _firing_plan(rules, series) -> HuntPlan:
     """A plan whose B/call cell carries a watch level for the loop to verify.
 
     The washout bar is the fixture the rehearsal uses (see ``executor.rehearsal``):
-    the cell is NO_TRADE on the close but carries the T1 level the reclaim has to
-    reach. A cell that passed everything would be useless here — ``compute_triggers``
-    only emits levels for blocking conditions that have not passed, so a green cell has
-    nothing to watch and the loop never re-verifies it. That property is a rehearsal
-    finding, not something to work around silently: the loop-forwarding test needs a
-    cell that is actually armed, so it builds one the way production would.
+    the cell is NO_TRADE on the close (v2: T6 PENDING on a cold journal) but carries
+    the T1 level the reclaim has to reach — in v2 T1 is a non-blocking observation,
+    and its level is emitted as a NON-BLOCKING watch level (hunt_plan's scoped
+    exception), which is what arms the cell for the loop. A cell that passed
+    everything would be useless here: no level, nothing to watch, the loop never
+    re-verifies it. That property is a rehearsal finding, not something to work
+    around silently: the loop-forwarding test needs a cell that is actually armed, so
+    it builds one the way production would.
     """
     provider = StaticMarketData(series=series, chain=None)
     plan = build_hunt_plan(
@@ -276,8 +278,15 @@ def test_run_loop_forwards_iv_rank_and_flow_gate_into_every_tick(calibrated_rule
 def test_run_once_defaults_both_to_none_so_a_bare_loop_still_reports_pending(
     calibrated_rules,
 ) -> None:
-    """Documenting the default: an unwired loop gets PENDING, not a guess. The rehearsal
-    report is where that turns into a NO-GO item; this test is where it stays true."""
+    """Documenting the default: an unwired loop gets PENDING, not a guess.
+
+    prereg-v2 §1: T5 is a non-blocking observation, so a pending IV rank no longer
+    vetoes. What a bare loop still must NOT do is fire arm B on a T6 PENDING — the
+    gate is blocking and a loop handed no flow gate at all must not turn that into a
+    pass. Arm C has no T6 (SKIPPED) and its v2 gate is T4 AND (T2b OR T3), so the
+    washout cell legitimately fires: the PENDING is journaled, not guessed away.
+    The rehearsal report is where a B-cell stuck on T6 PENDING becomes a NO-GO item;
+    this test is where the distinction stays true."""
     series = washout_series()
     plan = _firing_plan(calibrated_rules, series)
     when = dt.datetime.combine(
@@ -304,13 +313,22 @@ def test_run_once_defaults_both_to_none_so_a_bare_loop_still_reports_pending(
 
     for cell_result in result.reverified.values():
         arm = cell_result.arm
+        # T5 is PENDING on the washout cell (no IV history) — and a v2 observation,
+        # so it is journaled but never vetoes.
         assert cell_result.conditions["T5"].status == "PENDING"
+        assert cell_result.conditions["T5"].blocking is False
         # T6 is arm B's gate; on arm C it is legitimately SKIPPED, and a loop handed no
         # gate at all must not turn that into a pass.
         assert cell_result.conditions["T6"].status == (
             "PENDING" if arm == "B" else "SKIPPED"
         )
-        assert not cell_result.fire
+        if arm == "B":
+            # T6 PENDING is the veto: a bare loop must not fire arm B without a gate.
+            assert not cell_result.fire
+        else:
+            # arm C: T4 AND (T2b OR T3) all hold on the washout cell — it fires,
+            # with the T5 PENDING journaled alongside.
+            assert cell_result.fire
     # ArmPlan import is used by the type checkers only; referenced here to keep ruff
     # honest about the module's public surface in this file.
     assert ArmPlan is not None

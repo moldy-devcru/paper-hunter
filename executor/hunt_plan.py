@@ -28,7 +28,8 @@ that has no honest level. Two conditions do have one and both are computed, not 
 * **T3b** — when the signal bar already tagged the band but closed outside it, the
   band edge is the trigger (the close must finish back inside).
 
-# INTERPRETATION: a non-blocking condition can still get a trigger, for T3 only.
+# INTERPRETATION: a non-blocking condition can still get a trigger, for T3 and (in v2)
+# T1.
 The rulebook's ``t3_bollinger.satisfied_if_any_of`` makes T3 an OR group, so when one
 T3 arm PASSes the sibling is reported FAIL (or whatever it is) but ``blocking=False``:
 it cannot veto. A blind "triggers = every blocking non-PASS condition" filter would
@@ -37,10 +38,16 @@ one number an intraday loop would actually watch, and even though reaching it fl
 T3b to PASS and satisfies the T3 group through the sibling. So the non-blocking T3
 arm keeps its trigger, with its reason prefixed ``NON-BLOCKING`` so the journal never
 reads as if it were vetoing anything. PENDING is still excluded regardless of blocking
-(an unevaluated condition has no level and no "already satisfied" story to tell), and
-this exception is deliberately scoped to the T3 group rather than made general: every
-other non-blocking condition in the checklist is SKIPPED-for-this-arm (T6 on arm C),
-which is a scope fact, not a near-miss.
+(an unevaluated condition has no level and no "already satisfied" story to tell).
+
+prereg-v2 §1 (ratified 2026-11-18) extended this exception to T1: T1 is a
+non-blocking observation now, but its EMA reclaim level is still the level the plan
+is for, and it is the watch loop's cue to re-verify the cell's pending items (T5/T6)
+live. Without it, the day shape v2 is built around (washout/reclaim with T5/T6
+pending) would be unwatchable — no level to watch, no re-verification, and the
+pending items would never resolve. The exception remains scoped: T2 and T5 have no
+honest price level to emit (RSI is a 14-close statistic, IV rank a percentile), and
+T6-on-arm-C is a scope fact, not a near-miss.
 
 Journal vocabulary: PROPOSAL vs NO_TRADE
 ----------------------------------------
@@ -280,12 +287,12 @@ _NO_LEVEL = {
           "does not change the volume that was printed",
     "T5_iv": "IV rank is a percentile of an implied-volatility distribution, not a "
              "price level; it re-scores on its own as the IV store accumulates",
-    "T5_event": "event-day is a hard calendar veto — it clears on a non-event session, "
-                "not at a price",
+    "T5_event": "event-day is a calendar read (a v2 observation, prereg-v2 §1) — it "
+                "clears on a non-event session, not at a price",
     "T5_arm_c": "arm C's IV band is calibration_pending in the frozen rulebook, so "
                 "there is no threshold for a level to cross",
     "T6": "T6 is an EOD-confirmed deep-OTM 0DTE flow-volume ratio — no price level, and "
-          "its multiplier is calibration_pending in the frozen rulebook",
+          "nothing intraday changes the prior session's confirmed print",
     "PENDING": "condition is PENDING (missing data or uncalibrated threshold) — "
                "there is no threshold for a price level to cross",
 }
@@ -546,7 +553,8 @@ def _reasoning(
         )
     parts = [f"{arm}/{direction}: NO TRADE at plan time."]
     if event_day_veto:
-        parts.append("Event-day hard veto (T5) suppresses the whole session.")
+        parts.append("Event day (calendar): T5 is a v2 observation (prereg-v2 §1) — "
+                     "the v1 hard veto is retired, the day is journaled, not suppressed.")
     failed = [cid for cid, c in result.conditions.items() if c.blocking and c.status == "FAIL"]
     pending = [
         cid for cid, c in result.conditions.items() if c.blocking and c.status == "PENDING"
@@ -873,10 +881,15 @@ def compute_triggers(
 ) -> tuple[TriggerPrice, ...]:
     """One :class:`TriggerPrice` per blocking condition that is not PASS.
 
-    Plus, per the module INTERPRETATION above, the non-blocking arm of a T3 OR group
-    when it has actually failed — it cannot veto, but its price level is the one the
-    plan is for, and its reason is prefixed ``NON-BLOCKING`` so nothing downstream
-    mistakes it for a veto.
+    Plus two scoped non-blocking exceptions that keep their price levels:
+
+    * the non-blocking arm of a T3 OR group when it has actually failed — it cannot
+      veto, but its price level is the one the plan is for, and its reason is prefixed
+      ``NON-BLOCKING`` so nothing downstream mistakes it for a veto;
+    * T1 in v2 (prereg-v2 §1), when it has actually failed — T1 is a non-blocking
+      observation now, but its EMA reclaim level is still the level the plan is for,
+      and it is the watch loop's cue to re-verify the cell's pending items (T5/T6)
+      live. Same ``NON-BLOCKING`` prefix, same honesty rules.
 
     Separate from :func:`build_hunt_plan` so the trigger logic can be exercised
     directly against a hand-built snapshot (which is the only way to reach, say, "T1
@@ -903,6 +916,27 @@ def compute_triggers(
                     f"NON-BLOCKING: T3 is satisfied_if_any_of and the sibling PASSes, so "
                     f"{cid} cannot veto; this level is a watch level, not a blocker — and "
                     f"if {cid} does flip to PASS the T3 group is satisfied through it too. "
+                    f"{trigger.reason}"
+                ),
+            )
+        )
+    # prereg-v2 §1: T1 is a non-blocking observation, but its EMA reclaim level is
+    # still the level the plan is for, and the only level that exists on the day
+    # shapes that v2 is built around (washout/reclaim with T5/T6 pending). Without it
+    # those cells would be unwatchable and their pending items could never be
+    # re-verified live. Same pattern as the T3 arms above: watch level, never a veto.
+    t1 = result.conditions.get("T1")
+    if t1 is not None and not t1.blocking and t1.status not in ("PASS", "PENDING"):
+        trigger = _trigger_for(
+            "T1", t1.status, t1.detail, snapshot_result, rules, direction, event_day_veto
+        )
+        triggers.append(
+            dataclasses.replace(
+                trigger,
+                reason=(
+                    "NON-BLOCKING: T1 is a v2 observation (prereg-v2 §1) and cannot "
+                    "veto; this level is the EMA reclaim the plan watches, and "
+                    "reaching it is the cue to re-verify the cell's pending items. "
                     f"{trigger.reason}"
                 ),
             )
@@ -1156,7 +1190,8 @@ def summarise(plan: HuntPlan) -> str:
     """One-screen human summary of a plan (operator-facing, pre-market read)."""
     lines = [f"Hunt plan {plan.day.isoformat()} {plan.symbol} v{plan.strategy_version}"]
     if plan.event_day_veto:
-        lines.append(f"  EVENT-DAY HARD VETO: {'; '.join(plan.event_reasons)}")
+        lines.append(f"  EVENT DAY: {'; '.join(plan.event_reasons)} "
+                     f"(T5 observation, prereg-v2 §1 — the v1 hard veto is retired)")
     for cell in plan.arms:
         flags = ",".join(
             # A non-blocking FAIL (the losing arm of the T3 OR group) is shown as such,

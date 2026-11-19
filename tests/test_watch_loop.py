@@ -67,10 +67,10 @@ def rules():
     so any behaviour difference is attributable to that calibration.
     """
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
+    # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "value": 2.0,
-        "calibration_pending": False,
-        "reason": "test fixture: calibrated multiplier",
+        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -167,8 +167,9 @@ def not_green_cell(rules, *, direction: str = "call") -> ArmPlan:
     Built by forcing a failing condition into the snapshot rather than by stubbing
     ``fire``: the ruling's "green" test reads the same field the plan writes, so a
     fixture that faked the field would not prove the field means what it claims.
+    prereg-v2: the forced failure is T4 (the volume floor) — T2 no longer blocks.
     """
-    snapshot = dataclasses.replace(snapshot_for(direction), rsi=10.0)
+    snapshot = dataclasses.replace(snapshot_for(direction), relvol=0.9)
     result = evaluate(snapshot, rules, direction, "B")  # type: ignore[arg-type]
     assert result.fire is False, "fixture must not be green"
     return ArmPlan(
@@ -600,7 +601,8 @@ def patch_reverification(monkeypatch, rules, *, fire: bool):
     """
     result = evaluate(passing_snapshot(), rules, "call", "B")  # type: ignore[arg-type]
     if not fire:
-        result = evaluate(passing_snapshot(rsi=48.0), rules, "call", "B")  # type: ignore[arg-type]
+        # v2: a blocking failure — T4's floor (T2 at rsi=48 is an observation now)
+        result = evaluate(passing_snapshot(relvol=0.9), rules, "call", "B")  # type: ignore[arg-type]
     monkeypatch.setattr(
         watch_loop, "reverify_cell", lambda *a, **k: result
     )
