@@ -43,7 +43,7 @@ runs**, and this document is wrong until regenerated. Never the reverse.
 
 <!-- BEGIN GENERATED: INTERPRETATION INVENTORY -->
 
-**78 interpretations across 8 domains.** Every one was a decision
+**79 interpretations across 8 domains.** Every one was a decision
 the frozen rulebook or docs/brief.md did not make for us. Each row says what was
 decided and the one-line reason; the full reasoning is in the code at the referenced
 line, and that code is the source of truth if the two ever disagree.
@@ -138,13 +138,13 @@ line, and that code is the source of truth if the two ever disagree.
 
 - [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
 - [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
-- [ ] **`executor/main.py:828`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L828))
-- [ ] **`executor/main.py:886`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L886))
-- [ ] **`executor/main.py:965`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L965))
-- [ ] **`executor/main.py:993`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L993))
-- [ ] **`executor/main.py:1026`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L1026))
+- [ ] **`executor/main.py:863`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L863))
+- [ ] **`executor/main.py:921`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L921))
+- [ ] **`executor/main.py:1000`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L1000))
+- [ ] **`executor/main.py:1028`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L1028))
+- [ ] **`executor/main.py:1061`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L1061))
 
-### other (7)
+### other (8)
 
 - [ ] **`executor/backfill_flow.py:285`** — the grid step is a **parameter, not a fact about the world**. ([source](../executor/backfill_flow.py#L285))
 - [ ] **`executor/backfill_flow.py:294`** — strikes are snapped to a multiple of `strike_step` by `ceil(lo/step)*step` and emitted while `<= hi`, so the span is symmetric to within one step and contains no strike outside the window. ([source](../executor/backfill_flow.py#L294))
@@ -153,6 +153,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/backfill_flow.py:634`** — the honest-empty rule, inherited from the live soak. ([source](../executor/backfill_flow.py#L634))
 - [ ] **`executor/iv_backfill.py:350`** — this is a **reconstruction of a listing calendar, not a record of one.** Alpaca serves no point-in-time chain, so the calendar cannot be read back for a past session. ([source](../executor/iv_backfill.py#L350))
 - [ ] **`executor/iv_backfill.py:406`** — $1-wide is SPY's listed near-ATM spacing, and the width is sized to the GATE rather than to caution -- see DEFAULT_LADDER_RANGE_PCT for why that is 0.75% and not 3%. ([source](../executor/iv_backfill.py#L406))
+- [ ] **`executor/state_seed.py:36`** — seeding is live-mode only. A dry run places no orders and reads no broker state, so it keeps the fresh per-session states the rehearsal harness threads explicitly; the offline surface stays offline. ([source](../executor/state_seed.py#L36))
 
 <!-- END GENERATED: INTERPRETATION INVENTORY -->
 

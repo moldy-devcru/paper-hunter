@@ -55,6 +55,7 @@ import hashlib
 import json
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -647,6 +648,22 @@ def _arm_a(
     manager = PositionManager(rules, journal=sink)
     router = _router(args, rules)
     state = ArmState(bankroll_usd=rules.arms.A.bankroll_usd)
+    if not args.dry_run:
+        # Idempotent arm A: if the broker already holds the benchmark shares,
+        # evaluate_entry sees the position and emits nothing. Without this seed
+        # a daily --open-arm-a would re-buy $10k of SPY every morning.
+        from executor.state_seed import StateSeedError, seed_arm_states
+
+        try:
+            seeded = seed_arm_states(
+                broker_positions=router.client.get_positions(),
+                rules=rules,
+                now=now,
+                conn=conn,
+            )
+        except StateSeedError as exc:
+            raise CliError(f"state seeding refused: {exc}") from exc
+        state = seeded["A"]
     reference = plan.arms[0].watch.close if plan.arms else 0.0
     evaluation = manager.evaluate_entry(
         "A", now=now, state=state, price=reference, symbol=rules.arms.A.entry.symbol
@@ -685,6 +702,24 @@ def cmd_watch(args: argparse.Namespace, now: dt.datetime) -> int:
     conn = _open_db(args.db)
     sink = _sink(conn, rules)
     state = WatchState.initial(day=day, plan=plan, rules=rules)
+    if not args.dry_run:
+        # Session-start amnesia fix (2026-11-19): seed open positions from broker
+        # truth and arm B's weekly entry count from the journal, so multi-day arm C
+        # holds and the anti-tilt governor survive the overnight restart. Live mode
+        # only; a dry run keeps fresh states and reads no broker.
+        from executor.state_seed import StateSeedError, seed_arm_states, seeding_summary
+
+        try:
+            seeded = seed_arm_states(
+                broker_positions=router.client.get_positions(),
+                rules=rules,
+                now=now,
+                conn=conn,
+            )
+        except StateSeedError as exc:
+            raise CliError(f"state seeding refused: {exc}") from exc
+        state = replace(state, arms=seeded)
+        print(seeding_summary(seeded))
     iv_rank, iv_source = _watch_iv_rank(args, plan, rules)
     flow_gate = _flow_gate(args, conn, rules, day)
     if iv_rank is None:

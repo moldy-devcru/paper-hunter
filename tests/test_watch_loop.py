@@ -1475,3 +1475,149 @@ def test_bar_window_answers_only_what_a_free_tier_can():
             f"{timeframe} floor is too narrow for {sessions_wanted} sessions"
         )
         assert (now - start).days >= watch_loop.WEEKEND_HOLIDAY_PADDING_DAYS
+
+
+# ---------------------------------------------------------------------------
+# session-start seeding (2026-11-19): the loop must remember what it holds
+# ---------------------------------------------------------------------------
+
+
+def test_a_seeded_open_position_blocks_the_duplicate_entry(rules, series, monkeypatch):
+    """The amnesia fix, end to end through one tick: a held position the session
+    started with must reach the entry governor. Entry price 5.0 vs a ~1.4 mark and
+    a 5-minute-old entry keep the exit ladder quiet (no profit take, no time stop),
+    so the only thing under test is the governor seeing the seeded position."""
+    patch_reverification(monkeypatch, rules, fire=True)
+    plan = plan_for(rules)
+    flat = run_once(
+        provider=provider(rules, series, spot=626.5),
+        rules=rules,
+        state=state_for(rules, plan),
+        now=at(10, 30),
+    )
+    assert [a.kind for a in flat.entry_actions] == ["TRADE"]
+    state = state_for(rules, plan)
+    held = b_position(entry_price=5.0, entry_ts=at(10, 25))
+    state = dataclasses.replace(
+        state, arms={**state.arms, "B": dataclasses.replace(state.arms["B"], position=held)}
+    )
+    result = run_once(
+        provider=provider(rules, series, spot=626.5),
+        rules=rules,
+        state=state,
+        now=at(10, 30),
+    )
+    assert result.entry_actions == ()
+    assert any("open position(s)" in v.reason for v in result.vetoes)
+
+
+def test_a_seeded_weekly_counter_blocks_the_fourth_entry(rules, series, monkeypatch):
+    """Arm B's anti-tilt governor must read the seeded count, not a fresh zero."""
+    from executor.position_manager import et_week_key
+
+    patch_reverification(monkeypatch, rules, fire=True)
+    state = state_for(rules, plan_for(rules))
+    b = dataclasses.replace(
+        state.arms["B"], entries_this_week=3, week_key=et_week_key(at(10, 30))
+    )
+    state = dataclasses.replace(state, arms={**state.arms, "B": b})
+    result = run_once(
+        provider=provider(rules, series, spot=626.5),
+        rules=rules,
+        state=state,
+        now=at(10, 30),
+    )
+    assert result.entry_actions == ()
+    assert any("entries this week" in v.reason for v in result.vetoes)
+
+
+def test_a_seeded_arm_c_position_is_visible_to_the_exit_ladder(rules, series):
+    """A multi-day arm C hold seeded at session start must be managed intraday.
+    The default chain has no quote for it, so the ladder's 'no quote' note is the
+    proof it saw the position at all."""
+    state = state_for(rules, plan_for(rules))
+    c = ManagedPosition(
+        arm="C",
+        symbol="SPY270319C00650000",
+        qty=1,
+        entry_price=40.0,
+        entry_ts=at(9, 45),
+        kind="option",
+        right="call",
+        expiry="20270319",
+        strike=650.0,
+    )
+    state = dataclasses.replace(
+        state, arms={**state.arms, "C": dataclasses.replace(state.arms["C"], position=c)}
+    )
+    result = run_once(
+        provider=provider(rules, series, spot=626.5),
+        rules=rules,
+        state=state,
+        now=at(10, 30),
+    )
+    assert any("C: no quote for SPY270319C00650000" in n for n in result.notes)
+
+
+def _arm_a_args():
+    from types import SimpleNamespace
+
+    return SimpleNamespace(dry_run=False)
+
+
+def _arm_a_router(transport):
+    from executor.watch_loop import LiveOrderRouter
+
+    client = AlpacaTradingClient(transport=transport, key="PK", secret="SK")
+    return LiveOrderRouter(client, banner=False)
+
+
+_ACCOUNT_PAYLOAD = {
+    "id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "account_number": "PA1234567",
+    "status": "ACTIVE",
+    "portfolio_value": "100000",
+}
+_SPY_PAYLOAD = {
+    "symbol": "SPY", "qty": "13", "side": "long", "avg_entry_price": "757.0",
+    "asset_class": "us_equity", "market_value": "9841", "cost_basis": "9841",
+    "current_price": "757", "unrealized_pl": "0",
+}
+_ORDER_PAYLOAD = {
+    "id": "o-1", "status": "accepted", "symbol": "SPY", "qty": 13,
+    "side": "buy", "type": "market",
+}
+
+
+def test_arm_a_open_is_idempotent_when_the_broker_already_holds_spy(
+    rules, monkeypatch, tmp_path, capsys
+):
+    from executor import main as cli
+    from journal.store import init_db
+
+    transport = MockTradingTransport(
+        {"/v2/account": _ACCOUNT_PAYLOAD, "/v2/positions": [_SPY_PAYLOAD]}
+    )
+    monkeypatch.setattr(cli, "_router", lambda args, r: _arm_a_router(transport))
+    conn = init_db(tmp_path / "j.db")
+    cli._arm_a(_arm_a_args(), rules, plan_for(rules), at(9, 20), conn)
+    assert not any(m == "POST" for m, _p, _b in transport.calls)
+    assert "already holds SPY" in capsys.readouterr().out
+
+
+def test_arm_a_open_places_the_buy_when_flat(rules, monkeypatch, tmp_path, capsys):
+    from executor import main as cli
+    from journal.store import init_db
+
+    transport = MockTradingTransport(
+        {
+            "/v2/account": _ACCOUNT_PAYLOAD,
+            "/v2/positions": [],
+            "/v2/orders": _ORDER_PAYLOAD,
+        }
+    )
+    monkeypatch.setattr(cli, "_router", lambda args, r: _arm_a_router(transport))
+    conn = init_db(tmp_path / "j.db")
+    cli._arm_a(_arm_a_args(), rules, plan_for(rules), at(9, 20), conn)
+    assert any(m == "POST" and p == "/v2/orders" for m, p, _b in transport.calls)
+    assert "already holds SPY" not in capsys.readouterr().out
