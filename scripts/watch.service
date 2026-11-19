@@ -8,10 +8,18 @@
 #
 # *** THIS UNIT IS THE ONE THAT CAN PLACE ORDERS. *** `hunt-plan` never routes an order
 # and `executor.soak` only reads; the watch loop is the leg that calls the router, and it
-# places PAPER orders if and only if `--live` is passed. `--dry-run` below is explicit and
-# must stay that way. Removing it is the single edit in this file that changes what the
-# experiment DOES rather than what it RECORDS, so it is called out here rather than left
-# to a reader to infer from the CLI default.
+# places PAPER orders if and only if `--live` is passed.
+#
+# WINDOW OPEN 2026-11-19: this unit ran `--dry-run` from 2026-10-03 through 2026-11-18
+# (soak + rehearsal era). Flipped to `--live` for the v2 window under the ratified
+# prereg-v2 (operator approval 2026-11-18 23:26 ET, Discord #paper-hunter message
+# 1572830369256833066; v1 ruling item 5: autonomous within the frozen rules). The flip
+# landed only after the pre-window ops gates passed: paper account proven against the
+# live broker, kill-switch request path exercised, calendar verified, full dry run
+# journaled, and the session-start state-seeding fix (executor/state_seed.py) deployed
+# so multi-day arm C holds and the weekly anti-tilt counter survive the overnight
+# restart. Reverting to `--dry-run` is the pause button; it changes what the experiment
+# DOES, not what it RECORDS.
 #
 # LIFETIME, deliberately not a systemd timeout: the process owns its own clock. It polls
 # every 15s and exits by itself at `--stop-et 16:00`. The timer fires ONCE per session;
@@ -57,7 +65,8 @@ ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 
-# `--dry-run` EXPLICIT. Read the paragraph at the top before changing this line.
+# `--live` since the 2026-11-19 window open (see the header). Read the paragraph at the
+# top before changing this line.
 #
 # `--flow-gate carry_forward` is NOT redundant, and this is the one flag in this file that
 # exists because of a trap rather than a default. `hunt-plan` defaults `--flow-gate` to
@@ -81,7 +90,7 @@ NoNewPrivileges=yes
 # `--poll-seconds` and `--stop-et` belong to the `watch` SUBCOMMAND. `--db` after `watch`
 # is rejected with "unrecognized arguments". The split below is the only ordering that
 # parses.
-ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --dry-run --db /opt/paper-hunter/data/journal.db watch --ivrank /opt/paper-hunter/data/ivrank.db --poll-seconds 15 --stop-et 16:00 --flow-gate carry_forward
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --live --db /opt/paper-hunter/data/journal.db watch --ivrank /opt/paper-hunter/data/ivrank.db --poll-seconds 15 --stop-et 16:00 --flow-gate carry_forward
 
 # No TimeoutStartSec: the loop's own `--stop-et` ends it.
 TimeoutStartSec=0

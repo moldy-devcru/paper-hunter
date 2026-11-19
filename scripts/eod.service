@@ -40,9 +40,11 @@ ProtectHome=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 
-# `--dry-run` EXPLICIT, same reasoning as watch.service. It matters MORE here, not less:
-# `cmd_eod` reads open positions from the broker only when NOT dry-running, so `--live`
-# would make this job route no orders but would make it depend on live account state.
+# `--live` since the 2026-11-19 window open (prereg-v2 ratified; see watch.service's
+# header for the approval record). It matters MORE here, not less: `cmd_eod` reads open
+# positions from the broker only when NOT dry-running, and the v2 window holds real
+# (paper) positions whose marks belong in the ledger. This job still routes no orders.
+# Reverting to `--dry-run` stops the broker reads and marks nothing held.
 #
 # `--offline` is deliberately NOT passed. It exists (R-rehearsal item 9) and it is the
 # right tool for rehearsing this pass offline; it is the wrong tool for production, where
@@ -51,7 +53,7 @@ NoNewPrivileges=yes
 #
 # `--db` is REQUIRED: without it this writes nothing and exits clean, which is the worst
 # possible combination for a job whose entire purpose is the ledger.
-ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --dry-run --db /opt/paper-hunter/data/journal.db eod
+ExecStart=/opt/paper-hunter/.venv/bin/python -m executor.main --live --db /opt/paper-hunter/data/journal.db eod
 
 # Longer than plan.service's 180s: this pass pulls 400 daily bars, an EMA-50 streak, the
 # full chain, and the whole day's decision set. The margin is for a slow provider, not for
