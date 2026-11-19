@@ -198,7 +198,10 @@ def _v1_v0_delta(outcomes) -> dict:
         c[failed] += 1
     return {
         "sessions": len(delta),
-        "by_failed_dropped_gates": {" + ".join(k) if k else "(none)": v for k, v in sorted(c.items(), key=lambda x: -x[1])},
+        "by_failed_dropped_gates": {
+            " + ".join(k) if k else "(none)": v
+            for k, v in sorted(c.items(), key=lambda x: -x[1])
+        },
     }
 
 
@@ -402,7 +405,10 @@ def render_report(
         for basis in ("plan", "eod"):
             w(f"`{basis}` basis — V1\\V0 delta, by which dropped gate(s) fail:")
             w("")
-            w("| Direction | V1\\V0 sessions | T1 only | T2 only | T5 only | T1+T2 | T1+T5 | T2+T5 | T1+T2+T5 |")
+            w(
+                "| Direction | V1\\V0 sessions | T1 only | T2 only | T5 only "
+                "| T1+T2 | T1+T5 | T2+T5 | T1+T2+T5 |"
+            )
             w("|---|---|---|---|---|---|---|---|---|")
             for direction in ("call", "put"):
                 delta = score_payload["per_basis"][basis]["v1_v0_delta"][direction]
@@ -430,7 +436,8 @@ def render_report(
         w(f"### Basis: `{basis}`")
         w("")
         w(
-            "| Variant | Direction | Fires | Joint rate | Days/yr | Trades/60-session window | P(>=1 in window)¹ |"
+            "| Variant | Direction | Fires | Joint rate | Days/yr "
+            "| Trades/60-session window | P(>=1 in window)¹ |"
         )
         w("|---|---|---|---|---|---|---|")
         for direction in DIRECTIONS:
