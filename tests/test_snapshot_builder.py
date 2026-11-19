@@ -526,11 +526,7 @@ def test_event_day_short_circuits_t5(long_payload, rules):
     result = build_from_bars(long_payload, iv_rank=90.0, calendar=calendar_with("fomc", day))
     outcome = evaluate(result.snapshot, rules, direction="call", arm="B")
     assert outcome.status("T5") == "FAIL"
-    # prereg-v2 §1: the event-day hard veto is retired — the detail says
-    # observation, not veto, and the condition is non-blocking.
-    assert "EVENT DAY" in outcome.conditions["T5"].detail
-    assert "HARD VETO" not in outcome.conditions["T5"].detail
-    assert outcome.conditions["T5"].blocking is False
+    assert "EVENT DAY HARD VETO" in outcome.conditions["T5"].detail
 
 
 # ---------------------------------------------------------------------------

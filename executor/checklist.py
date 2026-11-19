@@ -26,9 +26,12 @@ The v2 blocking set (prereg-v2 §1, ratified 2026-11-18)
 --------------------------------------------------------
 ``fire`` is "every blocking condition PASSes", and the blocking set for arms B and C
 in v2 is **T4 AND (T2b OR T3-group)** — T2b OR'd with the (T3a OR T3b) group, both
-satisfied on a PASS. T1, T2 and T5 are **non-blocking observations**: still computed
-and journaled on every plan, never a veto (the list is ``checklist.non_blocking``,
-loader-pinned to T1/T2/T5). T6 remains blocking for arm B, with its multiplier now
+satisfied on a PASS. T1, T2 and T5's IV read are **non-blocking observations**: still
+computed and journaled on every plan, never a veto (the list is
+``checklist.non_blocking``, loader-pinned to T1/T2/T5). T5's event-calendar hard
+veto is the one exception: an event day of a veto kind (fomc/cpi) still blocks the
+trade, independent of that list (v1 ruling 2026-10-02, carried by prereg-v2 §4/§6).
+T6 remains blocking for arm B, with its multiplier now
 per side (``call`` / ``put``, prereg-v2 §3) — ``side: trade_direction`` selects the
 leg the trade is actually trading.
 
@@ -431,23 +434,43 @@ def _t4(snap: IndicatorSnapshot, rules: Rulebook) -> ConditionResult:
     )
 
 
+def _is_event_veto_day(snap: IndicatorSnapshot, rules: Rulebook) -> bool:
+    """True when the snapshot is an event day of a veto kind.
+
+    The event-calendar hard veto (v1 operator ruling 2026-10-02; carried into v2 by
+    prereg-v2 §4's ~11% event haircut and §6's calendar-verification precommit) fires
+    on an event day whose kind is a veto kind (fomc/cpi). The data layer sets
+    ``is_event_day`` only when veto events are present, so ``event_kinds`` carries the
+    veto kinds; the empty-kinds case is defended as a veto (v1's "unspecified") so a
+    malformed snapshot cannot wave an event day through.
+    """
+    if not snap.is_event_day:
+        return False
+    if not snap.event_kinds:
+        return True
+    veto_kinds = set(rules.checklist.t5_options_chain.event_calendar.veto_kinds)
+    return any(k in veto_kinds for k in snap.event_kinds)
+
+
 def _t5(snap: IndicatorSnapshot, rules: Rulebook, arm: Arm) -> ConditionResult:
     cfg = rules.checklist.t5_options_chain
-    # INTERPRETATION: an event day is checked FIRST and short-circuits T5's IV read —
-    # the calendar read is the more important one on that day. RULED 2026-10-02: the
-    # earnings half of the veto is dropped for SPY (component earnings do not move
+    # INTERPRETATION: an event day of a VETO kind is checked FIRST and short-circuits
+    # T5's IV read — the calendar read is the more important one on that day. The
+    # brief calls the event calendar a hard veto ("no FOMC/CPI day entries"); RULED
+    # 2026-10-02 dropped the earnings half for SPY (component earnings do not move
     # index IV regime), so veto_kinds is fomc/cpi only.
-    # prereg-v2 §1 (ratified 2026-11-18): the event-day HARD VETO is retired. T5 is a
-    # non-blocking observation now, so an event day is computed and journaled as a T5
-    # FAIL but never stops the trade.
-    if snap.is_event_day:
+    # prereg-v2 §1 (ratified 2026-11-18) removes T5's IV read from the blocking AND —
+    # a non-event-day T5 is a non-blocking observation — but it does NOT retire the
+    # event-calendar hard veto: §4 carries the ~11% event-veto haircut as a live
+    # expectation and §6 requires the CPI/FOMC calendar to be verified before first
+    # trade. The event-day veto therefore still blocks, independent of
+    # checklist.non_blocking (see the non-blocking loop in ``evaluate``).
+    if _is_event_veto_day(snap, rules):
         kinds = ",".join(snap.event_kinds) or "unspecified"
         return ConditionResult("T5", "FAIL",
-                              f"EVENT DAY: {kinds} "
+                              f"EVENT DAY HARD VETO: {kinds} "
                               f"(veto_kinds={cfg.event_calendar.veto_kinds}, "
-                              f"hard_veto={cfg.event_calendar.hard_veto}) — the v1 hard "
-                              f"veto is retired in v2 (prereg-v2 §1); journaled as an "
-                              f"observation, not a stop")
+                              f"hard_veto={cfg.event_calendar.hard_veto})")
     if arm == "B":
         if snap.iv_rank is None:
             return ConditionResult("T5", "PENDING",
@@ -664,10 +687,16 @@ def evaluate(
     # a blocking veto; the note lands on the journaled row, not just in code.
     for cid in rules.checklist.non_blocking:
         res = conditions[cid]
-        if res.blocking:
-            conditions[cid] = dataclasses.replace(
-                res, blocking=False,
-                detail=f"{res.detail} | non-blocking observation in v2 (prereg-v2 §1)")
+        if not res.blocking:
+            continue
+        # Exception: the event-calendar hard veto (v1 ruling 2026-10-02, carried by
+        # prereg-v2 §4/§6) is independent of this list — an event day of a veto kind
+        # still blocks the trade even though T5's IV read is a v2 observation.
+        if cid == "T5" and _is_event_veto_day(snapshot, rules):
+            continue
+        conditions[cid] = dataclasses.replace(
+            res, blocking=False,
+            detail=f"{res.detail} | non-blocking observation in v2 (prereg-v2 §1)")
 
     veto_reasons: list[str] = []
     for condition_id, result in conditions.items():

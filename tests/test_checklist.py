@@ -55,10 +55,16 @@ def calibrated(rules):
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "call": {"value": 2.0, "calibration_pending": False,
-                 "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study"},
-        "put": {"value": 2.0, "calibration_pending": False,
-                "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study"},
+        "call": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study",
+        },
+        "put": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated from a historical SPY deep-OTM 0DTE flow study",
+        },
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -200,7 +206,10 @@ def test_t6_requires_eod_confirmed_flow(rules):
     # multiplier is calibrated, because an intraday volume is not comparable to a
     # 20-day daily baseline.
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
-    data["checklist"]["t6_flow"]["multiplier"] = {"call": {"value": 2.0, "calibration_pending": False}, "put": {"value": 2.0, "calibration_pending": False}}
+    data["checklist"]["t6_flow"]["multiplier"] = {
+        "call": {"value": 2.0, "calibration_pending": False},
+        "put": {"value": 2.0, "calibration_pending": False},
+    }
     calibrated_eod = load_rules_text(yaml.safe_dump(data))
     snap = _snapshot(flow_gate=FlowGate(status="pass", ratio=9.0, eod_confirmed=False))
     result = evaluate_arm_b(snap, calibrated_eod)
@@ -682,15 +691,12 @@ def test_t4_pending_without_volume_data(calibrated):
 # ---------------------------------------------------------------------------
 
 
-def test_t5_event_day_is_journaled_not_blocking(calibrated):
-    # prereg-v2 §1: T5 — including the event-day read — is out of the blocking AND.
-    # The event day is still flagged in the journal detail; it no longer stops the trade.
+def test_t5_event_day_is_a_hard_veto(calibrated):
     snap = _snapshot(is_event_day=True, event_kinds=("fomc",))
     result = evaluate_arm_b(snap, calibrated)
     assert result.status("T5") == "FAIL"
     assert "HARD VETO" in result.conditions["T5"].detail
-    assert result.conditions["T5"].blocking is False
-    assert result.fire is True
+    assert result.fire is False
 
 
 def test_t5_event_veto_outranks_a_good_iv_rank(calibrated):
@@ -769,6 +775,12 @@ CASES: list[tuple[str, Mutator, int]] = [
     ("T3", GROUP_FAIL, 1),
     ("T4", _mutate(relvol=0.9), 1),
     ("T6", _mutate(flow_gate=FlowGate(status="pass", ratio=0.5, eod_confirmed=True)), 1),
+    # Event-day T5: the one exception to the v2 non-blocking T5 read. A veto-kind
+    # event day is still a hard veto (v1 ruling 2026-10-02, carried by prereg-v2
+    # §4/§6) — it blocks on its own, independent of the non_blocking list, so it is
+    # a blocking CASE, not an OBSERVATION_CASE. The non-event IV read is the
+    # observation (see OBSERVATION_CASES).
+    ("T5", _mutate(is_event_day=True, event_kinds=("fomc",)), 1),
 ]
 
 
@@ -818,12 +830,15 @@ def test_fresh_cross_guard_couples_into_the_group_veto(calibrated):
 # table-driven: every v2 OBSERVATION is computed but never blocks (prereg-v2 §1).
 # ---------------------------------------------------------------------------
 
+# The event-day T5 case is intentionally NOT here: it is the one exception to the
+# "never blocking" rule — an event day of a veto kind is still a hard veto (v1 ruling
+# 2026-10-02, carried by prereg-v2 §4/§6), covered by test_t5_event_day_is_a_hard_veto.
+# The remaining T5 case is the non-event IV read, which is a v2 observation.
 OBSERVATION_CASES: list[tuple[str, Mutator]] = [
     ("T1", _mutate(ema_fast=605.0)),                  # close 600 < EMA50 605
     ("T2", _mutate(rsi=49.0)),
     ("T2", _mutate(rsi=90.0)),
     ("T2", _mutate(rsi=20.0)),
-    ("T5", _mutate(is_event_day=True, event_kinds=("fomc",))),
     ("T5", _mutate(iv_rank=80.0)),
 ]
 

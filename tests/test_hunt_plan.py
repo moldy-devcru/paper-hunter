@@ -90,8 +90,16 @@ def calibrated(rules):
     data = yaml.safe_load(DEFAULT_RULES_PATH.read_bytes())
     # prereg-v2 §3: per-side schema — the fixture fills both legs with the same N.
     data["checklist"]["t6_flow"]["multiplier"] = {
-        "call": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
-        "put": {"value": 2.0, "calibration_pending": False, "reason": "test fixture: calibrated multiplier"},
+        "call": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated multiplier",
+        },
+        "put": {
+            "value": 2.0,
+            "calibration_pending": False,
+            "reason": "test fixture: calibrated multiplier",
+        },
     }
     return load_rules_text(yaml.safe_dump(data))
 
@@ -395,17 +403,12 @@ def test_pending_conditions_get_a_null_trigger_and_say_why(rules):
     assert "PENDING" in trigger.reason
 
 
-def test_event_day_is_a_v2_observation_not_a_veto(calibrated):
-    """prereg-v2 §1: the event-day hard veto is retired. A FOMC day is still computed
-    and journaled (T5 FAIL observation), but it cannot stop the trade — and there is
-    no T5 price trigger to speak of, since a calendar read clears by time, not price."""
+def test_event_day_trigger_for_t5_says_the_calendar_not_a_price(calibrated):
     snapshot = passing_snapshot(is_event_day=True, event_kinds=("fomc",))
     cell = cell_for(snapshot, calibrated, event_day_veto=True)
-    assert cell.checklist.status("T5") == "FAIL"
-    assert cell.checklist.conditions["T5"].blocking is False
-    assert cell.checklist.veto_reasons == ()
-    assert cell.fire is True
-    assert not any(t.condition == "T5" for t in cell.triggers)
+    trigger = next(t for t in cell.triggers if t.condition == "T5")
+    assert trigger.level is None
+    assert "hard calendar veto" in trigger.reason
 
 
 def test_passing_conditions_produce_no_triggers(calibrated):
@@ -429,10 +432,7 @@ def test_compute_triggers_matches_the_plan_builder(calibrated):
 # ---------------------------------------------------------------------------
 
 
-def test_event_day_is_journaled_on_both_directions_and_both_arms(series, rules, session_day):
-    """prereg-v2 §1: an event day no longer vetoes. The plan still carries the
-    calendar fact (``event_day_veto`` metadata + reasons), every cell still records
-    the T5 FAIL observation, and no cell may reason its NO_TRADE on the calendar."""
+def test_event_day_vetoes_both_directions_on_both_arms(series, rules, session_day):
     calendar = calendar_with(day=session_day, kind="fomc")
     plan = build_hunt_plan(
         data=StaticMarketData(series=series),
@@ -442,13 +442,13 @@ def test_event_day_is_journaled_on_both_directions_and_both_arms(series, rules, 
     )
     assert plan.event_day_veto is True
     assert plan.event_reasons
+    assert plan.firing() == ()
     for cell in plan.arms:
         assert cell.checklist.status("T5") == "FAIL"
-        assert "EVENT DAY" in cell.checklist.conditions["T5"].detail
-        assert "HARD VETO" not in cell.checklist.conditions["T5"].detail
-        assert cell.checklist.conditions["T5"].blocking is False
-        assert not any("EVENT DAY" in r for r in cell.checklist.veto_reasons)
-        assert "suppresses the whole session" not in cell.reasoning
+        assert "EVENT DAY HARD VETO" in cell.checklist.conditions["T5"].detail
+        assert cell.decision_kind == "NO_TRADE"
+        assert "Event-day hard veto" in cell.reasoning
+        assert any("EVENT DAY HARD VETO" in r for r in cell.checklist.veto_reasons)
 
 
 def test_non_veto_event_kind_does_not_veto(series, rules, session_day):

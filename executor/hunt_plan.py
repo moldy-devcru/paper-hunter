@@ -287,8 +287,8 @@ _NO_LEVEL = {
           "does not change the volume that was printed",
     "T5_iv": "IV rank is a percentile of an implied-volatility distribution, not a "
              "price level; it re-scores on its own as the IV store accumulates",
-    "T5_event": "event-day is a calendar read (a v2 observation, prereg-v2 §1) — it "
-                "clears on a non-event session, not at a price",
+    "T5_event": "event-day is a hard calendar veto — it clears on a non-event session, "
+                "not at a price",
     "T5_arm_c": "arm C's IV band is calibration_pending in the frozen rulebook, so "
                 "there is no threshold for a level to cross",
     "T6": "T6 is an EOD-confirmed deep-OTM 0DTE flow-volume ratio — no price level, and "
@@ -553,8 +553,7 @@ def _reasoning(
         )
     parts = [f"{arm}/{direction}: NO TRADE at plan time."]
     if event_day_veto:
-        parts.append("Event day (calendar): T5 is a v2 observation (prereg-v2 §1) — "
-                     "the v1 hard veto is retired, the day is journaled, not suppressed.")
+        parts.append("Event-day hard veto (T5) suppresses the whole session.")
     failed = [cid for cid, c in result.conditions.items() if c.blocking and c.status == "FAIL"]
     pending = [
         cid for cid, c in result.conditions.items() if c.blocking and c.status == "PENDING"
@@ -1190,8 +1189,7 @@ def summarise(plan: HuntPlan) -> str:
     """One-screen human summary of a plan (operator-facing, pre-market read)."""
     lines = [f"Hunt plan {plan.day.isoformat()} {plan.symbol} v{plan.strategy_version}"]
     if plan.event_day_veto:
-        lines.append(f"  EVENT DAY: {'; '.join(plan.event_reasons)} "
-                     f"(T5 observation, prereg-v2 §1 — the v1 hard veto is retired)")
+        lines.append(f"  EVENT-DAY HARD VETO: {'; '.join(plan.event_reasons)}")
     for cell in plan.arms:
         flags = ",".join(
             # A non-blocking FAIL (the losing arm of the T3 OR group) is shown as such,

@@ -65,13 +65,13 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### checklist (7)
 
-- [ ] **`executor/checklist.py:257`** — a flat histogram (bitwise unchanged vs the prior bar) is neither expanding nor contracting, so it is not vetoed — the rulebook names only "contracting" as the failing momentum state, "expanding" as preferred. contracting = ( snap.macd_hist <… ([source](../executor/checklist.py#L257))
-- [ ] **`executor/checklist.py:277`** — the guard fires when the MOST RECENT cross (cross_direction + cross age, supplied by the data layer) was AGAINST the trade direction and is younger than max_age_hours. ([source](../executor/checklist.py#L277))
-- [ ] **`executor/checklist.py:309`** — "expanding in trade direction" is read as *directional* expansion, not just a widening band: bandwidth must be rising AND the middle band must be moving with the trade (rising for calls, falling for puts). ([source](../executor/checklist.py#L309))
-- [ ] **`executor/checklist.py:331`** — "close tags lower band and closes back inside" = the signal bar's LOW touched or undercut the lower band AND the close finished back above it (inverted for puts: high tags the upper band, close back below). ([source](../executor/checklist.py#L331))
-- [ ] **`executor/checklist.py:369`** — how the two branches combine. The brief joins them with "or", so either branch alone satisfies T4; they are not both required. ([source](../executor/checklist.py#L369))
-- [ ] **`executor/checklist.py:377`** — a non-finite value on either branch is a FAIL, not an exception and not a pass: the ratio is what it is, the window behind it was unusable, and volume did not confirm. ([source](../executor/checklist.py#L377))
-- [ ] **`executor/checklist.py:426`** — an event day is checked FIRST and short-circuits T5. The brief calls the event calendar a hard veto ("no earnings/FOMC day entries"), so it outranks a healthy IV rank rather than being one AND-condition among several. ([source](../executor/checklist.py#L426))
+- [ ] **`executor/checklist.py:270`** — a flat histogram (bitwise unchanged vs the prior bar) is neither expanding nor contracting, so it is not vetoed — the rulebook names only "contracting" as the failing momentum state, "expanding" as preferred. contracting = ( snap.macd_hist <… ([source](../executor/checklist.py#L270))
+- [ ] **`executor/checklist.py:290`** — the guard fires when the MOST RECENT cross (cross_direction + cross age, supplied by the data layer) was AGAINST the trade direction and is younger than max_age_hours. ([source](../executor/checklist.py#L290))
+- [ ] **`executor/checklist.py:322`** — "expanding in trade direction" is read as *directional* expansion, not just a widening band: bandwidth must be rising AND the middle band must be moving with the trade (rising for calls, falling for puts). ([source](../executor/checklist.py#L322))
+- [ ] **`executor/checklist.py:344`** — "close tags lower band and closes back inside" = the signal bar's LOW touched or undercut the lower band AND the close finished back above it (inverted for puts: high tags the upper band, close back below). ([source](../executor/checklist.py#L344))
+- [ ] **`executor/checklist.py:382`** — how the two branches combine. The brief joins them with "or", so either branch alone satisfies T4; they are not both required. ([source](../executor/checklist.py#L382))
+- [ ] **`executor/checklist.py:390`** — a non-finite value on either branch is a FAIL, not an exception and not a pass: the ratio is what it is, the window behind it was unusable, and volume did not confirm. ([source](../executor/checklist.py#L390))
+- [ ] **`executor/checklist.py:457`** — an event day of a VETO kind is checked FIRST and short-circuits T5's IV read — the calendar read is the more important one on that day. ([source](../executor/checklist.py#L457))
 
 ### data (10)
 
@@ -84,7 +84,7 @@ line, and that code is the source of truth if the two ever disagree.
 - [ ] **`executor/iv_rank.py:243`** — strikes are bucketed to `bucket_size` (default $5) before keying. A raw-strike key means every strike in a chain accumulates its own separate history, so a rank computed for 650.00 says nothing about 652.50 and the store stays in warmup for months. ([source](../executor/iv_rank.py#L243))
 - [ ] **`executor/iv_rank.py:301`** — the EOD soak records BOTH this key and :func:`tenor_key` for every ATM contract it polls, and T5 may read either — the operator picks at ratification. ([source](../executor/iv_rank.py#L301))
 - [ ] **`executor/iv_rank.py:399`** — the key is NAMESPACED (`mte`/`mny`) rather than reusing the `dte`/dollar prefix, and this is load-bearing rather than cosmetic. ([source](../executor/iv_rank.py#L399))
-- [ ] **`config/loader.py:577`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L577))
+- [ ] **`config/loader.py:603`** — moneyness is a **percentage distance from spot**, with separate thresholds per side, because calls and puts do not populate symmetrically around spot on SPY and one shared number would silently call a crowded strike "deep" on one side only. ([source](../config/loader.py#L603))
 
 ### trading (19)
 
@@ -110,10 +110,10 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### analysis (9)
 
-- [ ] **`executor/hunt_plan.py:31`** — a non-blocking condition can still get a trigger, for T3 only. The rulebook's `t3_bollinger.satisfied_if_any_of` makes T3 an OR group, so when one T3 arm PASSes the sibling is reported FAIL (or whatever it is) but `blocking=False`: it cannot veto. ([source](../executor/hunt_plan.py#L31))
-- [ ] **`executor/hunt_plan.py:61`** — plan-time conviction is a deterministic function of how far the checklist is from firing — 10 when it fires, otherwise `10 - 3*failed - 1*pending` clipped to 1..10. ([source](../executor/hunt_plan.py#L61))
-- [ ] **`executor/hunt_plan.py:68`** — "spot" for chain tenor selection defaults to the newest daily close, because the plan is built pre-market and there is no pre-market option price to use. ([source](../executor/hunt_plan.py#L68))
-- [ ] **`executor/hunt_plan.py:223`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L223))
+- [ ] **`executor/hunt_plan.py:31`** — a non-blocking condition can still get a trigger, for T3 and (in v2) T1. The rulebook's `t3_bollinger.satisfied_if_any_of` makes T3 an OR group, so when one T3 arm PASSes the sibling is reported FAIL (or whatever it is) but `blocking=False`: it cannot veto. ([source](../executor/hunt_plan.py#L31))
+- [ ] **`executor/hunt_plan.py:68`** — plan-time conviction is a deterministic function of how far the checklist is from firing — 10 when it fires, otherwise `10 - 3*failed - 1*pending` clipped to 1..10. ([source](../executor/hunt_plan.py#L68))
+- [ ] **`executor/hunt_plan.py:75`** — "spot" for chain tenor selection defaults to the newest daily close, because the plan is built pre-market and there is no pre-market option price to use. ([source](../executor/hunt_plan.py#L75))
+- [ ] **`executor/hunt_plan.py:230`** — the brief's arm-B strike rule is "first OTM strike beyond the setup-day range projection" and gives no formula. ([source](../executor/hunt_plan.py#L230))
 - [ ] **`executor/noshot.py:354`** — DTE is computed against the **session date**, never against `datetime.now()`. ([source](../executor/noshot.py#L354))
 - [ ] **`analysis/rollup.py:40`** — the window. `since`/`until` are inclusive calendar dates. `positions` are filtered on the **UTC date component of `exit_ts`** because that is the journal's only clock (`ts` columns are UTC ISO-8601; there is no ET column on positions). ([source](../analysis/rollup.py#L40))
 - [ ] **`analysis/rollup.py:49`** — what counts as a "trade" in the counts. A trade is a `decisions` row with kind `TRADE` — the decision ledger is the record of truth, and `positions` is the convenience view (per its own schema comment). ([source](../analysis/rollup.py#L49))
@@ -138,11 +138,11 @@ line, and that code is the source of truth if the two ever disagree.
 
 - [ ] **`executor/main.py:36`** — no command writes to the journal unless `--db` is passed. A pre-market plan that journals rows into a database nobody named is a surprise, and the ledger is the experiment's primary artifact. ([source](../executor/main.py#L36))
 - [ ] **`executor/main.py:40`** — `watch` reads the plan from `--plan` rather than rebuilding it. ([source](../executor/main.py#L40))
-- [ ] **`executor/main.py:823`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L823))
-- [ ] **`executor/main.py:881`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L881))
-- [ ] **`executor/main.py:960`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L960))
-- [ ] **`executor/main.py:988`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L988))
-- [ ] **`executor/main.py:1021`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L1021))
+- [ ] **`executor/main.py:828`** — a sighting whose plan row is missing from the journal is still written — it is real evidence that the setup was sighted — but it is reported loudly, because an unattributed counterfactual cannot be traced back to the decision that produced it. ([source](../executor/main.py#L828))
+- [ ] **`executor/main.py:886`** — `--offline` is a *transport* swap, not a second code path. ([source](../executor/main.py#L886))
+- [ ] **`executor/main.py:965`** — the direction comes from the contract's OCC right, so arm B's put cell and call cell are told apart by what was actually bought. ([source](../executor/main.py#L965))
+- [ ] **`executor/main.py:993`** — the pre-market plan is what runs before the session open, so a decision journaled at or after 09:30 ET is intraday machinery and is skipped. ([source](../executor/main.py#L993))
+- [ ] **`executor/main.py:1026`** — the EMA is taken over the full daily series *including* the session being judged — the same series the checklist's T1 reads, so the exit rule and the entry rule cannot disagree about what the 50EMA is. ([source](../executor/main.py#L1026))
 
 ### other (7)
 
