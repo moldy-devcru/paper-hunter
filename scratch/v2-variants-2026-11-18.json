@@ -1,0 +1,411 @@
+{
+  "rulebook_version": "1.4.0-draft+071095af7402",
+  "bars": 5724,
+  "first_session": "2004-10-20",
+  "last_session": "2026-10-02",
+  "warmup_bars": 201,
+  "arm": "C",
+  "target_sessions": 60,
+  "frozen_t4_relative_volume_min": 1.5,
+  "candidate_t4_thresholds": {
+    "V2": 1.2,
+    "V3": 1.0,
+    "V5": 1.2
+  },
+  "verification": {
+    "samples": 12,
+    "evaluations_compared": 48,
+    "mismatches": [],
+    "mismatch_count": 0,
+    "ok": true,
+    "stride": 97
+  },
+  "event_haircut": {
+    "veto_kinds": "fomc,cpi",
+    "estimated_veto_sessions_per_year": 28.0,
+    "sessions_per_year": 252.0,
+    "haircut_fraction": 0.1111111111111111,
+    "surviving_fraction": 0.8888888888888888
+  },
+  "crosscheck_v1": {
+    "plan": {
+      "call": {
+        "fires": 4,
+        "joint_rate": 0.0007243752263672582
+      },
+      "put": {
+        "fires": 41,
+        "joint_rate": 0.007424846070264397
+      }
+    },
+    "eod": {
+      "call": {
+        "fires": 4,
+        "joint_rate": 0.0007242440702516748
+      },
+      "put": {
+        "fires": 41,
+        "joint_rate": 0.007423501720079667
+      }
+    }
+  },
+  "sanity_v1_equals_v0": {
+    "holds": false,
+    "mismatches": [
+      "plan/call: V0 fired 2, V1 fired 4 \u2014 dropping T1/T2/T5 changed the fire set",
+      "plan/put: V0 fired 3, V1 fired 41 \u2014 dropping T1/T2/T5 changed the fire set",
+      "plan/either: V0 fired 5, V1 fired 45 \u2014 dropping T1/T2/T5 changed the fire set",
+      "eod/call: V0 fired 2, V1 fired 4 \u2014 dropping T1/T2/T5 changed the fire set",
+      "eod/put: V0 fired 3, V1 fired 41 \u2014 dropping T1/T2/T5 changed the fire set",
+      "eod/either: V0 fired 5, V1 fired 45 \u2014 dropping T1/T2/T5 changed the fire set"
+    ]
+  },
+  "per_basis": {
+    "plan": {
+      "sessions": 5522,
+      "directions": {
+        "call": {
+          "V0": {
+            "sessions": 5522,
+            "fires": 2,
+            "joint_rate": 0.0003621876131836291,
+            "expected_days_per_year": 0.09127127852227454,
+            "expected_trades_per_window": 0.02173125679101775,
+            "p_at_least_one_in_window": 0.02150068591996046
+          },
+          "V1": {
+            "sessions": 5522,
+            "fires": 4,
+            "joint_rate": 0.0007243752263672582,
+            "expected_days_per_year": 0.18254255704454908,
+            "expected_trades_per_window": 0.0434625135820355,
+            "p_at_least_one_in_window": 0.04254663375320811
+          },
+          "V2": {
+            "sessions": 5522,
+            "fires": 12,
+            "joint_rate": 0.0021731256791017745,
+            "expected_days_per_year": 0.5476276711336472,
+            "expected_trades_per_window": 0.13038754074610648,
+            "p_at_least_one_in_window": 0.12236932784184096
+          },
+          "V3": {
+            "sessions": 5522,
+            "fires": 44,
+            "joint_rate": 0.00796812749003984,
+            "expected_days_per_year": 2.00796812749004,
+            "expected_trades_per_window": 0.47808764940239046,
+            "p_at_least_one_in_window": 0.38121819229252163
+          },
+          "V4": {
+            "sessions": 5522,
+            "fires": 143,
+            "joint_rate": 0.025896414342629483,
+            "expected_days_per_year": 6.52589641434263,
+            "expected_trades_per_window": 1.553784860557769,
+            "p_at_least_one_in_window": 0.7928387519784257
+          },
+          "V5": {
+            "sessions": 5522,
+            "fires": 360,
+            "joint_rate": 0.06519377037305324,
+            "expected_days_per_year": 16.428830134009416,
+            "expected_trades_per_window": 3.9116262223831946,
+            "p_at_least_one_in_window": 0.9824896077717481
+          }
+        },
+        "put": {
+          "V0": {
+            "sessions": 5522,
+            "fires": 3,
+            "joint_rate": 0.0005432814197754436,
+            "expected_days_per_year": 0.1369069177834118,
+            "expected_trades_per_window": 0.03259688518652662,
+            "p_at_least_one_in_window": 0.0320799063895415
+          },
+          "V1": {
+            "sessions": 5522,
+            "fires": 41,
+            "joint_rate": 0.007424846070264397,
+            "expected_days_per_year": 1.8710612097066281,
+            "expected_trades_per_window": 0.44549076421586387,
+            "p_at_least_one_in_window": 0.3605538363919094
+          },
+          "V2": {
+            "sessions": 5522,
+            "fires": 87,
+            "joint_rate": 0.015755161173487867,
+            "expected_days_per_year": 3.9703006157189424,
+            "expected_trades_per_window": 0.945309670409272,
+            "p_at_least_one_in_window": 0.6143540568181548
+          },
+          "V3": {
+            "sessions": 5522,
+            "fires": 121,
+            "joint_rate": 0.021912350597609563,
+            "expected_days_per_year": 5.52191235059761,
+            "expected_trades_per_window": 1.3147410358565739,
+            "p_at_least_one_in_window": 0.7353532904138502
+          },
+          "V4": {
+            "sessions": 5522,
+            "fires": 348,
+            "joint_rate": 0.06302064469395147,
+            "expected_days_per_year": 15.88120246287577,
+            "expected_trades_per_window": 3.781238681637088,
+            "p_at_least_one_in_window": 0.9798719675170734
+          },
+          "V5": {
+            "sessions": 5522,
+            "fires": 753,
+            "joint_rate": 0.13636363636363635,
+            "expected_days_per_year": 34.36363636363636,
+            "expected_trades_per_window": 8.181818181818182,
+            "p_at_least_one_in_window": 0.9998486943283137
+          }
+        },
+        "either": {
+          "V0": {
+            "sessions": 5522,
+            "fires": 5,
+            "joint_rate": 0.0009054690329590728,
+            "expected_days_per_year": 0.22817819630568634,
+            "expected_trades_per_window": 0.05432814197754437,
+            "p_at_least_one_in_window": 0.05290204413324806
+          },
+          "V1": {
+            "sessions": 5522,
+            "fires": 45,
+            "joint_rate": 0.008149221296631655,
+            "expected_days_per_year": 2.053603766751177,
+            "expected_trades_per_window": 0.4889532777978993,
+            "p_at_least_one_in_window": 0.38795927978406475
+          },
+          "V2": {
+            "sessions": 5522,
+            "fires": 99,
+            "joint_rate": 0.017928286852589643,
+            "expected_days_per_year": 4.51792828685259,
+            "expected_trades_per_window": 1.0756972111553786,
+            "p_at_least_one_in_window": 0.6622525117700344
+          },
+          "V3": {
+            "sessions": 5522,
+            "fires": 165,
+            "joint_rate": 0.029880478087649404,
+            "expected_days_per_year": 7.52988047808765,
+            "expected_trades_per_window": 1.7928286852589643,
+            "p_at_least_one_in_window": 0.8380001381533159
+          },
+          "V4": {
+            "sessions": 5522,
+            "fires": 429,
+            "joint_rate": 0.07768924302788845,
+            "expected_days_per_year": 19.577689243027887,
+            "expected_trades_per_window": 4.661354581673307,
+            "p_at_least_one_in_window": 0.9921902625771514
+          },
+          "V5": {
+            "sessions": 5522,
+            "fires": 953,
+            "joint_rate": 0.1725823976819993,
+            "expected_days_per_year": 43.49076421586382,
+            "expected_trades_per_window": 10.354943860919958,
+            "p_at_least_one_in_window": 0.999988425950241
+          }
+        }
+      },
+      "v1_v0_delta": {
+        "call": {
+          "sessions": 2,
+          "by_failed_dropped_gates": {
+            "T1 + T2 + T5": 2
+          }
+        },
+        "put": {
+          "sessions": 38,
+          "by_failed_dropped_gates": {
+            "T1 + T5": 15,
+            "T1": 12,
+            "T1 + T2": 6,
+            "T1 + T2 + T5": 3,
+            "T5": 2
+          }
+        }
+      }
+    },
+    "eod": {
+      "sessions": 5523,
+      "directions": {
+        "call": {
+          "V0": {
+            "sessions": 5523,
+            "fires": 2,
+            "joint_rate": 0.0003621220351258374,
+            "expected_days_per_year": 0.09125475285171103,
+            "expected_trades_per_window": 0.021727322107550243,
+            "p_at_least_one_in_window": 0.021496834432476186
+          },
+          "V1": {
+            "sessions": 5523,
+            "fires": 4,
+            "joint_rate": 0.0007242440702516748,
+            "expected_days_per_year": 0.18250950570342206,
+            "expected_trades_per_window": 0.04345464421510049,
+            "p_at_least_one_in_window": 0.042539093710349585
+          },
+          "V2": {
+            "sessions": 5523,
+            "fires": 12,
+            "joint_rate": 0.0021727322107550242,
+            "expected_days_per_year": 0.5475285171102661,
+            "expected_trades_per_window": 0.13036393264530147,
+            "p_at_least_one_in_window": 0.1223485632834459
+          },
+          "V3": {
+            "sessions": 5523,
+            "fires": 44,
+            "joint_rate": 0.007966684772768424,
+            "expected_days_per_year": 2.007604562737643,
+            "expected_trades_per_window": 0.47800108636610544,
+            "p_at_least_one_in_window": 0.38116419611396146
+          },
+          "V4": {
+            "sessions": 5523,
+            "fires": 143,
+            "joint_rate": 0.025891725511497373,
+            "expected_days_per_year": 6.524714828897338,
+            "expected_trades_per_window": 1.5535035306898424,
+            "p_at_least_one_in_window": 0.792778913452118
+          },
+          "V5": {
+            "sessions": 5523,
+            "fires": 360,
+            "joint_rate": 0.06518196632265073,
+            "expected_days_per_year": 16.425855513307983,
+            "expected_trades_per_window": 3.910917979359044,
+            "p_at_least_one_in_window": 0.9824763363219687
+          }
+        },
+        "put": {
+          "V0": {
+            "sessions": 5523,
+            "fires": 3,
+            "joint_rate": 0.0005431830526887561,
+            "expected_days_per_year": 0.13688212927756652,
+            "expected_trades_per_window": 0.03259098316132537,
+            "p_at_least_one_in_window": 0.032074190578875506
+          },
+          "V1": {
+            "sessions": 5523,
+            "fires": 41,
+            "joint_rate": 0.007423501720079667,
+            "expected_days_per_year": 1.870722433460076,
+            "expected_trades_per_window": 0.44541010320478003,
+            "p_at_least_one_in_window": 0.3605018701153474
+          },
+          "V2": {
+            "sessions": 5523,
+            "fires": 87,
+            "joint_rate": 0.015752308527973928,
+            "expected_days_per_year": 3.96958174904943,
+            "expected_trades_per_window": 0.9451385116784357,
+            "p_at_least_one_in_window": 0.6142869878212178
+          },
+          "V3": {
+            "sessions": 5523,
+            "fires": 121,
+            "joint_rate": 0.021908383125113163,
+            "expected_days_per_year": 5.520912547528517,
+            "expected_trades_per_window": 1.3145029875067897,
+            "p_at_least_one_in_window": 0.7352888726168277
+          },
+          "V4": {
+            "sessions": 5523,
+            "fires": 348,
+            "joint_rate": 0.06300923411189571,
+            "expected_days_per_year": 15.87832699619772,
+            "expected_trades_per_window": 3.7805540467137426,
+            "p_at_least_one_in_window": 0.9798572550202717
+          },
+          "V5": {
+            "sessions": 5523,
+            "fires": 753,
+            "joint_rate": 0.13633894622487777,
+            "expected_days_per_year": 34.357414448669196,
+            "expected_trades_per_window": 8.180336773492666,
+            "p_at_least_one_in_window": 0.9998484345724352
+          }
+        },
+        "either": {
+          "V0": {
+            "sessions": 5523,
+            "fires": 5,
+            "joint_rate": 0.0009053050878145935,
+            "expected_days_per_year": 0.22813688212927757,
+            "expected_trades_per_window": 0.054318305268875614,
+            "p_at_least_one_in_window": 0.052892719318146986
+          },
+          "V1": {
+            "sessions": 5523,
+            "fires": 45,
+            "joint_rate": 0.008147745790331342,
+            "expected_days_per_year": 2.053231939163498,
+            "expected_trades_per_window": 0.4888647474198805,
+            "p_at_least_one_in_window": 0.3879046480033269
+          },
+          "V2": {
+            "sessions": 5523,
+            "fires": 99,
+            "joint_rate": 0.017925040738728953,
+            "expected_days_per_year": 4.517110266159696,
+            "expected_trades_per_window": 1.075502444323737,
+            "p_at_least_one_in_window": 0.6621855223414486
+          },
+          "V3": {
+            "sessions": 5523,
+            "fires": 165,
+            "joint_rate": 0.029875067897881587,
+            "expected_days_per_year": 7.52851711026616,
+            "expected_trades_per_window": 1.7925040738728952,
+            "p_at_least_one_in_window": 0.8379459225119784
+          },
+          "V4": {
+            "sessions": 5523,
+            "fires": 429,
+            "joint_rate": 0.07767517653449213,
+            "expected_days_per_year": 19.574144486692017,
+            "expected_trades_per_window": 4.660510592069528,
+            "p_at_least_one_in_window": 0.992183112813842
+          },
+          "V5": {
+            "sessions": 5523,
+            "fires": 953,
+            "joint_rate": 0.17255114973746152,
+            "expected_days_per_year": 43.4828897338403,
+            "expected_trades_per_window": 10.353068984247692,
+            "p_at_least_one_in_window": 0.9999883996949267
+          }
+        }
+      },
+      "v1_v0_delta": {
+        "call": {
+          "sessions": 2,
+          "by_failed_dropped_gates": {
+            "T1 + T2 + T5": 2
+          }
+        },
+        "put": {
+          "sessions": 38,
+          "by_failed_dropped_gates": {
+            "T1 + T5": 22,
+            "T1 + T2": 6,
+            "T1": 5,
+            "T1 + T2 + T5": 3,
+            "T5": 2
+          }
+        }
+      }
+    }
+  }
+}
