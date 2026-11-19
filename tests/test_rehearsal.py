@@ -144,8 +144,15 @@ def test_the_shipped_rulebook_is_never_edited(rehearsal_run) -> None:
     assert freeze.detail["shipped_rulebook_untouched"] is True
     current = hashlib.sha256(Path(rehearsal.DEFAULT_RULES_PATH).read_bytes()).hexdigest()
     assert current == _stage(r, "rules").detail["sha256"]
-    # The shipped gates are still pending: the shot branch ran against the fixture copy.
-    assert _stage(r, "rules").detail["pending_gates"]
+    # prereg-v2 §3: the shipped rulebook is now fully calibrated (T6 frozen per side),
+    # so the v1 "gates still pending" state is gone by design — there are no pending gates.
+    assert _stage(r, "rules").detail["pending_gates"] == []
+    # ...and the shot branch ran against the fixture copy, not the shipped file: the
+    # simulated freeze's T6 multiplier is the rehearsal's own proposal, which differs
+    # from the shipped frozen value (a fixture that echoed the shipped N would have
+    # proven nothing about the post-calibration pipeline).
+    shipped_call_n = r.shipped_rules.checklist.t6_flow.multiplier.call.value
+    assert freeze.detail["n_used"] != shipped_call_n
 
 
 def test_a_rerun_into_the_same_workdir_is_identical(tmp_path: Path) -> None:
@@ -168,8 +175,15 @@ def test_the_calibration_stage_never_freezes_anything(rehearsal_run) -> None:
     assert "divided by" in cal.detail["method"]
     findings = " ".join(cal.findings).lower()
     assert "not frozen" in findings or "proposal only" in findings
-    # Whatever the sample, the shipped rulebook's T6 multiplier stays pending.
-    assert _stage(r, "rules").detail["pending_gates"]
+    # prereg-v2 §3: the shipped rulebook is now fully calibrated, so the v1 "shipped
+    # multiplier stays pending" check no longer applies — the baseline is no pending
+    # gates, and the stage must leave it that way. The invariant (the stage PROPOSES,
+    # it does not freeze) is enforced by the "proposal only" finding above and by the
+    # proposal differing from the shipped frozen value: a stage that froze its output
+    # into the rulebook would have written the shipped N.
+    assert _stage(r, "rules").detail["pending_gates"] == []
+    shipped_call_n = r.shipped_rules.checklist.t6_flow.multiplier.call.value
+    assert cal.detail["value"] != shipped_call_n
 
 
 def test_the_offline_guard_refuses_a_connection(tmp_path: Path) -> None:

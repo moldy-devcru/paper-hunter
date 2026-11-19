@@ -942,9 +942,13 @@ def _prepare(r: Rehearsal, st: Stage) -> None:
     set_meta(r.conn, "strategy_version", r.rules.strategy_version)
     # One confirmed flow session, written through the journal's own append path, so the
     # T6 gate both branches read is produced by the real reader against a real row.
-    # Asymmetric on purpose: the call side passes and the put side fails, which is what
-    # "t6_flow.side = trade_direction, one multiplier, two populations" means in
-    # practice — and it is visible in the report rather than assumed.
+    # Asymmetric on purpose: the trade side (call) passes T6 and the other side (put)
+    # fails it. prereg-v2 §3 froze T6's multiplier per side, and this run's simulated
+    # freeze writes the pooled proposal N to the call leg — so the seeded call ratio is
+    # DERIVED from that N (above it, with margin) rather than hard-coded: v1's fixed 3.0
+    # broke the moment the deployed journal's P90 drifted past it and the shot branch
+    # stopped entering. The put side is fixed at 1.0 in the row (below N), so it keeps
+    # failing — the asymmetry the report shows rather than assumes.
     r.flow_row_day = _weekday(shot_day - dt.timedelta(days=3))
     r.world = {  # type: ignore[attr-defined]
         "calendar": calendar,
@@ -958,7 +962,10 @@ def _prepare(r: Rehearsal, st: Stage) -> None:
         "iv_key": iv_info["tenor_keys"],
         "iv_rank": iv_info["rank_max"],
     }
-    _seed_flow_row(r, day=r.flow_row_day, side="call", ratio=3.0)
+    # The trade side must clear T6 (ratio >= per-side N). The simulated freeze writes
+    # the pooled proposal N to the call leg, so seed the call ratio above it, with margin.
+    call_ratio = round(r.proposal.n * 1.5, 4)
+    _seed_flow_row(r, day=r.flow_row_day, side="call", ratio=call_ratio)
     # NOTE: keep the earlier "rules" entry — the integrity stage reads the rulebook's
     # sha256 from here to prove the shipped file was not edited to make a fixture pass.
     notes_rules = r.notes.pop("rules", {})
@@ -979,8 +986,8 @@ def _prepare(r: Rehearsal, st: Stage) -> None:
         "spot": round(spot, 4),
         "flow": {
             "confirmed_session": r.flow_row_day.isoformat(),
-            "call_ratio": 3.0,
-            "put_ratio": 1.0,
+            "call_ratio": call_ratio,
+            "put_ratio": 1.0,  # fixed in the row by _seed_flow_row; below N, so put fails
             "multiplier": r.proposal.n,
         },
         **({"rules": notes_rules} if notes_rules else {}),
