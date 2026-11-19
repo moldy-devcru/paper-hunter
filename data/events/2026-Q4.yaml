@@ -13,8 +13,12 @@ notes:
   - "FOMC 2026 schedule confirmed against the Federal Reserve's published calendar (all eight
      meetings): Jan 27-28, Mar 17-18, Apr 28-29, Jun 16-17, Jul 28-29, Sep 15-16, Oct 27-28, Dec 8-9."
   - "OPEX dates are the 3rd Friday of each month (standard monthly equity/index expiry)."
-  - "CPI release dates below are marked unverified: BLS moves releases off federal holidays and
-     this file was started from a secondary summary, not from bls.gov itself. Confirm each date."
+  - "CPI release dates for Nov 10 and Dec 10 confirmed against the live BLS schedule
+     (bls.gov/schedule/news_release/cpi.htm) on 2026-11-19. The Oct 13 entry (CPI for
+     September 2026) was REMOVED 2026-11-19: a past event outside the v2 window, and
+     unverifiable from this host (BLS archive paths 403, Wayback 429, FRED unreachable).
+     A past date cannot fire a window veto; removing it keeps unverified() honest
+     rather than laundering a guess into a verified flag."
   - "Earnings are not listed, by ruling not by omission: operator ruling 2026-10-02 drops the
      component-earnings veto for SPY (a single name's print does not move index IV regime). See
      checklist.t5_options_chain.event_calendar.earnings_veto."
@@ -49,30 +53,22 @@ events:
     source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
 
   # -- CPI (bls.gov/schedule/news_release/cpi.htm, 8:30am ET) -------------------
-  - date: 2026-10-13
-    kind: cpi
-    label: "CPI for September 2026"
-    release_time_et: "08:30"
-    veto: true
-    verified: false
-    source: https://www.bls.gov/schedule/news_release/cpi.htm
-    note: "confirm exact date against BLS before first trade"
   - date: 2026-11-10
     kind: cpi
     label: "CPI for October 2026"
     release_time_et: "08:30"
     veto: true
-    verified: false
+    verified: true
     source: https://www.bls.gov/schedule/news_release/cpi.htm
-    note: "may shift to 11/11 or 11/12 — BLS moves releases off the Veterans Day holiday"
+    note: "confirmed against the live BLS schedule 2026-11-19 (kept on Tue 11/10, not moved off Veterans Day)"
   - date: 2026-12-10
     kind: cpi
     label: "CPI for November 2026"
     release_time_et: "08:30"
     veto: true
-    verified: false
+    verified: true
     source: https://www.bls.gov/schedule/news_release/cpi.htm
-    note: "confirm exact date against BLS before first trade"
+    note: "confirmed against the live BLS schedule 2026-11-19"
 
   # -- monthly OPEX (3rd Friday; awareness flag, not a T5 hard veto) ------------
   - date: 2026-10-16

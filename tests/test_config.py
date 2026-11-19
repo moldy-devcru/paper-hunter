@@ -465,7 +465,8 @@ def test_event_veto_true_on_fomc_days():
 
 def test_event_veto_true_on_cpi_days():
     cal = EventCalendar.load(CALENDAR_FILE)
-    assert cal.is_event_day("2026-10-13") is True
+    # 2026-10-13 (CPI for September 2026) was removed 2026-11-19: a past event
+    # outside the v2 window, unverifiable from this host. See the Q4 file's notes.
     assert cal.is_event_day("2026-11-10") is True
     assert cal.is_event_day("2026-12-10") is True
 
@@ -491,11 +492,21 @@ def test_veto_reasons_carry_the_cause():
     assert any("fomc" in r and "2026-12-09" in r for r in reasons)
 
 
-def test_unverified_dates_are_surfaced_not_hidden():
+def test_unverified_dates_are_surfaced_not_hidden(tmp_path):
+    # The shipped Q4 calendar is fully verified as of the 2026-11-19
+    # reconciliation (prereg-v2 §6 ops gate): nothing hides behind a flag.
     cal = EventCalendar.load(CALENDAR_FILE)
-    unverified = cal.unverified()
-    assert {e.kind for e in unverified} == {"cpi"}  # FOMC confirmed against the Fed calendar
-    assert any("UNVERIFIED" in r for r in cal.veto_reasons("2026-10-13"))
+    assert cal.unverified() == []
+    # The guard itself still works: an unverified entry must surface, not hide.
+    fixture = tmp_path / "fixture.yaml"
+    fixture.write_text(
+        "quarter: 2027-Q1\nupdated: 2026-11-19\nevents:\n"
+        "  - date: 2027-01-13\n    kind: cpi\n    label: \"fixture CPI\"\n"
+        "    veto: true\n    verified: false\n    source: \"fixture\"\n"
+    )
+    fcal = EventCalendar.load(fixture)
+    assert {e.kind for e in fcal.unverified()} == {"cpi"}
+    assert any("UNVERIFIED" in r for r in fcal.veto_reasons("2027-01-13"))
 
 
 def test_rulebook_calendar_dir_is_where_the_files_are():

@@ -1,0 +1,98 @@
+# Event calendar — 2027 Q1
+#
+# Consumer: data/event_calendar.py → checklist T5 hard veto (fomc/cpi only,
+# operator ruling 2026-10-02; carried into v2 by prereg-v2 §4/§6).
+# Created 2026-11-19 for the v2 window (start 2026-11-19, ~60 sessions →
+# mid/late February 2027). Q1 is covered in full for margin.
+#
+# Verification performed 2026-11-19 by the lead:
+# - FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm, "2027 FOMC
+#   Meetings" section (January 26-27, March 16-17, April 27-28, June 8-9,
+#   July 27-28, September 14-15, October 26-27, November 16-17).
+# - CPI: bls.gov/schedule/news_release/cpi.htm live schedule table
+#   (December 2026 → Jan. 13, 2027; January 2027 → Feb. 11, 2027;
+#   February 2027 → Mar. 10, 2027; all 08:30 AM).
+# - OPEX: third-Friday rule, awareness flag only, not a veto (v1 convention).
+
+quarter: 2027-Q1
+updated: 2026-11-19
+notes:
+  - "FOMC 2027 schedule confirmed against the Federal Reserve's published 2027 calendar."
+  - "CPI dates confirmed against the live BLS release schedule on 2026-11-19."
+  - "Earnings are not listed, by ruling not by omission (operator ruling 2026-10-02)."
+
+events:
+  # -- FOMC (federalreserve.gov/monetarypolicy/fomccalendars.htm) ----------------
+  - date: 2027-01-26
+    kind: fomc
+    label: "FOMC meeting day 1"
+    veto: true
+    verified: true
+    source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  - date: 2027-01-27
+    kind: fomc
+    label: "FOMC decision (2:00pm ET statement)"
+    veto: true
+    verified: true
+    source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  - date: 2027-03-16
+    kind: fomc
+    label: "FOMC meeting day 1"
+    veto: true
+    verified: true
+    source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+  - date: 2027-03-17
+    kind: fomc
+    label: "FOMC decision + SEP projections (2:00pm ET statement)"
+    veto: true
+    verified: true
+    source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+
+  # -- CPI (bls.gov/schedule/news_release/cpi.htm, 8:30am ET) -------------------
+  - date: 2027-01-13
+    kind: cpi
+    label: "CPI for December 2026"
+    release_time_et: "08:30"
+    veto: true
+    verified: true
+    source: https://www.bls.gov/schedule/news_release/cpi.htm
+    note: "confirmed against the live BLS schedule 2026-11-19"
+  - date: 2027-02-11
+    kind: cpi
+    label: "CPI for January 2027"
+    release_time_et: "08:30"
+    veto: true
+    verified: true
+    source: https://www.bls.gov/schedule/news_release/cpi.htm
+    note: "confirmed against the live BLS schedule 2026-11-19"
+  - date: 2027-03-10
+    kind: cpi
+    label: "CPI for February 2027"
+    release_time_et: "08:30"
+    veto: true
+    verified: true
+    source: https://www.bls.gov/schedule/news_release/cpi.htm
+    note: "confirmed against the live BLS schedule 2026-11-19"
+
+  # -- monthly OPEX (3rd Friday; awareness flag, not a T5 hard veto) ------------
+  - date: 2027-01-15
+    kind: opex
+    label: "Monthly equity/index OPEX"
+    release_time_et: "16:00"
+    veto: false
+    verified: true
+    source: "rule of thumb: third Friday"
+  - date: 2027-02-19
+    kind: opex
+    label: "Monthly equity/index OPEX"
+    release_time_et: "16:00"
+    veto: false
+    verified: true
+    source: "rule of thumb: third Friday"
+  - date: 2027-03-19
+    kind: opex
+    label: "Monthly equity/index OPEX"
+    release_time_et: "16:00"
+    veto: false
+    verified: true
+    source: "rule of thumb: third Friday"
