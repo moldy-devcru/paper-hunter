@@ -49,11 +49,15 @@ route raises ``AlpacaAPIError(404)`` exactly like the real API, so a wrong path 
 loudly in tests instead of silently 404-ing against a live account. No test in this
 repository performs a network call.
 
-# INTERPRETATION: paper proof is ``account.paper is True`` OR an account id beginning
-# ``PA`` (the prefix Alpaca issues paper accounts). Alpaca does not put a
-# ``"paper": true`` flag on every account payload, so an id-prefix fallback exists —
-# but it is a *fallback*, and an account that matches neither is refused. Guessing
-# "live" on absent evidence is how a paper-only experiment becomes a real-money one.
+# INTERPRETATION: paper proof is ``account.paper is True`` OR an ``account_number``
+# beginning ``PA`` (the prefix Alpaca issues paper accounts — verified against the live
+# paper endpoint 2026-11-19: account_number PA3I9TKLO9ZA, id a plain UUID). The ``id``
+# field is a UUID on BOTH paper and live accounts and proves nothing; checking it was
+# the original bug, caught by the pre-window ops check before any live shot. Alpaca does
+# not put a ``"paper": true`` flag on every account payload, so the number-prefix
+# fallback exists — but it is a *fallback*, and an account that matches neither is
+# refused. Guessing "live" on absent evidence is how a paper-only experiment becomes a
+# real-money one.
 
 # INTERPRETATION: market orders are the default ``time_in_force``. Alpaca rejects
 # ``DAY`` market orders after 16:00 ET, and the brief's hard-close is 15:30 ET, so DAY
@@ -394,20 +398,26 @@ def verify_paper_account(payload: Mapping[str, Any]) -> PaperConfirmation:
     """Assert ``/v2/account`` describes a paper account. Raise if it does not.
 
     ``payload`` is the raw JSON dict (not the typed ``Account``) because the proof
-    fields — ``paper`` and the id prefix — are not part of ``Account``'s model and
-    deliberately stay out of it: the typed reader is for numbers, this is for a
+    fields — ``paper`` and ``account_number`` — are not part of ``Account``'s model
+    and deliberately stay out of it: the typed reader is for numbers, this is for a
     one-way door.
+
+    The PA prefix lives on ``account_number``, NOT on ``id``: Alpaca issues UUIDs
+    as ``id`` for paper and live accounts alike (verified against the live paper
+    endpoint 2026-11-19). The proof token stays ``id_prefix`` for journal stability.
     """
     account = Account.from_json(payload)
     flag = payload.get("paper")
+    number = payload.get("account_number")
     if flag is True:
         proof: Literal["paper_field", "id_prefix"] = "paper_field"
-    elif isinstance(account.id, str) and account.id.upper().startswith("PA"):
+    elif isinstance(number, str) and number.upper().startswith("PA"):
         proof = "id_prefix"
     else:
         raise PaperAccountUnverified(
             "account does not prove it is a paper account "
-            f"(id={account.id!r}, paper flag={flag!r}); refusing to trade"
+            f"(id={account.id!r}, account_number={number!r}, paper flag={flag!r}); "
+            "refusing to trade"
         )
     if account.trading_blocked:
         raise PaperAccountUnverified(

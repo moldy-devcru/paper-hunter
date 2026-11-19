@@ -88,9 +88,9 @@ line, and that code is the source of truth if the two ever disagree.
 
 ### trading (19)
 
-- [ ] **`executor/alpaca_trading.py:52`** — paper proof is `account.paper is True` OR an account id beginning `PA` (the prefix Alpaca issues paper accounts). ([source](../executor/alpaca_trading.py#L52))
-- [ ] **`executor/alpaca_trading.py:58`** — market orders are the default `time_in_force`. Alpaca rejects `DAY` market orders after 16:00 ET, and the brief's hard-close is 15:30 ET, so DAY is correct for every order this executor places. ([source](../executor/alpaca_trading.py#L58))
-- [ ] **`executor/alpaca_trading.py:600`** — this is the *emergency* flatten, used when the executor cannot reason about a position (unparseable symbol, missing state). ([source](../executor/alpaca_trading.py#L600))
+- [ ] **`executor/alpaca_trading.py:52`** — paper proof is `account.paper is True` OR an `account_number` beginning `PA` (the prefix Alpaca issues paper accounts — verified against the live paper endpoint 2026-11-19: account_number PA3I9TKLO9ZA, id a plain UUID). ([source](../executor/alpaca_trading.py#L52))
+- [ ] **`executor/alpaca_trading.py:62`** — market orders are the default `time_in_force`. Alpaca rejects `DAY` market orders after 16:00 ET, and the brief's hard-close is 15:30 ET, so DAY is correct for every order this executor places. ([source](../executor/alpaca_trading.py#L62))
+- [ ] **`executor/alpaca_trading.py:610`** — this is the *emergency* flatten, used when the executor cannot reason about a position (unparseable symbol, missing state). ([source](../executor/alpaca_trading.py#L610))
 - [ ] **`executor/position_manager.py:25`** — profit take — "close 50%" on an odd contract count rounds **up** (`ceil`), so a 1-lot 0DTE position that hits +100% closes entirely rather than rounding to 0 and leaving the rule silently unexecuted. ([source](../executor/position_manager.py#L25))
 - [ ] **`executor/position_manager.py:30`** — trail the remainder — the rulebook says `trail_remainder: true` but the brief defines no trail mechanism (no stop level, no trailing band). ([source](../executor/position_manager.py#L30))
 - [ ] **`executor/position_manager.py:38`** — weekly entry counter — the "max 3 entries per week" counter resets on the **ISO week** (Monday 00:00 ET) and counts every entry order this manager emits for arm B, not just profitable ones. ([source](../executor/position_manager.py#L38))

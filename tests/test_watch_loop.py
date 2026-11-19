@@ -736,7 +736,9 @@ def test_a_live_router_on_a_paper_account_submits_the_leg(rules, series, monkeyp
     plan = plan_for(rules)
     transport = MockTradingTransport(
         {
-            "/v2/account": {"id": "PA999", "status": "ACTIVE", "portfolio_value": "30000"},
+            "/v2/account": {"id": "c3d4e5f6-0000-4000-8000-000000000003",
+                            "account_number": "PA999",
+                            "status": "ACTIVE", "portfolio_value": "30000"},
             "/v2/orders": {"id": "o-77", "status": "accepted", "symbol": "x", "qty": 1,
                            "side": "buy", "type": "limit"},
         }
@@ -752,7 +754,7 @@ def test_a_live_router_on_a_paper_account_submits_the_leg(rules, series, monkeyp
     )
     assert [a.kind for a in result.entry_actions] == ["TRADE"]
     assert ("POST", "/v2/orders") in [(m, p) for m, p, _b in transport.calls]
-    assert router.confirmation.account_id == "PA999"
+    assert router.confirmation.account_id == "c3d4e5f6-0000-4000-8000-000000000003"
 
 
 # ---------------------------------------------------------------------------

@@ -59,8 +59,11 @@ def order_payload(**overrides):
     return payload
 
 
+# Real-world shape (verified against the live paper endpoint 2026-11-19): ``id`` is
+# a UUID on paper AND live accounts; the PA prefix lives on ``account_number``.
 ACCOUNT_PAPER = {
-    "id": "PA1234567",
+    "id": "a1b2c3d4-0000-4000-8000-000000000001",
+    "account_number": "PA1234567",
     "status": "ACTIVE",
     "currency": "USD",
     "cash": "25000.00",
@@ -71,8 +74,17 @@ ACCOUNT_PAPER = {
     "trading_blocked": False,
 }
 
-ACCOUNT_LIVE = dict(ACCOUNT_PAPER, id="9LZ7XQ2KDTYZA", paper=False)
-ACCOUNT_UNPROVEN = dict(ACCOUNT_PAPER, id="9LZ7XQ2KDTYZA")
+ACCOUNT_LIVE = dict(
+    ACCOUNT_PAPER,
+    id="b2c3d4e5-0000-4000-8000-000000000002",
+    account_number="9LZ7XQ2KDTYZA",
+    paper=False,
+)
+ACCOUNT_UNPROVEN = dict(
+    ACCOUNT_PAPER,
+    id="b2c3d4e5-0000-4000-8000-000000000002",
+    account_number="9LZ7XQ2KDTYZA",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -298,12 +310,48 @@ def test_paper_flag_is_proof():
     confirmation = verify_paper_account(dict(ACCOUNT_PAPER, paper=True))
     assert confirmation.is_paper is True
     assert confirmation.proof == "paper_field"
-    assert confirmation.account_id == "PA1234567"
+    assert confirmation.account_id == "a1b2c3d4-0000-4000-8000-000000000001"
     assert "PAPER ACCOUNT CONFIRMED" in confirmation.banner()
 
 
 def test_paper_id_prefix_is_the_fallback_proof():
-    confirmation = verify_paper_account(ACCOUNT_PAPER)  # no paper flag, id starts with PA
+    # no paper flag; account_number starts with PA (the live-observed paper shape)
+    confirmation = verify_paper_account(ACCOUNT_PAPER)
+    assert confirmation.proof == "id_prefix"
+
+
+def test_the_live_observed_paper_shape_passes():
+    """Regression 2026-11-19: UUID id + PA account_number + no paper flag.
+
+    This is exactly what paper-api.alpaca.markets returns; the original code
+    checked the UUID ``id`` for the PA prefix and refused every live shot.
+    """
+    payload = {
+        "id": "3580d1a5-0000-4000-8000-000000000000",
+        "account_number": "PA3I9TKLO9ZA",
+        "status": "ACTIVE",
+        "currency": "USD",
+        "cash": "100000.00",
+        "portfolio_value": "100000.00",
+        "equity": "100000.00",
+        "buying_power": "200000.00",
+        "pattern_day_trader": False,
+        "trading_blocked": False,
+    }
+    confirmation = verify_paper_account(payload)
+    assert confirmation.proof == "id_prefix"
+    assert confirmation.account_id == payload["id"]
+
+
+def test_a_pa_prefix_on_the_id_alone_is_not_proof():
+    """The old bug shape must not pass: Alpaca never issues PA-prefixed UUID ids."""
+    payload = dict(ACCOUNT_PAPER, id="PA9999999", account_number="9LZ7XQ2KDTYZA")
+    with pytest.raises(PaperAccountUnverified):
+        verify_paper_account(payload)
+
+
+def test_lowercase_pa_account_number_is_accepted():
+    confirmation = verify_paper_account(dict(ACCOUNT_PAPER, account_number="pa1234567"))
     assert confirmation.proof == "id_prefix"
 
 
@@ -338,7 +386,7 @@ def test_live_router_banner_names_the_paper_account_and_routes_legs(capsys):
     router = LiveOrderRouter(client)
     out = capsys.readouterr().out
     assert "PAPER ACCOUNT CONFIRMED" in out
-    assert "PA1234567" in out
+    assert "a1b2c3d4-0000-4000-8000-000000000001" in out
     assert "paper-api.alpaca.markets" in out
 
     from executor.position_manager import Action, OrderLeg
